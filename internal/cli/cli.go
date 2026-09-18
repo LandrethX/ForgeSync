@@ -81,6 +81,7 @@ func NewRootCommand(out io.Writer) *cobra.Command {
 	root.AddCommand(node)
 	root.AddCommand(repoCommand(o))
 	root.AddCommand(conflictCommand(o))
+	root.AddCommand(historyCommand(o))
 	return root
 }
 
@@ -261,16 +262,37 @@ func (o *options) get(ctx context.Context, path string, out any) error {
 }
 
 func (o *options) call(ctx context.Context, method, path string, in, out any) error {
+	resp, err := o.send(ctx, method, path, in, 15*time.Second)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// download streams a GET response body to w, for exports.
+func (o *options) download(ctx context.Context, path string, w io.Writer) (int64, error) {
+	resp, err := o.send(ctx, http.MethodGet, path, nil, 10*time.Minute)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	return io.Copy(w, resp.Body)
+}
+
+// send makes an authenticated request and returns the response if it is
+// 200 OK; otherwise an error with the server's message.
+func (o *options) send(ctx context.Context, method, path string, in any, timeout time.Duration) (*http.Response, error) {
 	token := o.token
 	if token == "" && o.tokenFile != "" {
 		b, err := os.ReadFile(o.tokenFile)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		token = strings.TrimSpace(string(b))
 	}
 	if token == "" {
-		return errors.New("no admin token: use --token, --token-file, FORGESYNC_TOKEN or FORGESYNC_TOKEN_FILE")
+		return nil, errors.New("no admin token: use --token, --token-file, FORGESYNC_TOKEN or FORGESYNC_TOKEN_FILE")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -279,30 +301,29 @@ func (o *options) call(ctx context.Context, method, path string, in, out any) er
 	if in != nil {
 		b, err := json.Marshal(in)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		body = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(o.server, "/")+path, body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
 		var e struct{ Message string }
 		_ = json.NewDecoder(resp.Body).Decode(&e)
-		return fmt.Errorf("%s: %s %s", path, resp.Status, e.Message)
+		return nil, fmt.Errorf("%s: %s %s", path, resp.Status, e.Message)
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return resp, nil
 }
 
 func envOr(key, def string) string {

@@ -10,6 +10,7 @@ import { Login } from "./pages/Login";
 import { NodeDetail } from "./pages/NodeDetail";
 import { Nodes } from "./pages/Nodes";
 import { Repositories } from "./pages/Repositories";
+import { Users } from "./pages/Users";
 import { RepositoryDetail } from "./pages/RepositoryDetail";
 import { Link, match, usePath } from "./router";
 
@@ -98,6 +99,7 @@ function Routes({ session }: { session: Session }) {
   if (match("/repositories", path)) return <Repositories />;
   const repo = match("/repositories/:id", path);
   if (repo?.id) return <RepositoryDetail id={repo.id} />;
+  if (match("/users", path)) return <Users />;
   if (match("/conflicts", path)) return <Conflicts />;
   const conflict = match("/conflicts/:id", path);
   if (conflict?.id && /^\d+$/.test(conflict.id)) return <ConflictDetail id={Number(conflict.id)} />;

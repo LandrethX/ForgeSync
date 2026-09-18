@@ -25,52 +25,52 @@ type blocked string
 
 func (b blocked) Error() string { return string(b) }
 
-// createOnReplica creates the repository on a replica where it's missing,
-// empty, so the next push fills it. The owner must be a SceneID user (who is
+// createOnReplica creates the repository on node to, where it's missing,
+// empty, so the next push from node from fills it. The owner must be a SceneID user (who is
 // created on the replica too, linked by their SceneID subject so their first
 // login there finds the account) or an organization that already exists on
-// the replica. It returns a blocked error when that isn't the case, and
+// the to. It returns a blocked error when that isn't the case, and
 // never changes an existing account.
-func (e *Engine) createOnReplica(ctx context.Context, fullName string, primary, replica Node) error {
-	if primary.API == nil || replica.API == nil {
-		return blocked("the repository doesn't exist on " + replica.Name + "; create it there to start replicating")
+func (e *Engine) createOnReplica(ctx context.Context, fullName string, from, to Node) error {
+	if from.API == nil || to.API == nil {
+		return blocked("the repository doesn't exist on " + to.Name + "; create it there to start replicating")
 	}
 	owner, name, ok := strings.Cut(fullName, "/")
 	if !ok {
 		return fmt.Errorf("bad repository name %q", fullName)
 	}
-	src, found, err := primary.API.GetRepo(ctx, owner, name)
+	src, found, err := from.API.GetRepo(ctx, owner, name)
 	if err != nil {
 		return err
 	}
 	if !found {
-		return blocked("the repository doesn't exist on the primary " + primary.Name)
+		return blocked("the repository doesn't exist on " + from.Name)
 	}
 	switch {
 	case src.Mirror:
-		return blocked("it's a pull mirror on " + primary.Name + "; ForgeSync doesn't create mirrors on other nodes")
+		return blocked("it's a pull mirror on " + from.Name + "; ForgeSync doesn't create mirrors on other nodes")
 	case src.Fork:
-		return blocked("it's a fork on " + primary.Name + "; ForgeSync doesn't create forks on other nodes yet")
+		return blocked("it's a fork on " + from.Name + "; ForgeSync doesn't create forks on other nodes yet")
 	}
-	owner, name = src.Owner.Login, src.Name // the primary's spelling
+	owner, name = src.Owner.Login, src.Name // the source node's spelling
 
-	isOrg, err := primary.API.IsOrg(ctx, owner)
+	isOrg, err := from.API.IsOrg(ctx, owner)
 	if err != nil {
 		return err
 	}
 	if isOrg {
-		exists, err := replica.API.IsOrg(ctx, owner)
+		exists, err := to.API.IsOrg(ctx, owner)
 		if err != nil {
 			return err
 		}
 		if !exists {
-			return blocked(fmt.Sprintf("the owner, organization %s, doesn't exist on %s; ForgeSync doesn't create organizations yet", owner, replica.Name))
+			return blocked(fmt.Sprintf("the owner, organization %s, doesn't exist on %s; ForgeSync doesn't create organizations yet", owner, to.Name))
 		}
-	} else if err := e.ensureUser(ctx, owner, primary, replica); err != nil {
+	} else if err := e.ensureUser(ctx, owner, from, to); err != nil {
 		return err
 	}
 
-	_, err = replica.API.AdminCreateRepo(ctx, owner, forgejo.CreateRepoOption{
+	_, err = to.API.AdminCreateRepo(ctx, owner, forgejo.CreateRepoOption{
 		Name: name, Description: src.Description, Private: src.Private, Template: src.Template,
 		DefaultBranch: src.DefaultBranch, ObjectFormatName: src.ObjectFormatName,
 	})
@@ -80,15 +80,16 @@ func (e *Engine) createOnReplica(ctx context.Context, fullName string, primary, 
 	if err != nil {
 		return err
 	}
-	e.log.Info("created repository on replica", "repository", fullName, "node", replica.Name)
+	e.log.Info("created repository on node", "repository", fullName, "node", to.Name)
 	if err := e.store.Audit(ctx, "forgesync", "repo.created_on_node", fullName,
-		map[string]any{"node": replica.Name, "primary": primary.Name, "private": src.Private}); err != nil {
+		map[string]any{"node": to.Name, "from": from.Name, "private": src.Private}); err != nil {
 		e.log.Error("writing audit log failed", "error", err)
 	}
 	return nil
 }
 
-// ensureUser makes sure the owner exists on the replica as the same account.
+// ensureUser makes sure the owner on node from exists on node to as the same
+// account.
 //
 // Regular users all come from SceneID, so the owner has signed in there and
 // is copied with the same SceneID subject; their first login on the replica
@@ -98,65 +99,66 @@ func (e *Engine) createOnReplica(ctx context.Context, fullName string, primary, 
 // The checks that return blocked shouldn't fire in normal operation; they
 // keep inconsistent data (a name held by a different account) from merging
 // two people into one account.
-func (e *Engine) ensureUser(ctx context.Context, login string, primary, replica Node) error {
-	pu, found, err := primary.API.GetUser(ctx, login)
+func (e *Engine) ensureUser(ctx context.Context, login string, from, to Node) error {
+	pu, found, err := from.API.GetUser(ctx, login)
 	if err != nil {
 		return err
 	}
 	if !found {
-		return fmt.Errorf("owner %s not found on %s", login, primary.Name)
+		return fmt.Errorf("owner %s not found on %s", login, from.Name)
 	}
-	ru, onReplica, err := replica.API.GetUser(ctx, login)
+	ru, onReplica, err := to.API.GetUser(ctx, login)
 	if err != nil {
 		return err
 	}
 	if pu.SourceID == 0 { // a local admin account
 		if !onReplica || ru.SourceID != 0 {
 			return blocked(fmt.Sprintf("the owner %s is a local account on %s and there's no local account %s on %s; ForgeSync doesn't create local accounts",
-				login, primary.Name, login, replica.Name))
+				login, from.Name, login, to.Name))
 		}
 		return nil
 	}
-	if primary.SceneIDSourceID == 0 || replica.SceneIDSourceID == 0 {
+	if from.SceneIDSourceID == 0 || to.SceneIDSourceID == 0 {
 		return blocked(fmt.Sprintf("the owner %s can't be created on %s: sceneid_source_id isn't configured for both %s and %s",
-			login, replica.Name, primary.Name, replica.Name))
+			login, to.Name, from.Name, to.Name))
 	}
-	if pu.SourceID != primary.SceneIDSourceID || pu.LoginName == "" {
-		return blocked(fmt.Sprintf("the owner %s on %s signs in through a login source other than SceneID", login, primary.Name))
+	if pu.SourceID != from.SceneIDSourceID || pu.LoginName == "" {
+		return blocked(fmt.Sprintf("the owner %s on %s signs in through a login source other than SceneID", login, from.Name))
 	}
 	if onReplica {
-		if ru.SourceID != replica.SceneIDSourceID || ru.LoginName != pu.LoginName {
+		if ru.SourceID != to.SceneIDSourceID || ru.LoginName != pu.LoginName {
 			return blocked(fmt.Sprintf("the name %s on %s belongs to a different account than on %s; ForgeSync won't merge them",
-				login, replica.Name, primary.Name))
+				login, to.Name, from.Name))
 		}
 		return nil
 	}
 	// The same person may already be on the replica under another name.
-	same, err := replica.API.UsersByLoginName(ctx, replica.SceneIDSourceID, pu.LoginName)
+	same, err := to.API.UsersByLoginName(ctx, to.SceneIDSourceID, pu.LoginName)
 	if err != nil {
 		return err
 	}
 	if len(same) > 0 {
 		return blocked(fmt.Sprintf("the SceneID user %s is %s on %s; ForgeSync doesn't rename accounts",
-			login, same[0].Login, replica.Name))
+			login, same[0].Login, to.Name))
 	}
 	no := false
 	opt := forgejo.CreateUserOption{
-		SourceID: replica.SceneIDSourceID, LoginName: pu.LoginName, Username: pu.Login,
+		SourceID: to.SceneIDSourceID, LoginName: pu.LoginName, Username: pu.Login,
 		FullName: pu.FullName, Email: pu.Email, MustChangePassword: &no, Visibility: pu.Visibility,
 	}
-	if !pu.Created.IsZero() {
-		opt.Created = &pu.Created
-	}
-	if _, err := replica.API.AdminCreateUser(ctx, opt); err != nil {
+	if _, err := to.API.AdminCreateUser(ctx, opt); err != nil {
 		if forgejo.IsConflict(err) { // e.g. the e-mail address belongs to another account there
-			return blocked(fmt.Sprintf("%s refused to create the owner %s: %v", replica.Name, login, err))
+			return blocked(fmt.Sprintf("%s refused to create the owner %s: %v", to.Name, login, err))
 		}
 		return err
 	}
-	e.log.Info("created user on node", "user", login, "node", replica.Name)
+	// Never count this account as where the user registered.
+	if err := e.store.NoteCreatedAccount(ctx, to.Name, pu.Login); err != nil {
+		return err
+	}
+	e.log.Info("created user on node", "user", login, "node", to.Name)
 	if err := e.store.Audit(ctx, "forgesync", "user.created_on_node", login,
-		map[string]any{"node": replica.Name, "from": primary.Name}); err != nil {
+		map[string]any{"node": to.Name, "from": from.Name}); err != nil {
 		e.log.Error("writing audit log failed", "error", err)
 	}
 	return nil

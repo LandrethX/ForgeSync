@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"scenegit.org/forgesync/internal/forgejo"
 	"scenegit.org/forgesync/internal/health"
@@ -126,7 +127,7 @@ func TestCreateMissingRepository(t *testing.T) {
 		if r := dkAPI.repos["alice/demo"]; !r.Private || r.DefaultBranch != "main" {
 			t.Errorf("repo on dk = %+v", r)
 		}
-		if strings.Join(st.audit, ",") != "forgesync user.created_on_node,forgesync repo.created_on_node" {
+		if strings.Join(st.audit, ",") != "noted dk/alice,forgesync user.created_on_node,forgesync repo.created_on_node" {
 			t.Errorf("audit = %v", st.audit)
 		}
 		// Next run: nothing more to create.
@@ -232,6 +233,53 @@ func TestCreateMissingRepository(t *testing.T) {
 		e.RunRepo(ctx, st.rec)
 		if s := st.sync("dk"); s.State != StateSynced || dk.refs("alice/demo")["refs/heads/main"] != b {
 			t.Errorf("state %+v, refs %v", s, dk.refs("alice/demo"))
+		}
+	})
+}
+
+func TestSeedPrimary(t *testing.T) {
+	ctx := context.Background()
+	// alice's primary site is se, but she created alice/demo on dk: se gets
+	// it from dk first, then replication carries on from se as usual.
+	e, st, se, dk, seAPI, dkAPI, w := setupCreate(t)
+	os.RemoveAll(filepath.Join(se.root, "alice/demo.git"))
+	delete(seAPI.repos, "alice/demo")
+	dk.create("alice/demo")
+	dkAPI.users["alice"] = forgejo.User{Login: "alice", Email: "alice@example.org", SourceID: 3, LoginName: sub}
+	dkAPI.repos["alice/demo"] = forgejo.Repository{FullName: "alice/demo", Name: "demo", Owner: forgejo.User{Login: "alice"},
+		DefaultBranch: "main"}
+	seAPI.users = map[string]forgejo.User{} // and she has no account on se yet
+	created := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	st.rec.Replicas = []store.Replica{{Node: "dk", Present: true, ForgejoCreated: &created}}
+
+	b := w.commit("b")
+	runGit(t, w.dir, "tag", "v1")
+	w.push(dk, "alice/demo", "main", "refs/tags/v1")
+	if err := e.RunRepo(ctx, st.rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := se.refs("alice/demo"); got["refs/heads/main"] != b || got["refs/tags/v1"] != b {
+		t.Fatalf("se (primary) = %v", got)
+	}
+	if u := seAPI.users["alice"]; u.SourceID != 1 || u.LoginName != sub {
+		t.Errorf("alice on se = %+v", u)
+	}
+	if s := st.sync("dk"); s.State != StateSynced {
+		t.Errorf("dk after seeding = %+v", s)
+	}
+	if !strings.Contains(strings.Join(st.audit, ","), "noted se/alice") {
+		t.Errorf("created account not noted: %v", st.audit)
+	}
+
+	t.Run("no copy to start from", func(t *testing.T) {
+		e, st, se, _, seAPI, _, _ := setupCreate(t)
+		os.RemoveAll(filepath.Join(se.root, "alice/demo.git"))
+		delete(seAPI.repos, "alice/demo")
+		if err := e.RunRepo(ctx, st.rec); err != nil {
+			t.Fatal(err)
+		}
+		if s := st.sync("dk"); s.State != StateMissing || !strings.Contains(s.Detail, "no healthy node has a copy") {
+			t.Errorf("state = %+v", s)
 		}
 	})
 }

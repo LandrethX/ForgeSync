@@ -131,8 +131,8 @@ function PrimaryPanel({ repo, onSaved }: { repo: Repository; onSaved: () => void
     <section className="panel" aria-labelledby="primary-heading">
       <h2 id="primary-heading">Primary node</h2>
       <p className="muted">
-        The node that's authoritative for this repository. Every repository has one: by default the node it was
-        created on first.{" "}
+        The node that's authoritative for this repository. By default it's the owner's primary site (where they
+        registered); for organizations, the node the repository was created on first.{" "}
         {repo.replication?.enabled
           ? "Replication copies its branches and tags to the other nodes; changing it changes where they're copied from."
           : "While replication is off, it's only recorded."}
@@ -180,7 +180,11 @@ function PrimarySource({ repo }: { repo: Repository }) {
   }
   return (
     <span className="muted">
-      {repo.primary_source === "origin" ? "Set automatically: created here first." : "Chosen by an administrator."}
+      {repo.primary_source === "owner"
+        ? "Set automatically: the owner's primary site."
+        : repo.primary_source === "origin"
+          ? "Set automatically: created here first."
+          : "Chosen by an administrator; it no longer follows the owner."}
     </span>
   );
 }

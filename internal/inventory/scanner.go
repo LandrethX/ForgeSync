@@ -17,17 +17,22 @@ import (
 type Lister interface {
 	ListRepos(ctx context.Context, page, limit int) ([]forgejo.Repository, int, error)
 	BranchHead(ctx context.Context, owner, repo, branch string) (string, error)
+	ListUsers(ctx context.Context, sourceID int64, page, limit int) ([]forgejo.User, int, error)
 }
 
 // Recorder stores scan results.
 type Recorder interface {
 	RecordNodeScan(ctx context.Context, node string, started, finished time.Time, repos []store.ScannedRepo) error
 	RecordNodeScanFailure(ctx context.Context, node string, started, finished time.Time, err error) error
+	RecordNodeUsers(ctx context.Context, node string, finished time.Time, users []store.ScannedUser) error
 }
 
 type Target struct {
 	Name   string
 	Client Lister
+	// SceneIDSourceID is the SceneID login source on this node; its users
+	// are listed too. 0 = don't list users.
+	SceneIDSourceID int64
 }
 
 type Options struct {
@@ -112,6 +117,10 @@ func (s *Scanner) ScanAll(ctx context.Context) {
 			defer wg.Done()
 			started := s.now().UTC()
 			repos, err := s.scanNode(ctx, t)
+			var users []store.ScannedUser
+			if err == nil && t.SceneIDSourceID != 0 {
+				users, err = s.scanUsers(ctx, t)
+			}
 			finished := s.now().UTC()
 			if ctx.Err() != nil {
 				return // shutting down; don't record a half scan
@@ -123,6 +132,14 @@ func (s *Scanner) ScanAll(ctx context.Context) {
 				}
 				return
 			}
+			// Users first: the scan only counts as successful (which primary
+			// assignment relies on) once both are recorded.
+			if t.SceneIDSourceID != 0 {
+				if err := s.rec.RecordNodeUsers(ctx, t.Name, finished, users); err != nil {
+					s.log.Error("recording users failed", "node", t.Name, "error", err)
+					return
+				}
+			}
 			if err := s.rec.RecordNodeScan(ctx, t.Name, started, finished, repos); err != nil {
 				s.log.Error("recording scan failed", "node", t.Name, "error", err)
 				return
@@ -133,6 +150,32 @@ func (s *Scanner) ScanAll(ctx context.Context) {
 	wg.Wait()
 	if s.opts.AfterScan != nil && ctx.Err() == nil {
 		s.opts.AfterScan(ctx)
+	}
+}
+
+// scanUsers lists a node's SceneID accounts.
+func (s *Scanner) scanUsers(ctx context.Context, t Target) ([]store.ScannedUser, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.opts.NodeTimeout)
+	defer cancel()
+	var out []store.ScannedUser
+	seen := map[int64]bool{}
+	for page, total := 1, -1; ; page++ {
+		us, n, err := t.Client.ListUsers(ctx, t.SceneIDSourceID, page, pageSize)
+		if err != nil {
+			return nil, fmt.Errorf("list users (page %d): %w", page, err)
+		}
+		if total < 0 {
+			total = n
+		}
+		for _, u := range us {
+			if !seen[u.ID] && u.LoginName != "" {
+				seen[u.ID] = true
+				out = append(out, store.ScannedUser{Login: u.Login, ForgejoID: u.ID, Sub: u.LoginName, Created: u.Created})
+			}
+		}
+		if len(us) < pageSize || len(seen) >= total || page > total/pageSize+2 {
+			return out, nil
+		}
 	}
 }
 

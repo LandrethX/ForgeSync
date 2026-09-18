@@ -37,9 +37,17 @@ export function describe(e: HistoryEvent): string {
       return `Primary changed from ${from} to ${to}`;
     }
     case "repo.primary_assigned":
-      return `Primary set to ${str(d.to)}, where the repository was created first`;
+      return d.reason === "owner"
+        ? `Primary set to ${str(d.to)}, the owner's primary site`
+        : `Primary set to ${str(d.to)}, where the repository was created first`;
+    case "user.home_assigned":
+      return `Primary site set to ${str(d.to)}, where the user registered`;
+    case "user.set_home": {
+      const from = str(d.from) || "not set";
+      return `Primary site changed from ${from} to ${str(d.to)}`;
+    }
     case "repo.created_on_node":
-      return `Created on ${str(d.node)}, copying from the primary ${str(d.primary)}`;
+      return `Created on ${str(d.node)}, copied from ${str(d.from || d.primary)}`;
     case "user.created_on_node":
       return `SceneID user created on ${str(d.node)} (as on ${str(d.from)}), linked on first sign-in`;
     case "repo.replicate_requested":

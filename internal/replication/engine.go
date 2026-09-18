@@ -43,6 +43,7 @@ type Store interface {
 	Repository(ctx context.Context, id string) (store.RepositoryRecord, error)
 	ReplicatedRefs(ctx context.Context, repositoryID, node string) (map[string]string, error)
 	ForgetReplicatedRefs(ctx context.Context, repositoryID, node string) error
+	NoteCreatedAccount(ctx context.Context, node, login string) error
 	SaveReplicaSync(ctx context.Context, st store.ReplicaSync, refs map[string]string) error
 	SyncConflicts(ctx context.Context, found []store.FoundConflict, checked, kinds []string, at time.Time) ([]store.ConflictChange, error)
 	Audit(ctx context.Context, actor, action, target string, details map[string]any) error
@@ -195,6 +196,20 @@ func (e *Engine) RunRepo(ctx context.Context, rec store.RepositoryRecord) error 
 	}
 	pRemote := e.remote(primary, rec.FullName)
 	pRefs, err := e.git.LsRemote(ctx, pRemote)
+	if errors.Is(err, ErrRepoNotFound) && e.opts.CreateMissing {
+		// The primary follows the owner, so it may not have the repository
+		// yet (e.g. created on SE by a user whose primary site is DK).
+		var why blocked
+		switch serr := e.seedPrimary(ctx, dir, rec, primary, healthy); {
+		case errors.As(serr, &why):
+			allReplicas(StateMissing, "the primary "+primary.Name+" doesn't have the repository yet: "+why.Error())
+			return nil
+		case serr != nil:
+			allReplicas(StateError, "copying the repository to the primary "+primary.Name+" failed: "+serr.Error())
+			return serr
+		}
+		pRefs, err = e.git.LsRemote(ctx, pRemote)
+	}
 	if err == nil {
 		err = e.git.Fetch(ctx, dir, "primary", pRemote)
 	}
@@ -356,6 +371,63 @@ func (e *Engine) replicate(ctx context.Context, dir string, rec store.Repository
 		return StateConflict, fmt.Sprintf("%d ref(s) need a person; see Conflicts", len(issues)), updated, next, issues, nil
 	}
 	return StateSynced, "", updated, next, nil, nil
+}
+
+// seedPrimary copies a repository to its primary when the primary doesn't
+// have it: it creates it there (with its owner, as for any replica) and
+// pushes every branch and tag from the node where it was created first. The
+// new copy is empty, so this only creates refs.
+func (e *Engine) seedPrimary(ctx context.Context, dir string, rec store.RepositoryRecord, primary Node, healthy map[string]bool) error {
+	var src *store.Replica
+	for i, r := range rec.Replicas {
+		if !r.Present || r.Mirror || r.Node == primary.Name || !healthy[r.Node] || r.ForgejoCreated == nil {
+			continue
+		}
+		if _, ok := e.nodes[r.Node]; ok && (src == nil || r.ForgejoCreated.Before(*src.ForgejoCreated)) {
+			src = &rec.Replicas[i]
+		}
+	}
+	if src == nil {
+		return blocked("no healthy node has a copy to start from")
+	}
+	from := e.nodes[src.Node]
+	if err := e.createOnReplica(ctx, rec.FullName, from, primary); err != nil {
+		return err
+	}
+	sRemote := e.remote(from, rec.FullName)
+	sRefs, err := e.git.LsRemote(ctx, sRemote)
+	if err != nil {
+		return err
+	}
+	if len(sRefs) == 0 {
+		return nil // an empty repository: nothing to copy
+	}
+	if err := e.git.Fetch(ctx, dir, "nodes/"+from.Name, sRemote); err != nil {
+		return err
+	}
+	pRemote := e.remote(primary, rec.FullName)
+	pRefs, err := e.git.LsRemote(ctx, pRemote)
+	if err != nil {
+		return err
+	}
+	actions, _ := Plan(sRefs, pRefs, nil, func(a, b string) (bool, bool) { return e.git.IsAncestor(ctx, dir, a, b) })
+	var creates []Action
+	for _, a := range actions {
+		if a.Kind == Create { // never anything else on the primary
+			creates = append(creates, a)
+		}
+	}
+	results, err := e.git.Push(ctx, dir, pRemote, creates)
+	if err != nil {
+		return err
+	}
+	for _, a := range creates {
+		if r := results[a.Ref]; !r.OK {
+			return fmt.Errorf("%s refused %s: %s", primary.Name, a.Ref, r.Reason)
+		}
+	}
+	e.log.Info("copied repository to its primary", "repository", rec.FullName, "from", from.Name, "to", primary.Name, "refs", len(creates))
+	return nil
 }
 
 func (e *Engine) remote(n Node, fullName string) Remote {

@@ -349,3 +349,13 @@ func (c *Client) AdminCreateRepo(ctx context.Context, owner string, opt CreateRe
 	err := c.do(ctx, http.MethodPost, "/api/v1/admin/users/"+url.PathEscape(owner)+"/repos", true, opt, &r)
 	return r, err
 }
+
+// ListUsers returns one page of the accounts of one login source (not
+// organizations), oldest first, and the total count across pages. Site admin
+// only; LoginName and SourceID are filled in.
+func (c *Client) ListUsers(ctx context.Context, sourceID int64, page, limit int) ([]User, int, error) {
+	var us []User
+	path := fmt.Sprintf("/api/v1/admin/users?source_id=%d&page=%d&limit=%d&sort=oldest", sourceID, page, limit)
+	total, err := c.doCounted(ctx, path, &us)
+	return us, total, err
+}

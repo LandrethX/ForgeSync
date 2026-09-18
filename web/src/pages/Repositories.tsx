@@ -40,7 +40,8 @@ export function Repositories() {
       <p className="muted page-intro">
         What each node has, found by scanning every node
         {scan.status ? ` every ${formatDuration(scan.status.interval_seconds * 1000)}` : " regularly"}. This compares
-        the default branch on each node; ForgeSync doesn't replicate anything yet.
+        the default branch on each node. With replication on, each repository is copied from its primary (by default
+        its owner's primary site) to the other nodes, and created there if it's missing.
       </p>
       <ScanSummary status={scan.status} error={scan.error} />
 

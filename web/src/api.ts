@@ -103,12 +103,34 @@ export interface Repository {
   id: string;
   full_name: string;
   primary_node: string;
-  /** "origin": set automatically to the node it was created on first; "manual": an administrator chose it. */
-  primary_source: "" | "origin" | "manual";
+  /**
+   * "owner": the owner's primary site; "origin": the node it was created on first (owners without a
+   * primary site, e.g. organizations); "manual": an administrator chose it.
+   */
+  primary_source: "" | "owner" | "origin" | "manual";
   first_seen_at: string;
   status: RepoStatus;
   nodes: NodeView[];
   replication?: { enabled: boolean; replicas: ReplicaSync[] };
+}
+
+export interface UserAccount {
+  node: string;
+  login: string;
+  present: boolean;
+  forgejo_created_at?: string;
+  created_by_forgesync: boolean;
+}
+
+export interface User {
+  id: string;
+  sub: string;
+  login: string;
+  home_node: string;
+  /** "registration": where the account was created first; "manual": an administrator chose it. */
+  home_source: "" | "registration" | "manual";
+  first_seen_at: string;
+  accounts: UserAccount[];
 }
 
 export interface RepositoryList {
@@ -290,6 +312,10 @@ export const api = {
       node,
     }),
   inventory: () => request<InventoryStatus>("GET", "/inventory"),
+  users: (q?: string) =>
+    request<{ total: number; items: User[] }>("GET", `/users${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  setUserHome: (id: string, node: string) =>
+    request<{ home_node: string; previous: string }>("PUT", `/users/${encodeURIComponent(id)}/home`, { node }),
   replicateNow: (id: string) =>
     request<{ queued: boolean; running: boolean }>("POST", `/repositories/${encodeURIComponent(id)}/replicate`),
   scanNow: () => request<{ queued: boolean; running: boolean }>("POST", "/inventory/scan"),

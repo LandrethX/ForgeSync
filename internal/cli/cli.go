@@ -80,6 +80,7 @@ func NewRootCommand(out io.Writer) *cobra.Command {
 	})
 	root.AddCommand(node)
 	root.AddCommand(repoCommand(o))
+	root.AddCommand(userCommand(o))
 	root.AddCommand(conflictCommand(o))
 	root.AddCommand(historyCommand(o))
 	return root

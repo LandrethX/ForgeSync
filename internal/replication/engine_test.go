@@ -53,6 +53,12 @@ func (m *memStore) ForgetReplicatedRefs(_ context.Context, _, node string) error
 	delete(m.refs, node)
 	return nil
 }
+func (m *memStore) NoteCreatedAccount(_ context.Context, node, login string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.audit = append(m.audit, "noted "+node+"/"+login)
+	return nil
+}
 func (m *memStore) SaveReplicaSync(_ context.Context, st store.ReplicaSync, refs map[string]string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

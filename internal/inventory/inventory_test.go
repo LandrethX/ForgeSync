@@ -99,6 +99,7 @@ func TestCompare(t *testing.T) {
 // fakeForgejo serves n repositories, page by page.
 type fakeForgejo struct {
 	repos     []forgejo.Repository
+	users     []forgejo.User // of every login source; ListUsers filters
 	listErr   error
 	inFlight  atomic.Int32
 	maxFlight atomic.Int32
@@ -122,6 +123,20 @@ func (f *fakeForgejo) ListRepos(_ context.Context, page, limit int) ([]forgejo.R
 	return out, len(f.repos), nil
 }
 
+func (f *fakeForgejo) ListUsers(_ context.Context, src int64, page, limit int) ([]forgejo.User, int, error) {
+	var of []forgejo.User
+	for _, u := range f.users {
+		if u.SourceID == src {
+			of = append(of, u)
+		}
+	}
+	start := (page - 1) * limit
+	if start >= len(of) {
+		return nil, len(of), nil
+	}
+	return of[start:min(start+limit, len(of))], len(of), nil
+}
+
 func (f *fakeForgejo) BranchHead(_ context.Context, owner, repo, branch string) (string, error) {
 	n := f.inFlight.Add(1)
 	defer f.inFlight.Add(-1)
@@ -141,7 +156,15 @@ func (f *fakeForgejo) BranchHead(_ context.Context, owner, repo, branch string) 
 type fakeRecorder struct {
 	mu       sync.Mutex
 	scans    map[string][]store.ScannedRepo
+	users    map[string][]store.ScannedUser
 	failures map[string]error
+}
+
+func (r *fakeRecorder) RecordNodeUsers(_ context.Context, node string, _ time.Time, users []store.ScannedUser) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.users[node] = users
+	return nil
 }
 
 func (r *fakeRecorder) RecordNodeScan(_ context.Context, node string, _, _ time.Time, repos []store.ScannedRepo) error {
@@ -167,10 +190,16 @@ func TestScanner(t *testing.T) {
 	repos[4].Empty = true
 	repos[5].Name, repos[5].FullName = "broken", "alice/broken"
 
-	se := &fakeForgejo{repos: repos}
+	var users []forgejo.User
+	for i := 1; i <= 60; i++ {
+		users = append(users, forgejo.User{ID: int64(i), Login: fmt.Sprintf("u%d", i), SourceID: 2, LoginName: fmt.Sprintf("sub-%d", i)})
+	}
+	users = append(users, forgejo.User{ID: 99, Login: "siteadmin"}) // local: not listed
+
+	se := &fakeForgejo{repos: repos, users: users}
 	dk := &fakeForgejo{listErr: errors.New("connection refused")}
-	rec := &fakeRecorder{scans: map[string][]store.ScannedRepo{}, failures: map[string]error{}}
-	s := NewScanner([]Target{{Name: "se", Client: se}, {Name: "dk", Client: dk}},
+	rec := &fakeRecorder{scans: map[string][]store.ScannedRepo{}, users: map[string][]store.ScannedUser{}, failures: map[string]error{}}
+	s := NewScanner([]Target{{Name: "se", Client: se, SceneIDSourceID: 2}, {Name: "dk", Client: dk, SceneIDSourceID: 1}},
 		Options{Interval: time.Hour, BranchConcurrency: 3}, rec, slog.New(slog.DiscardHandler))
 
 	after := 0
@@ -195,7 +224,10 @@ func TestScanner(t *testing.T) {
 	if m := se.maxFlight.Load(); m > 3 {
 		t.Errorf("%d branch lookups in parallel, limit is 3", m)
 	}
-	if rec.failures["dk"] == nil || rec.scans["dk"] != nil {
+	if u := rec.users["se"]; len(u) != 60 || u[59].Sub != "sub-60" {
+		t.Errorf("users on se = %d, want the 60 SceneID users", len(u))
+	}
+	if rec.failures["dk"] == nil || rec.scans["dk"] != nil || rec.users["dk"] != nil {
 		t.Errorf("dk failure not recorded: %v", rec.failures)
 	}
 }

@@ -203,7 +203,7 @@ func TestRepositoryInventory(t *testing.T) {
 	}
 }
 
-func TestAssignOriginPrimaries(t *testing.T) {
+func TestAssignPrimaries(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	if _, err := s.Migrate(ctx); err != nil {
@@ -219,65 +219,98 @@ func TestAssignOriginPrimaries(t *testing.T) {
 	}
 	t0 := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
 	day := 24 * time.Hour
-	scan := func(node string, repos ...ScannedRepo) {
+	scan := func(node string, users []ScannedUser, repos ...ScannedRepo) {
 		t.Helper()
+		if err := s.RecordNodeUsers(ctx, node, t0.Add(time.Second), users); err != nil {
+			t.Fatal(err)
+		}
 		if err := s.RecordNodeScan(ctx, node, t0, t0.Add(time.Second), repos); err != nil {
 			t.Fatal(err)
 		}
 	}
-	scan("se",
-		ScannedRepo{FullName: "alice/only-se", Created: t0.Add(-day)},
-		ScannedRepo{FullName: "alice/both", Created: t0.Add(-day)},
-		ScannedRepo{FullName: "alice/mirrored", Created: t0.Add(-3 * day), Mirror: true},
-		ScannedRepo{FullName: "alice/chosen", Created: t0.Add(-day)})
-	scan("dk",
-		ScannedRepo{FullName: "alice/both", Created: t0.Add(-2 * day)}, // created on DK first
-		ScannedRepo{FullName: "alice/mirrored", Created: t0.Add(-2 * day)},
+	// alice registered on DK (her SE account came later); bob on SE, and
+	// ForgeSync created his DK account with the same creation time.
+	alice := func(c time.Time) ScannedUser { return ScannedUser{Login: "alice", Sub: "sub-a", Created: c} }
+	bob := func(c time.Time) ScannedUser { return ScannedUser{Login: "bob", Sub: "sub-b", Created: c} }
+	if err := s.NoteCreatedAccount(ctx, "dk", "Bob"); err != nil {
+		t.Fatal(err)
+	}
+	scan("se", []ScannedUser{alice(t0.Add(-day)), bob(t0.Add(-5 * day))},
+		ScannedRepo{FullName: "alice/made-on-se", Created: t0.Add(-day)},    // follows alice: DK
+		ScannedRepo{FullName: "bob/tools", Created: t0.Add(-day)},           // follows bob: SE
+		ScannedRepo{FullName: "team/app", Created: t0.Add(-day)},            // an organization: origin
+		ScannedRepo{FullName: "alice/chosen", Created: t0.Add(-day)},        // manual, kept
+		ScannedRepo{FullName: "siteadmin/notes", Created: t0.Add(-3 * day)}, // local owner: origin SE
+		ScannedRepo{FullName: "team/mirrored", Created: t0.Add(-3 * day), Mirror: true})
+	scan("dk", []ScannedUser{alice(t0.Add(-2 * day)), bob(t0.Add(-5 * day))},
+		ScannedRepo{FullName: "team/app", Created: t0.Add(-2 * day)},
+		ScannedRepo{FullName: "team/mirrored", Created: t0.Add(-2 * day)},
 		ScannedRepo{FullName: "alice/chosen", Created: t0.Add(-2 * day)})
 
-	// DE has never been scanned, so it could hide an earlier copy: nothing is assigned.
-	if got, ok, err := s.AssignOriginPrimaries(ctx, nodes); err != nil || ok || len(got) != 0 {
-		t.Fatalf("with DE unscanned: %v %v %v", got, ok, err)
+	// DE has never been scanned, so it could hide an earlier account: nothing is assigned.
+	if got, ok, err := s.AssignPrimaries(ctx, nodes); err != nil || ok || len(got.Homes)+len(got.Primaries) != 0 {
+		t.Fatalf("with DE unscanned: %+v %v %v", got, ok, err)
 	}
-	scan("de")
+	scan("de", nil)
 
-	all, _ := s.Repositories(ctx)
-	byName := map[string]RepositoryRecord{}
-	for _, r := range all {
-		byName[r.FullName] = r
+	byName := func() map[string]RepositoryRecord {
+		all, _ := s.Repositories(ctx)
+		m := map[string]RepositoryRecord{}
+		for _, r := range all {
+			m[r.FullName] = r
+		}
+		return m
 	}
-	if _, err := s.SetPrimary(ctx, byName["alice/chosen"].ID, "se"); err != nil {
+	if _, err := s.SetPrimary(ctx, byName()["alice/chosen"].ID, "se"); err != nil {
 		t.Fatal(err)
 	}
 
-	got, ok, err := s.AssignOriginPrimaries(ctx, nodes)
+	got, ok, err := s.AssignPrimaries(ctx, nodes)
 	if err != nil || !ok {
 		t.Fatalf("assign: ok %v err %v", ok, err)
 	}
-	want := map[string]string{"alice/only-se": "se", "alice/both": "dk", "alice/mirrored": "dk"}
-	if len(got) != len(want) {
-		t.Fatalf("assigned %+v, want %v", got, want)
+	homes := map[string]string{}
+	for _, h := range got.Homes {
+		homes[h.Login] = h.Node
 	}
-	for _, a := range got {
-		if want[a.FullName] != a.Node {
-			t.Errorf("%s -> %s, want %s", a.FullName, a.Node, want[a.FullName])
+	if len(homes) != 2 || homes["alice"] != "dk" || homes["bob"] != "se" {
+		t.Errorf("homes = %v, want alice dk (registered there), bob se (dk copy is ForgeSync's)", homes)
+	}
+	want := map[string][2]string{
+		"alice/made-on-se": {"dk", "owner"}, "bob/tools": {"se", "owner"}, "team/app": {"dk", "origin"},
+		"alice/chosen": {"se", "manual"}, "siteadmin/notes": {"se", "origin"}, "team/mirrored": {"dk", "origin"},
+	}
+	for name, r := range byName() {
+		if w := want[name]; r.PrimaryNode != w[0] || r.PrimarySource != w[1] {
+			t.Errorf("%s: primary %s (%s), want %s (%s)", name, r.PrimaryNode, r.PrimarySource, w[0], w[1])
 		}
 	}
-	if b := got[0]; b.FullName == "alice/both" && len(b.Nodes) != 2 {
-		t.Errorf("alice/both nodes = %v", b.Nodes)
+	if len(got.Primaries) != 5 {
+		t.Errorf("primary changes = %+v", got.Primaries)
 	}
-	all, _ = s.Repositories(ctx)
-	for _, r := range all {
-		source := "origin"
-		if r.FullName == "alice/chosen" {
-			source = "manual" // an Administrator's choice is never replaced
-		}
-		if r.PrimarySource != source {
-			t.Errorf("%s: primary %s source %q, want %q", r.FullName, r.PrimaryNode, r.PrimarySource, source)
-		}
+
+	// An Administrator moves alice to DE: her repositories follow, except the chosen one.
+	users, _ := s.Users(ctx)
+	if len(users) != 2 || users[0].Login != "alice" || len(users[0].Accounts) != 2 || users[1].Accounts[0].Node != "dk" ||
+		!users[1].Accounts[0].CreatedByUs || users[1].Accounts[1].CreatedByUs {
+		t.Fatalf("users = %+v", users)
 	}
-	if again, _, _ := s.AssignOriginPrimaries(ctx, nodes); len(again) != 0 {
-		t.Errorf("second run assigned %+v", again)
+	if prev, err := s.SetUserHome(ctx, users[0].ID, "de"); err != nil || prev != "dk" {
+		t.Fatalf("set home: %q %v", prev, err)
+	}
+	if _, err := s.SetUserHome(ctx, users[0].ID, ""); err == nil {
+		t.Error("a user's primary site was cleared")
+	}
+	got, _, _ = s.AssignPrimaries(ctx, nodes)
+	if len(got.Homes) != 0 || len(got.Primaries) != 1 || got.Primaries[0].FullName != "alice/made-on-se" ||
+		got.Primaries[0].From != "dk" || got.Primaries[0].To != "de" {
+		t.Errorf("after moving alice: %+v", got)
+	}
+	if again, _, _ := s.AssignPrimaries(ctx, nodes); len(again.Homes)+len(again.Primaries) != 0 {
+		t.Errorf("third run changed %+v", again)
+	}
+	if u, _ := s.User(ctx, users[0].ID); u.HomeNode != "de" || u.HomeSource != "manual" {
+		t.Errorf("alice = %+v", u)
 	}
 }
 

@@ -85,7 +85,7 @@ func run(configPath string) error {
 		records = append(records, store.NodeRecord{Name: n.Name, URL: n.URL, Site: n.Site})
 		infos = append(infos, api.NodeInfo{Name: n.Name, URL: n.URL, Site: n.Site})
 		targets = append(targets, health.Target{Name: n.Name, ServiceUser: n.ServiceUser, Client: client})
-		scanTargets = append(scanTargets, inventory.Target{Name: n.Name, Client: client})
+		scanTargets = append(scanTargets, inventory.Target{Name: n.Name, Client: client, SceneIDSourceID: n.SceneIDSourceID})
 		nodeNames = append(nodeNames, n.Name)
 		comparers[n.Name] = client
 		gitNodes = append(gitNodes, replication.Node{Name: n.Name, URL: n.URL, User: n.ServiceUser, Token: n.Token,
@@ -125,7 +125,7 @@ func run(configPath string) error {
 		Interval:          cfg.Inventory.Interval,
 		BranchConcurrency: cfg.Inventory.BranchConcurrency,
 		AfterScan: func(ctx context.Context) {
-			if err := inventory.AssignOrigins(ctx, db, nodeNames, log); err != nil {
+			if err := inventory.AssignPrimaries(ctx, db, nodeNames, log); err != nil {
 				log.Error("assigning primaries failed", "error", err)
 			}
 			if err := detector.Run(ctx); err != nil {

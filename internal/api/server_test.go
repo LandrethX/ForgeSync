@@ -32,6 +32,7 @@ type fakeDB struct {
 	scans     []store.NodeScan
 	conflicts []store.Conflict
 	syncs     []store.ReplicaSync
+	users     []store.UserRecord
 }
 
 func (f *fakeDB) Repositories(context.Context) ([]store.RepositoryRecord, error) {
@@ -56,6 +57,33 @@ func (f *fakeDB) SetPrimary(_ context.Context, id, node string) (string, error) 
 		if f.repos[i].ID == id {
 			prev := f.repos[i].PrimaryNode
 			f.repos[i].PrimaryNode = node
+			return prev, nil
+		}
+	}
+	return "", store.ErrNotFound
+}
+func (f *fakeDB) Users(context.Context) ([]store.UserRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]store.UserRecord(nil), f.users...), nil
+}
+func (f *fakeDB) User(_ context.Context, id string) (store.UserRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, u := range f.users {
+		if u.ID == id {
+			return u, nil
+		}
+	}
+	return store.UserRecord{}, store.ErrNotFound
+}
+func (f *fakeDB) SetUserHome(_ context.Context, id, node string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.users {
+		if f.users[i].ID == id {
+			prev := f.users[i].HomeNode
+			f.users[i].HomeNode, f.users[i].HomeSource = node, "manual"
 			return prev, nil
 		}
 	}

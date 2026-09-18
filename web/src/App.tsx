@@ -3,6 +3,8 @@ import { api, ApiError, hasRole, SIGNED_OUT_EVENT, type Session } from "./api";
 import { Layout, PageHeader } from "./components/Layout";
 import { NodeStreamContext, SessionContext, useNodeStream } from "./hooks";
 import { Audit } from "./pages/Audit";
+import { ConflictDetail } from "./pages/ConflictDetail";
+import { Conflicts } from "./pages/Conflicts";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
 import { NodeDetail } from "./pages/NodeDetail";
@@ -96,6 +98,9 @@ function Routes({ session }: { session: Session }) {
   if (match("/repositories", path)) return <Repositories />;
   const repo = match("/repositories/:id", path);
   if (repo?.id) return <RepositoryDetail id={repo.id} />;
+  if (match("/conflicts", path)) return <Conflicts />;
+  const conflict = match("/conflicts/:id", path);
+  if (conflict?.id && /^\d+$/.test(conflict.id)) return <ConflictDetail id={Number(conflict.id)} />;
   if (match("/audit", path)) {
     return hasRole(session, "operator") ? (
       <Audit />

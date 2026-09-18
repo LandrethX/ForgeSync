@@ -173,7 +173,17 @@ func TestScanner(t *testing.T) {
 	s := NewScanner([]Target{{Name: "se", Client: se}, {Name: "dk", Client: dk}},
 		Options{Interval: time.Hour, BranchConcurrency: 3}, rec, slog.New(slog.DiscardHandler))
 
+	after := 0
+	s.opts.AfterScan = func(context.Context) {
+		after++
+		if len(rec.scans["se"]) == 0 || rec.failures["dk"] == nil {
+			t.Error("AfterScan ran before every node was recorded")
+		}
+	}
 	s.ScanAll(context.Background())
+	if after != 1 {
+		t.Errorf("AfterScan ran %d times", after)
+	}
 
 	got := rec.scans["se"]
 	if len(got) != 120 {

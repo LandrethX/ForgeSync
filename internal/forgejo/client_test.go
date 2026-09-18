@@ -123,3 +123,33 @@ func TestListReposAndBranchHead(t *testing.T) {
 		t.Fatalf("head = %q, err %v", sha, err)
 	}
 }
+
+func TestCommitsAhead(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("files") != "false" || r.URL.Query().Get("verification") != "false" {
+			t.Errorf("query = %s", r.URL.RawQuery)
+		}
+		switch r.URL.Path {
+		case "/api/v1/repos/alice/demo/compare/aaa...bbb":
+			w.Write([]byte(`{"total_commits":3,"commits":[]}`))
+		case "/api/v1/repos/alice/demo/compare/aaa...ccc":
+			w.WriteHeader(404)
+			w.Write([]byte(`{"message":"could not find 'ccc' to be a commit, branch or tag"}`))
+		default:
+			w.WriteHeader(500)
+		}
+	}))
+	defer srv.Close()
+	c, _ := New(srv.URL, "tok", nil)
+	ctx := context.Background()
+
+	if n, found, err := c.CommitsAhead(ctx, "alice", "demo", "aaa", "bbb"); n != 3 || !found || err != nil {
+		t.Errorf("aaa...bbb = %d %t %v", n, found, err)
+	}
+	if _, found, err := c.CommitsAhead(ctx, "alice", "demo", "aaa", "ccc"); found || err != nil {
+		t.Errorf("unknown commit: found %t err %v", found, err)
+	}
+	if _, _, err := c.CommitsAhead(ctx, "alice", "demo", "x", "y"); err == nil {
+		t.Error("server error not reported")
+	}
+}

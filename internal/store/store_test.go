@@ -200,3 +200,74 @@ func TestRepositoryInventory(t *testing.T) {
 		t.Fatalf("bad id: err %v", err)
 	}
 }
+
+func TestConflicts(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncNodes(ctx, []NodeRecord{{Name: "se", URL: "http://se"}}); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	if err := s.RecordNodeScan(ctx, "se", t0, t0, []ScannedRepo{{FullName: "alice/demo"}, {FullName: "bob/tools"}}); err != nil {
+		t.Fatal(err)
+	}
+	recs, _ := s.Repositories(ctx)
+	demo, tools := recs[0].ID, recs[1].ID
+	diverged := FoundConflict{RepositoryID: demo, Kind: "git_diverged", Ref: "refs/heads/main", Details: map[string]any{"heads": map[string]any{"se": "a", "dk": "b"}}}
+
+	changes, err := s.SyncConflicts(ctx, []FoundConflict{diverged}, []string{demo, tools}, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 || changes[0].Change != "opened" || changes[0].FullName != "alice/demo" {
+		t.Fatalf("first sync = %+v", changes)
+	}
+	// Found again: refreshed, not reopened.
+	diverged.Details = map[string]any{"heads": map[string]any{"se": "a2", "dk": "b"}}
+	if changes, err = s.SyncConflicts(ctx, []FoundConflict{diverged}, []string{demo}, t0.Add(time.Minute)); err != nil || len(changes) != 0 {
+		t.Fatalf("second sync = %+v, %v", changes, err)
+	}
+	// Not concluded for demo this time (not in checked): stays open.
+	if changes, err = s.SyncConflicts(ctx, nil, []string{tools}, t0.Add(2*time.Minute)); err != nil || len(changes) != 0 {
+		t.Fatalf("unchecked repo = %+v, %v", changes, err)
+	}
+	items, total, counts, err := s.Conflicts(ctx, ConflictFilter{State: "open", Limit: 10})
+	if err != nil || total != 1 || counts["open"] != 1 || items[0].LastSeenAt.Equal(t0) {
+		t.Fatalf("open = %+v total %d counts %v err %v", items, total, counts, err)
+	}
+	heads := items[0].Details["heads"].(map[string]any)
+	if heads["se"] != "a2" {
+		t.Errorf("details not refreshed: %v", items[0].Details)
+	}
+
+	if err := s.AcknowledgeConflict(ctx, items[0].ID, "sceneid:bob", "talking to the team", t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AcknowledgeConflict(ctx, 999999, "x", "", t0); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown conflict: %v", err)
+	}
+
+	// Checked and not found: cleared.
+	changes, err = s.SyncConflicts(ctx, nil, []string{demo}, t0.Add(3*time.Minute))
+	if err != nil || len(changes) != 1 || changes[0].Change != "cleared" {
+		t.Fatalf("clearing = %+v, %v", changes, err)
+	}
+	c, err := s.ConflictByID(ctx, items[0].ID)
+	if err != nil || c.State != "cleared" || c.ClearedAt == nil || c.AcknowledgedBy != "sceneid:bob" || c.Note != "talking to the team" {
+		t.Fatalf("cleared conflict = %+v, %v", c, err)
+	}
+	// It can come back as a new conflict.
+	if changes, _ = s.SyncConflicts(ctx, []FoundConflict{diverged}, []string{demo}, t0.Add(4*time.Minute)); len(changes) != 1 {
+		t.Fatalf("reopening = %+v", changes)
+	}
+	_, total, counts, _ = s.Conflicts(ctx, ConflictFilter{RepositoryID: demo, Limit: 10})
+	if total != 2 || counts["open"] != 1 || counts["cleared"] != 1 {
+		t.Errorf("per repository: total %d counts %v", total, counts)
+	}
+	if n, err := s.OpenConflicts(ctx); err != nil || n != 1 {
+		t.Errorf("open count = %d, %v", n, err)
+	}
+}

@@ -92,6 +92,43 @@ export interface InventoryStatus {
   nodes: NodeScan[];
 }
 
+export type ConflictKind = "git_diverged" | "default_branch_mismatch";
+
+export interface Relation {
+  a: string;
+  b: string;
+  relation: "diverged" | "a_behind_b" | "b_behind_a";
+}
+
+export interface Conflict {
+  id: number;
+  repository_id: string;
+  full_name: string;
+  primary_node: string;
+  kind: ConflictKind;
+  ref: string;
+  state: "open" | "cleared";
+  details: {
+    branch?: string;
+    heads?: Record<string, string>;
+    branches?: Record<string, string>;
+    relations?: Relation[];
+    primary?: string;
+  };
+  detected_at: string;
+  last_seen_at: string;
+  cleared_at?: string;
+  acknowledged_by?: string;
+  acknowledged_at?: string;
+  note?: string;
+}
+
+export interface ConflictList {
+  total: number;
+  counts: { open?: number; cleared?: number };
+  items: Conflict[];
+}
+
 export interface Overview {
   version: string;
   commit: string;
@@ -99,6 +136,7 @@ export interface Overview {
   role: string;
   database: { ok: boolean; error?: string };
   nodes: Record<string, number>;
+  open_conflicts: number;
 }
 
 export type Role = "viewer" | "operator" | "administrator";
@@ -204,6 +242,13 @@ export const api = {
     }),
   inventory: () => request<InventoryStatus>("GET", "/inventory"),
   scanNow: () => request<{ queued: boolean; running: boolean }>("POST", "/inventory/scan"),
+  conflicts: (opts: { state: "open" | "cleared" | "all"; repository?: string; limit: number; offset: number }) => {
+    const p = new URLSearchParams({ state: opts.state, limit: String(opts.limit), offset: String(opts.offset) });
+    if (opts.repository) p.set("repository", opts.repository);
+    return request<ConflictList>("GET", `/conflicts?${p}`);
+  },
+  conflict: (id: number) => request<Conflict>("GET", `/conflicts/${id}`),
+  acknowledgeConflict: (id: number, note: string) => request<Conflict>("POST", `/conflicts/${id}/acknowledge`, { note }),
   audit: (limit: number, before?: number) =>
     request<AuditEntry[]>("GET", `/audit?limit=${limit}${before ? `&before=${before}` : ""}`),
 };

@@ -34,6 +34,9 @@ type Options struct {
 	Interval          time.Duration
 	BranchConcurrency int           // parallel branch lookups per node
 	NodeTimeout       time.Duration // upper bound for scanning one node
+	// AfterScan, if set, runs after every scan of all nodes (e.g. conflict
+	// detection, which needs every node's latest view).
+	AfterScan func(ctx context.Context)
 }
 
 // pageSize matches Forgejo's default MAX_RESPONSE_ITEMS.
@@ -128,6 +131,9 @@ func (s *Scanner) ScanAll(ctx context.Context) {
 		}()
 	}
 	wg.Wait()
+	if s.opts.AfterScan != nil && ctx.Err() == nil {
+		s.opts.AfterScan(ctx)
+	}
 }
 
 func (s *Scanner) scanNode(ctx context.Context, t Target) ([]store.ScannedRepo, error) {

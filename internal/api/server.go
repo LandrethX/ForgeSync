@@ -37,6 +37,10 @@ type DB interface {
 	Repository(ctx context.Context, id string) (store.RepositoryRecord, error)
 	SetPrimary(ctx context.Context, id, node string) (string, error)
 	NodeScans(ctx context.Context) ([]store.NodeScan, error)
+	Conflicts(ctx context.Context, f store.ConflictFilter) ([]store.Conflict, int, map[string]int, error)
+	ConflictByID(ctx context.Context, id int64) (store.Conflict, error)
+	AcknowledgeConflict(ctx context.Context, id int64, actor, note string, at time.Time) error
+	OpenConflicts(ctx context.Context) (int, error)
 	AuditEntries(ctx context.Context, limit int, beforeID int64) ([]store.AuditEntry, error)
 	Audit(ctx context.Context, actor, action, target string, details map[string]any) error
 }
@@ -117,7 +121,10 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/repositories", s.listRepositories)
 				r.Get("/repositories/{id}", s.getRepository)
 				r.Get("/inventory", s.inventoryStatus)
+				r.Get("/conflicts", s.listConflicts)
+				r.Get("/conflicts/{id}", s.getConflict)
 			})
+			r.With(requireRole(auth.Operator)).Post("/conflicts/{id}/acknowledge", s.acknowledgeConflict)
 			r.With(requireRole(auth.Operator)).Post("/inventory/scan", s.scanNow)
 			r.With(requireRole(auth.Administrator)).Put("/repositories/{id}/primary", s.setPrimary)
 			// The audit log shows who signed in from where: operators and up.
@@ -218,6 +225,8 @@ type Overview struct {
 	Role      string         `json:"role"`
 	Database  DatabaseStatus `json:"database"`
 	Nodes     map[string]int `json:"nodes"` // count per state, plus "total"
+	// OpenConflicts is -1 when it couldn't be counted.
+	OpenConflicts int `json:"open_conflicts"`
 }
 
 type DatabaseStatus struct {
@@ -240,6 +249,12 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	if err := s.DB.Ping(ctx); err != nil {
 		o.Database = DatabaseStatus{OK: false, Error: "unreachable"}
 		s.Log.Warn("database ping failed", "error", err)
+	}
+	if n, err := s.DB.OpenConflicts(ctx); err != nil {
+		o.OpenConflicts = -1
+		s.Log.Warn("counting conflicts failed", "error", err)
+	} else {
+		o.OpenConflicts = n
 	}
 	for _, n := range s.nodes() {
 		o.Nodes[string(n.State)]++

@@ -98,3 +98,25 @@ func TestRepoSetPrimary(t *testing.T) {
 		t.Errorf("clearing sent %q", gotBody)
 	}
 }
+
+func TestConflictList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("state") != "all" {
+			t.Errorf("state = %q", r.URL.Query().Get("state"))
+		}
+		w.Write([]byte(`{"total":1,"counts":{"open":1,"cleared":4},"items":[{"id":7,"full_name":"alice/demo","kind":"git_diverged","state":"open",
+			"detected_at":"2026-09-18T10:00:00Z","details":{"heads":{"se":"a1b2c3d4e5","dk":"9f8e7d6c5b"}}}]}`))
+	}))
+	defer srv.Close()
+	var out bytes.Buffer
+	cmd := NewRootCommand(&out)
+	cmd.SetArgs([]string{"--server", srv.URL, "--token", "tok", "conflict", "list", "--state", "all"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"alice/demo", "git_diverged", "dk:9f8e7d6 se:a1b2c3d", "1 open, 4 cleared"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+}

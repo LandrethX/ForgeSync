@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -20,6 +21,7 @@ import (
 
 	"scenegit.org/forgesync/internal/api"
 	"scenegit.org/forgesync/internal/buildinfo"
+	"scenegit.org/forgesync/internal/store"
 )
 
 type options struct {
@@ -78,7 +80,69 @@ func NewRootCommand(out io.Writer) *cobra.Command {
 	})
 	root.AddCommand(node)
 	root.AddCommand(repoCommand(o))
+	root.AddCommand(conflictCommand(o))
 	return root
+}
+
+func conflictCommand(o *options) *cobra.Command {
+	conflict := &cobra.Command{Use: "conflict", Short: "Conflicts between nodes"}
+	var state string
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List conflicts (open ones by default)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			var res struct {
+				Total  int              `json:"total"`
+				Counts map[string]int   `json:"counts"`
+				Items  []store.Conflict `json:"items"`
+			}
+			if err := o.call(cmd.Context(), http.MethodGet, "/api/v1/conflicts?limit=500&state="+url.QueryEscape(state), nil, &res); err != nil {
+				return err
+			}
+			if o.output == "json" {
+				enc := json.NewEncoder(cmd.OutOrStdout())
+				enc.SetIndent("", "  ")
+				return enc.Encode(res)
+			}
+			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			fmt.Fprintln(tw, "ID\tREPOSITORY\tKIND\tSTATE\tDETECTED\tNODES")
+			for _, c := range res.Items {
+				fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n", c.ID, c.FullName, c.Kind, c.State,
+					c.DetectedAt.Local().Format("2006-01-02 15:04"), conflictNodes(c))
+			}
+			if err := tw.Flush(); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%d open, %d cleared\n", res.Counts["open"], res.Counts["cleared"])
+			return nil
+		},
+	}
+	list.Flags().StringVar(&state, "state", "open", "open, cleared or all")
+	conflict.AddCommand(list)
+	return conflict
+}
+
+// conflictNodes summarises what each node has, e.g. "se:a1b2c3d dk:9f8e7d6".
+func conflictNodes(c store.Conflict) string {
+	key, short := "heads", 7
+	if c.Kind == "default_branch_mismatch" {
+		key, short = "branches", 0
+	}
+	m, _ := c.Details[key].(map[string]any)
+	names := make([]string, 0, len(m))
+	for n := range m {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var parts []string
+	for _, n := range names {
+		v, _ := m[n].(string)
+		if short > 0 && len(v) > short {
+			v = v[:short]
+		}
+		parts = append(parts, n+":"+v)
+	}
+	return strings.Join(parts, " ")
 }
 
 type repoList struct {

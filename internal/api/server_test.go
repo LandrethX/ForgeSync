@@ -18,11 +18,12 @@ import (
 )
 
 type fakeDB struct {
-	pingErr error
-	mu      sync.Mutex
-	audit   []store.AuditEntry
-	repos   []store.RepositoryRecord
-	scans   []store.NodeScan
+	pingErr   error
+	mu        sync.Mutex
+	audit     []store.AuditEntry
+	repos     []store.RepositoryRecord
+	scans     []store.NodeScan
+	conflicts []store.Conflict
 }
 
 func (f *fakeDB) Repositories(context.Context) ([]store.RepositoryRecord, error) {
@@ -53,6 +54,49 @@ func (f *fakeDB) SetPrimary(_ context.Context, id, node string) (string, error) 
 	return "", store.ErrNotFound
 }
 func (f *fakeDB) NodeScans(context.Context) ([]store.NodeScan, error) { return f.scans, nil }
+func (f *fakeDB) Conflicts(_ context.Context, flt store.ConflictFilter) ([]store.Conflict, int, map[string]int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	counts := map[string]int{"open": 0, "cleared": 0}
+	items := []store.Conflict{}
+	for _, c := range f.conflicts {
+		counts[c.State]++
+		if (flt.State == "" || c.State == flt.State) && (flt.RepositoryID == "" || c.RepositoryID == flt.RepositoryID) {
+			items = append(items, c)
+		}
+	}
+	return items, len(items), counts, nil
+}
+func (f *fakeDB) ConflictByID(_ context.Context, id int64) (store.Conflict, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.conflicts {
+		if c.ID == id {
+			return c, nil
+		}
+	}
+	return store.Conflict{}, store.ErrNotFound
+}
+func (f *fakeDB) AcknowledgeConflict(_ context.Context, id int64, actor, note string, _ time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.conflicts {
+		if f.conflicts[i].ID == id {
+			f.conflicts[i].AcknowledgedBy, f.conflicts[i].Note = actor, note
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+func (f *fakeDB) OpenConflicts(context.Context) (int, error) {
+	n := 0
+	for _, c := range f.conflicts {
+		if c.State == "open" {
+			n++
+		}
+	}
+	return n, nil
+}
 
 func (f *fakeDB) Ping(context.Context) error { return f.pingErr }
 func (f *fakeDB) Transitions(_ context.Context, node string, limit int) ([]store.Transition, error) {

@@ -232,3 +232,24 @@ func (c *Client) doCounted(ctx context.Context, path string, out any) (int, erro
 	})
 	return total, err
 }
+
+// CommitsAhead reports how many commits are reachable from head but not from
+// base, in one repository. found is false if either commit doesn't exist
+// there (Forgejo answers 404). Commit IDs, branches and tags all work.
+func (c *Client) CommitsAhead(ctx context.Context, owner, repo, base, head string) (n int, found bool, err error) {
+	var res struct {
+		TotalCommits int `json:"total_commits"`
+	}
+	// Skip per-commit file lists and signature checks; only the count matters.
+	path := "/api/v1/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/compare/" +
+		url.PathEscape(base) + "..." + url.PathEscape(head) + "?files=false&verification=false"
+	err = c.do(ctx, http.MethodGet, path, true, nil, &res)
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return res.TotalCommits, true, nil
+}

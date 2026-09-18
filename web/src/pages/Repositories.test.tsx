@@ -47,6 +47,7 @@ function mockApi() {
     else if (path === "/inventory") body = { running: false, interval_seconds: 300, nodes: [] };
     else if (path === `/repositories/${demo.id}` && !init?.method?.startsWith("PUT")) body = demo;
     else if (path === `/repositories/${demo.id}/primary`) body = { primary_node: "dk", previous: "" };
+    else if (path.startsWith("/conflicts?")) body = { total: 0, counts: {}, items: [] };
     return new Response(JSON.stringify(body), { status: 200 });
   });
   vi.stubGlobal("fetch", fn);

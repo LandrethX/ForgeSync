@@ -21,6 +21,7 @@ import (
 	"scenegit.org/forgesync/internal/auth"
 	"scenegit.org/forgesync/internal/buildinfo"
 	"scenegit.org/forgesync/internal/config"
+	"scenegit.org/forgesync/internal/conflicts"
 	"scenegit.org/forgesync/internal/forgejo"
 	"scenegit.org/forgesync/internal/health"
 	"scenegit.org/forgesync/internal/inventory"
@@ -72,6 +73,8 @@ func run(configPath string) error {
 	var infos []api.NodeInfo
 	var targets []health.Target
 	var scanTargets []inventory.Target
+	var nodeNames []string
+	comparers := map[string]conflicts.Comparer{}
 	for _, n := range cfg.Nodes {
 		client, err := forgejo.New(n.URL, n.Token, nil)
 		if err != nil {
@@ -81,6 +84,8 @@ func run(configPath string) error {
 		infos = append(infos, api.NodeInfo{Name: n.Name, URL: n.URL, Site: n.Site})
 		targets = append(targets, health.Target{Name: n.Name, ServiceUser: n.ServiceUser, Client: client})
 		scanTargets = append(scanTargets, inventory.Target{Name: n.Name, Client: client})
+		nodeNames = append(nodeNames, n.Name)
+		comparers[n.Name] = client
 	}
 	if err := db.SyncNodes(ctx, records); err != nil {
 		return err
@@ -91,9 +96,15 @@ func run(configPath string) error {
 		Timeout:          cfg.Health.Timeout,
 		FailureThreshold: cfg.Health.FailureThreshold,
 	}, db, log)
+	detector := conflicts.NewDetector(nodeNames, comparers, db, log)
 	scanner := inventory.NewScanner(scanTargets, inventory.Options{
 		Interval:          cfg.Inventory.Interval,
 		BranchConcurrency: cfg.Inventory.BranchConcurrency,
+		AfterScan: func(ctx context.Context) {
+			if err := detector.Run(ctx); err != nil {
+				log.Error("conflict detection failed", "error", err)
+			}
+		},
 	}, db, log)
 	monitorDone := make(chan struct{})
 	go func() {

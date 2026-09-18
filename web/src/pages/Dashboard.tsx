@@ -59,6 +59,18 @@ export function Dashboard() {
           )}
         </div>
         <div className="tile">
+          <p className="tile-label">Open conflicts</p>
+          {overview.data && overview.data.open_conflicts >= 0 ? (
+            <p className="tile-value">
+              <StatusIcon tone={overview.data.open_conflicts > 0 ? "serious" : "good"} />
+              <Link to="/conflicts">{overview.data.open_conflicts}</Link>
+            </p>
+          ) : (
+            <p className="tile-value muted">–</p>
+          )}
+          <p className="tile-note">Differences between nodes that need a person</p>
+        </div>
+        <div className="tile">
           <p className="tile-label">Controller</p>
           <p className="tile-value">{overview.data?.role === "single" ? "Single controller" : overview.data?.role ?? "–"}</p>
           <p className="tile-note">Leader election comes with high availability</p>

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, ApiError, hasRole, type Repository } from "../api";
 import { ErrorNote, PageHeader } from "../components/Layout";
-import { PresenceLabel, REPO_STATUS, RepoStatusBadge } from "../components/StatusBadge";
+import { PresenceLabel, REPO_STATUS, RepoStatusBadge, StatusIcon } from "../components/StatusBadge";
+import { conflictTitle } from "../conflictText";
 import { formatAgo, formatDateTime } from "../format";
 import { useLoad, useNodes, useNow, useSession } from "../hooks";
 import { Link } from "../router";
@@ -34,6 +35,7 @@ export function RepositoryDetail({ id }: { id: string }) {
 
       {r && (
         <>
+          <RepoConflicts repositoryId={r.id} />
           <PrimaryPanel repo={r} onSaved={repo.reload} />
 
           <h2>On each node</h2>
@@ -158,6 +160,26 @@ function PrimaryPanel({ repo, onSaved }: { repo: Repository; onSaved: () => void
           <span className="muted"> · Only administrators can change it.</span>
         </p>
       )}
+    </section>
+  );
+}
+
+function RepoConflicts({ repositoryId }: { repositoryId: string }) {
+  const open = useLoad(() => api.conflicts({ state: "open", repository: repositoryId, limit: 20, offset: 0 }), [repositoryId]);
+  if (!open.data?.items?.length) return null;
+  return (
+    <section className="panel conflict-panel" aria-labelledby="repo-conflicts-heading">
+      <h2 id="repo-conflicts-heading">
+        <StatusIcon tone="serious" /> Open conflicts
+      </h2>
+      <ul>
+        {open.data.items.map((c) => (
+          <li key={c.id}>
+            <Link to={`/conflicts/${c.id}`}>{conflictTitle(c)}</Link>
+            <span className="muted"> · detected {formatDateTime(c.detected_at)}</span>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

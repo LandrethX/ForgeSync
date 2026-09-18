@@ -266,3 +266,47 @@ func contains(list []string, v string) bool {
 	}
 	return false
 }
+
+type replicatedIssue struct {
+	store.IssueRecord
+	Comments int `json:"comments"`
+	// NumbersDiffer: the issue doesn't have the same number on every node
+	// (e.g. a pull request took the number on one), so "#N" references in
+	// text can point at different issues on different nodes.
+	NumbersDiffer bool `json:"numbers_differ"`
+}
+
+// repositoryIssues: GET /repositories/{id}/issues. The issues ForgeSync
+// replicates for a repository and each one's number per node.
+func (s *Server) repositoryIssues(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if _, err := s.DB.Repository(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "no such repository"})
+		return
+	} else if err != nil {
+		s.serverError(w, "get repository", err)
+		return
+	}
+	recs, comments, err := s.DB.Issues(r.Context(), id)
+	if err != nil {
+		s.serverError(w, "list issues", err)
+		return
+	}
+	perIssue := map[string]int{}
+	for _, c := range comments {
+		perIssue[c.IssueID]++
+	}
+	out := []replicatedIssue{}
+	for _, rec := range recs {
+		ri := replicatedIssue{IssueRecord: rec, Comments: perIssue[rec.ID]}
+		first := int64(-1)
+		for _, c := range rec.Copies {
+			if first >= 0 && c.Number != first {
+				ri.NumbersDiffer = true
+			}
+			first = c.Number
+		}
+		out = append(out, ri)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"issues": out})
+}

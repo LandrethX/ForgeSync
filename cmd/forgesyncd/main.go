@@ -25,6 +25,7 @@ import (
 	"scenegit.org/forgesync/internal/forgejo"
 	"scenegit.org/forgesync/internal/health"
 	"scenegit.org/forgesync/internal/inventory"
+	"scenegit.org/forgesync/internal/issues"
 	"scenegit.org/forgesync/internal/replication"
 	"scenegit.org/forgesync/internal/store"
 	"scenegit.org/forgesync/internal/webhook"
@@ -79,6 +80,7 @@ func run(configPath string) error {
 	comparers := map[string]conflicts.Comparer{}
 	var gitNodes []replication.Node
 	var hookTargets []webhook.Target
+	var issueNodes []issues.Node
 	serviceUsers := map[string]string{}
 	for _, n := range cfg.Nodes {
 		client, err := forgejo.New(n.URL, n.Token, nil)
@@ -92,6 +94,8 @@ func run(configPath string) error {
 		nodeNames = append(nodeNames, n.Name)
 		comparers[n.Name] = client
 		hookTargets = append(hookTargets, webhook.Target{Name: n.Name, Client: client})
+		issueNodes = append(issueNodes, issues.Node{Name: n.Name, API: client,
+			As: func(login string) issues.API { return client.Sudo(login) }})
 		serviceUsers[n.Name] = n.ServiceUser
 		gitNodes = append(gitNodes, replication.Node{Name: n.Name, URL: n.URL, User: n.ServiceUser, Token: n.Token,
 			API: client, SceneIDSourceID: n.SceneIDSourceID})
@@ -139,6 +143,12 @@ func run(configPath string) error {
 		defer assignMu.Unlock()
 		return inventory.AssignPrimaries(ctx, db, nodeNames, log)
 	}
+	var issueSync *issues.Syncer
+	if engine != nil && cfg.Replication.Issues {
+		issueSync = issues.NewSyncer(issueNodes, db, monitor, issues.Options{
+			Concurrency: cfg.Replication.Concurrency, EnsureUser: engine.EnsureUser}, log)
+		log.Info("issue replication enabled")
+	}
 	detector := conflicts.NewDetector(nodeNames, comparers, db, log)
 	detector.ReplicationOwnsPrimaries = engine != nil
 	scanner = inventory.NewScanner(scanTargets, inventory.Options{
@@ -155,6 +165,9 @@ func run(configPath string) error {
 			}
 			if engine != nil {
 				engine.RunAll(ctx)
+			}
+			if issueSync != nil {
+				issueSync.RunAll(ctx)
 			}
 		},
 	}, db, log)
@@ -175,6 +188,9 @@ func run(configPath string) error {
 		dispatch := &webhook.RepoDispatcher{Store: db, Scanner: scanner, Assign: assignPrimaries, Log: log}
 		if engine != nil { // a nil *Engine in the interface would look enabled
 			dispatch.Replicator = engine
+		}
+		if issueSync != nil {
+			dispatch.Issues = issueSync
 		}
 		hooks = &webhook.Receiver{Secret: cfg.Webhooks.Secret, ServiceUsers: serviceUsers, Dispatch: dispatch,
 			Tracker: hookStatus, Log: log, Context: ctx}

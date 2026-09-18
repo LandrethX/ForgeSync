@@ -106,3 +106,22 @@ describe("replication conflict text", () => {
     expect(conflictTitle(tag)).toBe("History rewritten on the primary: tag v1");
   });
 });
+
+describe("issue conflict text", () => {
+  it("names the issue and field, and says how to settle it", async () => {
+    const { conflictTitle, conflictExplanation, conflictFix, conflictSides } = await import("../conflictText");
+    const c: Conflict = {
+      ...diverged,
+      kind: "issue_conflict",
+      ref: "#3 title",
+      details: { field: "title", values: { se: "A", dk: "B" }, primary: "se" },
+    };
+    expect(conflictTitle(c)).toBe("Issue changed differently: #3 title");
+    expect(conflictExplanation(c)).toContain("title was changed to different values");
+    expect(conflictFix(c)).toContain("Edit the title on one of the nodes");
+    expect(conflictSides(c)).toEqual([["dk", "B"], ["se", "A"]]);
+    const del: Conflict = { ...c, ref: "#3 deleted", details: { field: "deleted", node: "dk", primary: "se" } };
+    expect(conflictExplanation(del)).toContain("deleted on se, but changed on dk");
+    expect(conflictFix(del)).toContain("create it again on se");
+  });
+});

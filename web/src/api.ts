@@ -167,6 +167,19 @@ export interface WebhookStatus {
   nodes: NodeWebhook[];
 }
 
+export interface ReplicatedIssue {
+  id: string;
+  title: string;
+  state: string;
+  author: string;
+  origin_node: string;
+  created_at: string;
+  deleted_at?: string;
+  copies: Record<string, { number: number; forgejo_id: number }>;
+  comments: number;
+  numbers_differ: boolean;
+}
+
 export interface RepositoryList {
   total: number;
   counts: Partial<Record<RepoStatus, number>>;
@@ -195,7 +208,8 @@ export type ConflictKind =
   | "git_replica_ahead"
   | "git_primary_rewrote"
   | "git_replica_changed"
-  | "git_replica_extra_ref";
+  | "git_replica_extra_ref"
+  | "issue_conflict";
 
 export interface Handoff {
   pr_number: number;
@@ -228,6 +242,14 @@ export interface Conflict {
     primary?: string;
     /** Pull requests on the primary where the owner decides (diverged branches). */
     handoffs?: Handoff[];
+    /** issue_conflict: the field (title, body, state, comment, deleted, comment deleted). */
+    field?: string;
+    /** issue_conflict: each node's value of the field. */
+    values?: Record<string, string>;
+    /** issue_conflict: the issue's number on each node. */
+    issue?: Record<string, number>;
+    /** issue_conflict (deleted): the node whose copy was changed. */
+    node?: string;
   };
   detected_at: string;
   last_seen_at: string;
@@ -351,6 +373,8 @@ export const api = {
     return request<RepositoryList>("GET", `/repositories?${p}`);
   },
   repository: (id: string) => request<Repository>("GET", `/repositories/${encodeURIComponent(id)}`),
+  repositoryIssues: (id: string) =>
+    request<{ issues: ReplicatedIssue[] }>("GET", `/repositories/${encodeURIComponent(id)}/issues`),
   setPrimary: (id: string, node: string) =>
     request<{ primary_node: string; previous: string }>("PUT", `/repositories/${encodeURIComponent(id)}/primary`, {
       node,

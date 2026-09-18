@@ -534,3 +534,105 @@ func (c *Client) DeleteSystemHook(ctx context.Context, id int64) error {
 	}
 	return err
 }
+
+// Issue is the part of a Forgejo issue ForgeSync replicates.
+type Issue struct {
+	ID          int64     `json:"id"`
+	Number      int64     `json:"number"`
+	Title       string    `json:"title"`
+	Body        string    `json:"body"`
+	State       string    `json:"state"` // open or closed
+	User        User      `json:"user"`
+	Created     time.Time `json:"created_at"`
+	PullRequest *struct{} `json:"pull_request"` // set for pull requests
+}
+
+// IssueComment is a comment on an issue or pull request.
+type IssueComment struct {
+	ID       int64     `json:"id"`
+	IssueURL string    `json:"issue_url"` // .../issues/<number>
+	PRURL    string    `json:"pull_request_url"`
+	User     User      `json:"user"`
+	Body     string    `json:"body"`
+	Created  time.Time `json:"created_at"`
+}
+
+// IssueNumber is the number of the issue the comment belongs to (0 if the
+// URL doesn't say).
+func (c IssueComment) IssueNumber() int64 {
+	i := strings.LastIndex(c.IssueURL, "/")
+	n, _ := strconv.ParseInt(c.IssueURL[i+1:], 10, 64)
+	return n
+}
+
+// ListIssues returns one page of a repository's issues (not pull requests),
+// open and closed.
+func (c *Client) ListIssues(ctx context.Context, owner, repo string, page, limit int) ([]Issue, error) {
+	var out []Issue
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/issues?state=all&type=issues&page=%d&limit=%d", repoPath(owner, repo), page, limit), true, nil, &out)
+	return out, err
+}
+
+// ListRepoComments returns one page of the comments on all of a repository's
+// issues and pull requests, oldest first.
+func (c *Client) ListRepoComments(ctx context.Context, owner, repo string, page, limit int) ([]IssueComment, error) {
+	var out []IssueComment
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/issues/comments?page=%d&limit=%d", repoPath(owner, repo), page, limit), true, nil, &out)
+	return out, err
+}
+
+// CreateIssue opens an issue (already closed if closed is set).
+func (c *Client) CreateIssue(ctx context.Context, owner, repo, title, body string, closed bool) (Issue, error) {
+	var is Issue
+	err := c.do(ctx, http.MethodPost, repoPath(owner, repo)+"/issues", true,
+		map[string]any{"title": title, "body": body, "closed": closed}, &is)
+	return is, err
+}
+
+// EditIssue changes an issue's title, body or state; nil leaves a field.
+func (c *Client) EditIssue(ctx context.Context, owner, repo string, number int64, title, body, state *string) error {
+	opt := map[string]any{}
+	if title != nil {
+		opt["title"] = *title
+	}
+	if body != nil {
+		opt["body"] = *body
+	}
+	if state != nil {
+		opt["state"] = *state
+	}
+	return c.do(ctx, http.MethodPatch, fmt.Sprintf("%s/issues/%d", repoPath(owner, repo), number), true, opt, nil)
+}
+
+// DeleteIssue deletes an issue (repository admins only). Already gone is
+// not an error.
+func (c *Client) DeleteIssue(ctx context.Context, owner, repo string, number int64) error {
+	err := c.do(ctx, http.MethodDelete, fmt.Sprintf("%s/issues/%d", repoPath(owner, repo), number), true, nil, nil)
+	if isNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// CreateIssueComment adds a comment and returns it.
+func (c *Client) CreateIssueComment(ctx context.Context, owner, repo string, number int64, body string) (IssueComment, error) {
+	var cm IssueComment
+	err := c.do(ctx, http.MethodPost, fmt.Sprintf("%s/issues/%d/comments", repoPath(owner, repo), number), true,
+		map[string]string{"body": body}, &cm)
+	return cm, err
+}
+
+// EditIssueComment changes a comment's body.
+func (c *Client) EditIssueComment(ctx context.Context, owner, repo string, id int64, body string) error {
+	return c.do(ctx, http.MethodPatch, fmt.Sprintf("%s/issues/comments/%d", repoPath(owner, repo), id), true,
+		map[string]string{"body": body}, nil)
+}
+
+// DeleteIssueComment deletes a comment. Already gone is not an error.
+func (c *Client) DeleteIssueComment(ctx context.Context, owner, repo string, id int64) error {
+	err := c.do(ctx, http.MethodDelete, fmt.Sprintf("%s/issues/comments/%d", repoPath(owner, repo), id), true, nil, nil)
+	if isNotFound(err) {
+		return nil
+	}
+	return err
+}

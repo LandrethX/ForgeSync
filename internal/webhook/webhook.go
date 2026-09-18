@@ -24,7 +24,10 @@ import (
 )
 
 // Events are the webhook events ForgeSync subscribes to.
-var Events = []string{"push", "create", "delete", "repository"}
+var Events = []string{"push", "create", "delete", "repository", "issues", "issue_comment"}
+
+// IssueEvents are the events that concern issues, not git.
+var IssueEvents = map[string]bool{"issues": true, "issue_comment": true}
 
 // NodeSecret is the secret a node signs its deliveries with.
 func NodeSecret(master, node string) string {

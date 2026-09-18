@@ -76,6 +76,9 @@ type Replication struct {
 	// replica's version after the owner chose the primary's, and the archived
 	// copies of a repository deleted on its primary. Default 30.
 	BackupDays int `yaml:"backup_days"`
+	// Issues replicates issues and their comments (title, body, state) in
+	// both directions, merged per field. Off by default.
+	Issues bool `yaml:"issues"`
 	// ArchiveOrg is the private organization ForgeSync moves the copies of a
 	// repository deleted on its primary into. Default "forgesync-archive".
 	ArchiveOrg string `yaml:"archive_org"`

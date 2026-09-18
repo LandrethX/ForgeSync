@@ -833,3 +833,55 @@ func TestRenamedTo(t *testing.T) {
 		t.Errorf("RenamedTo(alice/app) = %q", to)
 	}
 }
+
+func TestIssueRecords(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s.SyncNodes(ctx, []NodeRecord{{Name: "se", URL: "http://se"}, {Name: "dk", URL: "http://dk"}})
+	t0 := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
+	s.RecordNodeScan(ctx, "se", t0, t0, []ScannedRepo{{FullName: "alice/demo"}})
+	repos, _ := s.Repositories(ctx)
+	repo := repos[0].ID
+
+	id, err := s.SaveIssue(ctx, IssueRecord{RepositoryID: repo, OriginNode: "dk", Author: "bob", CreatedAt: t0,
+		BaseTitle: "t", BaseBody: "b", BaseState: "open", Copies: map[string]IssueCopy{"dk": {Number: 1, ForgejoID: 10}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cid, err := s.SaveComment(ctx, CommentRecord{IssueID: id, OriginNode: "dk", Author: "carol", CreatedAt: t0.Add(time.Minute),
+		BaseBody: "hi", Copies: map[string]int64{"dk": 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Copies are replaced on save; the base follows.
+	if _, err := s.SaveIssue(ctx, IssueRecord{ID: id, BaseTitle: "t2", BaseBody: "b", BaseState: "closed",
+		Copies: map[string]IssueCopy{"dk": {Number: 1, ForgejoID: 10}, "se": {Number: 2, ForgejoID: 30}}}); err != nil {
+		t.Fatal(err)
+	}
+	s.SaveComment(ctx, CommentRecord{ID: cid, BaseBody: "hi!", Copies: map[string]int64{"dk": 20, "se": 40}})
+	issues, comments, err := s.Issues(ctx, repo)
+	if err != nil || len(issues) != 1 || len(comments) != 1 {
+		t.Fatalf("issues %+v comments %+v err %v", issues, comments, err)
+	}
+	is := issues[0]
+	if is.BaseTitle != "t2" || is.BaseState != "closed" || is.Author != "bob" || is.Copies["se"].Number != 2 || len(is.Copies) != 2 {
+		t.Errorf("issue = %+v", is)
+	}
+	if c := comments[0]; c.BaseBody != "hi!" || c.Copies["se"] != 40 || c.IssueID != id {
+		t.Errorf("comment = %+v", c)
+	}
+	// One Forgejo id belongs to one copy per node.
+	if _, err := s.SaveIssue(ctx, IssueRecord{RepositoryID: repo, OriginNode: "se", Author: "x", CreatedAt: t0,
+		Copies: map[string]IssueCopy{"se": {Number: 9, ForgejoID: 30}}}); err == nil {
+		t.Error("a second record took the same Forgejo issue")
+	}
+	if err := s.DeleteIssueRecord(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if issues, comments, _ := s.Issues(ctx, repo); len(issues)+len(comments) != 0 {
+		t.Errorf("left after deleting: %+v %+v", issues, comments)
+	}
+}

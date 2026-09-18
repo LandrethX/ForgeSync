@@ -185,3 +185,39 @@ describe("deleted repositories", () => {
     expect(screen.getAllByText("Deleted").length).toBeGreaterThan(0);
   });
 });
+
+describe("IssuesPanel", () => {
+  it("lists replicated issues with their number on each node", async () => {
+    const synced: Repository = {
+      ...demo,
+      primary_node: "se",
+      primary_source: "owner",
+      status: "same",
+      replication: { enabled: true, replicas: [] },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const path = url.replace(/^\/api\/v1/, "");
+        let body: unknown = {};
+        if (path === `/repositories/${demo.id}`) body = synced;
+        else if (path === `/repositories/${demo.id}/issues`)
+          body = {
+            issues: [
+              { id: "a", title: "Crash on start", state: "open", author: "bob", origin_node: "dk", created_at: "2026-09-19T10:00:00Z",
+                copies: { dk: { number: 2, forgejo_id: 1 }, se: { number: 3, forgejo_id: 2 } }, comments: 4, numbers_differ: true },
+            ],
+          };
+        else if (path.startsWith("/conflicts?")) body = { total: 0, counts: {}, items: [] };
+        return new Response(JSON.stringify(body), { status: 200 });
+      }),
+    );
+    render(wrap("viewer", <RepositoryDetail id={demo.id} />));
+    const panel = (await screen.findByRole("heading", { name: "Issues" })).closest("section")!;
+    const row = within(panel).getByRole("rowheader", { name: /Crash on start/ }).closest("tr")!;
+    expect(within(row).getByText("#2")).toBeTruthy();
+    expect(within(row).getByText("#3")).toBeTruthy();
+    expect(within(row).getByText("4")).toBeTruthy();
+    expect(within(panel).getByText(/1 has a different number on some node/)).toBeTruthy();
+  });
+});

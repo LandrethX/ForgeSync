@@ -39,6 +39,7 @@ export function RepositoryDetail({ id }: { id: string }) {
           <RepoConflicts repositoryId={r.id} />
           <PrimaryPanel repo={r} onSaved={repo.reload} />
           <ReplicationPanel repo={r} onChange={repo.reload} />
+          {r.replication?.enabled && <IssuesPanel repositoryId={r.id} nodeNames={r.nodes.map((v) => v.node)} />}
 
           <h2>On each node</h2>
           <div className="table-wrap">
@@ -174,6 +175,60 @@ function PrimaryPanel({ repo, onSaved }: { repo: Repository; onSaved: () => void
           <span className="muted"> · Only administrators can change it.</span>
         </p>
       )}
+    </section>
+  );
+}
+
+function IssuesPanel({ repositoryId, nodeNames }: { repositoryId: string; nodeNames: string[] }) {
+  const list = useLoad(() => api.repositoryIssues(repositoryId), [repositoryId]);
+  const issues = list.data?.issues ?? [];
+  if (list.error || issues.length === 0) return null;
+  const differ = issues.filter((i) => i.numbers_differ).length;
+  return (
+    <section className="panel" aria-labelledby="issues-heading">
+      <h2 id="issues-heading">Issues</h2>
+      <p className="muted">
+        {issues.length} issue{issues.length === 1 ? "" : "s"} replicated, with their comments. Forgejo numbers issues
+        itself, so ForgeSync copies them in the order they were created; the number stays the same where it can.
+        {differ > 0 &&
+          ` ${differ} ${differ === 1 ? "has" : "have"} a different number on some node (a pull request usually took it), so "#" references in text can point elsewhere there.`}
+      </p>
+      <div className="table-wrap flat">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Issue</th>
+              <th scope="col">State</th>
+              {nodeNames.map((n) => (
+                <th scope="col" key={n}>
+                  {n}
+                </th>
+              ))}
+              <th scope="col">Comments</th>
+            </tr>
+          </thead>
+          <tbody>
+            {issues.map((i) => (
+              <tr key={i.id}>
+                <th scope="row">
+                  {i.title}
+                  <div className="small muted">
+                    by {i.author}, opened on {i.origin_node}
+                    {i.deleted_at && " · deleted on the primary"}
+                  </div>
+                </th>
+                <td>{i.state === "closed" ? "Closed" : "Open"}</td>
+                {nodeNames.map((n) => (
+                  <td key={n} className="num">
+                    {i.copies[n] ? `#${i.copies[n].number}` : <span className="muted">–</span>}
+                  </td>
+                ))}
+                <td className="num">{i.comments}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }

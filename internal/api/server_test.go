@@ -34,6 +34,8 @@ type fakeDB struct {
 	syncs     []store.ReplicaSync
 	users     []store.UserRecord
 	archives  []store.Archive
+	issues    []store.IssueRecord
+	comments  []store.CommentRecord
 }
 
 func (f *fakeDB) Repositories(context.Context) ([]store.RepositoryRecord, error) {
@@ -89,6 +91,9 @@ func (f *fakeDB) SetUserHome(_ context.Context, id, node string) (string, error)
 		}
 	}
 	return "", store.ErrNotFound
+}
+func (f *fakeDB) Issues(context.Context, string) ([]store.IssueRecord, []store.CommentRecord, error) {
+	return f.issues, f.comments, nil
 }
 func (f *fakeDB) Archives(context.Context, string) ([]store.Archive, error) { return f.archives, nil }
 func (f *fakeDB) NodeScans(context.Context) ([]store.NodeScan, error)       { return f.scans, nil }

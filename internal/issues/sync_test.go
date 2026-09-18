@@ -1,0 +1,561 @@
+package issues
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"scenegit.org/forgesync/internal/forgejo"
+	"scenegit.org/forgesync/internal/health"
+	"scenegit.org/forgesync/internal/store"
+)
+
+// fakeNode is one node's alice/demo: issues and pull requests share the
+// number sequence, as in Forgejo.
+type fakeNode struct {
+	mu       sync.Mutex
+	name     string
+	next     int64 // last number used
+	nextID   int64
+	issues   map[int64]*forgejo.Issue // by number
+	comments map[int64]*forgejo.IssueComment
+	clock    time.Time
+	writes   []string
+}
+
+func newFakeNode(name string) *fakeNode {
+	return &fakeNode{name: name, issues: map[int64]*forgejo.Issue{}, comments: map[int64]*forgejo.IssueComment{},
+		nextID: map[string]int64{"se": 1000, "dk": 2000, "de": 3000}[name], clock: time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)}
+}
+
+func (f *fakeNode) tick() time.Time { f.clock = f.clock.Add(time.Second); return f.clock }
+
+// pull takes a number for a pull request.
+func (f *fakeNode) pull() { f.mu.Lock(); f.next++; f.mu.Unlock() }
+
+// open is a user opening an issue directly on the node.
+func (f *fakeNode) open(author, title string) *forgejo.Issue {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.create(author, title, "", false)
+}
+
+func (f *fakeNode) create(author, title, body string, closed bool) *forgejo.Issue {
+	f.next++
+	f.nextID++
+	st := "open"
+	if closed {
+		st = "closed"
+	}
+	is := &forgejo.Issue{ID: f.nextID, Number: f.next, Title: title, Body: body, State: st,
+		User: forgejo.User{Login: author}, Created: f.tick()}
+	f.issues[is.Number] = is
+	return is
+}
+
+func (f *fakeNode) say(author string, number int64, body string) *forgejo.IssueComment {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.addComment(author, number, body)
+}
+
+func (f *fakeNode) addComment(author string, number int64, body string) *forgejo.IssueComment {
+	f.nextID++
+	c := &forgejo.IssueComment{ID: f.nextID, IssueURL: fmt.Sprintf("http://%s/api/v1/repos/alice/demo/issues/%d", f.name, number),
+		User: forgejo.User{Login: author}, Body: body, Created: f.tick()}
+	f.comments[c.ID] = c
+	return c
+}
+
+func (f *fakeNode) issue(number int64) *forgejo.Issue {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.issues[number]
+}
+
+func (f *fakeNode) byTitle(title string) *forgejo.Issue {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, is := range f.issues {
+		if is.Title == title {
+			return is
+		}
+	}
+	return nil
+}
+
+func (f *fakeNode) commentsOn(number int64) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var cs []*forgejo.IssueComment
+	for _, c := range f.comments {
+		if c.IssueNumber() == number {
+			cs = append(cs, c)
+		}
+	}
+	sort.Slice(cs, func(i, j int) bool { return cs[i].ID < cs[j].ID })
+	var out []string
+	for _, c := range cs {
+		out = append(out, c.User.Login+": "+c.Body)
+	}
+	return out
+}
+
+// fakeAPI is a node's API as one account.
+type fakeAPI struct {
+	n  *fakeNode
+	as string
+}
+
+func (a fakeAPI) ListIssues(_ context.Context, _, _ string, page, limit int) ([]forgejo.Issue, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	var all []forgejo.Issue
+	for _, is := range a.n.issues {
+		all = append(all, *is)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].Number > all[j].Number })
+	start := (page - 1) * limit
+	if start >= len(all) {
+		return nil, nil
+	}
+	return all[start:min(start+limit, len(all))], nil
+}
+func (a fakeAPI) ListRepoComments(_ context.Context, _, _ string, page, limit int) ([]forgejo.IssueComment, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	var all []forgejo.IssueComment
+	for _, c := range a.n.comments {
+		all = append(all, *c)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+	start := (page - 1) * limit
+	if start >= len(all) {
+		return nil, nil
+	}
+	return all[start:min(start+limit, len(all))], nil
+}
+func (a fakeAPI) CreateIssue(_ context.Context, _, _, title, body string, closed bool) (forgejo.Issue, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	a.n.writes = append(a.n.writes, "create "+title+" as "+a.as)
+	return *a.n.create(a.as, title, body, closed), nil
+}
+func (a fakeAPI) EditIssue(_ context.Context, _, _ string, number int64, title, body, state *string) error {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	is := a.n.issues[number]
+	if is == nil {
+		return errors.New("404")
+	}
+	if title != nil {
+		is.Title = *title
+		a.n.writes = append(a.n.writes, fmt.Sprintf("title #%d", number))
+	}
+	if body != nil {
+		is.Body = *body
+		a.n.writes = append(a.n.writes, fmt.Sprintf("body #%d", number))
+	}
+	if state != nil {
+		is.State = *state
+		a.n.writes = append(a.n.writes, fmt.Sprintf("state #%d", number))
+	}
+	return nil
+}
+func (a fakeAPI) DeleteIssue(_ context.Context, _, _ string, number int64) error {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	delete(a.n.issues, number)
+	a.n.writes = append(a.n.writes, fmt.Sprintf("delete #%d", number))
+	return nil
+}
+func (a fakeAPI) CreateIssueComment(_ context.Context, _, _ string, number int64, body string) (forgejo.IssueComment, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	a.n.writes = append(a.n.writes, fmt.Sprintf("comment #%d as %s", number, a.as))
+	return *a.n.addComment(a.as, number, body), nil
+}
+func (a fakeAPI) EditIssueComment(_ context.Context, _, _ string, id int64, body string) error {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	a.n.comments[id].Body = body
+	a.n.writes = append(a.n.writes, "edit comment")
+	return nil
+}
+func (a fakeAPI) DeleteIssueComment(_ context.Context, _, _ string, id int64) error {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	delete(a.n.comments, id)
+	a.n.writes = append(a.n.writes, "delete comment")
+	return nil
+}
+
+// memStore keeps records in memory.
+type memStore struct {
+	mu       sync.Mutex
+	rec      store.RepositoryRecord
+	issues   map[string]store.IssueRecord
+	comments map[string]store.CommentRecord
+	seq      int
+	found    []store.FoundConflict
+	checked  []string
+}
+
+func newMemStore() *memStore {
+	return &memStore{rec: store.RepositoryRecord{ID: "11111111-1111-1111-1111-111111111111", FullName: "alice/demo", PrimaryNode: "se"},
+		issues: map[string]store.IssueRecord{}, comments: map[string]store.CommentRecord{}}
+}
+
+func (m *memStore) Repositories(context.Context) ([]store.RepositoryRecord, error) {
+	return []store.RepositoryRecord{m.rec}, nil
+}
+func (m *memStore) Repository(context.Context, string) (store.RepositoryRecord, error) {
+	return m.rec, nil
+}
+func (m *memStore) Issues(context.Context, string) ([]store.IssueRecord, []store.CommentRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var is []store.IssueRecord
+	for _, r := range m.issues {
+		r.Copies = cloneCopies(r.Copies)
+		is = append(is, r)
+	}
+	sort.Slice(is, func(i, j int) bool { return is[i].CreatedAt.Before(is[j].CreatedAt) })
+	var cs []store.CommentRecord
+	for _, c := range m.comments {
+		cp := map[string]int64{}
+		for k, v := range c.Copies {
+			cp[k] = v
+		}
+		c.Copies = cp
+		cs = append(cs, c)
+	}
+	sort.Slice(cs, func(i, j int) bool { return cs[i].CreatedAt.Before(cs[j].CreatedAt) })
+	return is, cs, nil
+}
+func cloneCopies(in map[string]store.IssueCopy) map[string]store.IssueCopy {
+	out := map[string]store.IssueCopy{}
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+func (m *memStore) SaveIssue(_ context.Context, r store.IssueRecord) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r.ID == "" {
+		m.seq++
+		r.ID = fmt.Sprintf("i%d", m.seq)
+	}
+	r.Copies = cloneCopies(r.Copies)
+	m.issues[r.ID] = r
+	return r.ID, nil
+}
+func (m *memStore) DeleteIssueRecord(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.issues, id)
+	for k, c := range m.comments {
+		if c.IssueID == id {
+			delete(m.comments, k)
+		}
+	}
+	return nil
+}
+func (m *memStore) SaveComment(_ context.Context, c store.CommentRecord) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c.ID == "" {
+		m.seq++
+		c.ID = fmt.Sprintf("c%d", m.seq)
+	}
+	cp := map[string]int64{}
+	for k, v := range c.Copies {
+		cp[k] = v
+	}
+	c.Copies = cp
+	m.comments[c.ID] = c
+	return c.ID, nil
+}
+func (m *memStore) DeleteCommentRecord(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.comments, id)
+	return nil
+}
+func (m *memStore) SyncConflicts(_ context.Context, found []store.FoundConflict, checked, _ []string, _ time.Time) ([]store.ConflictChange, error) {
+	m.found, m.checked = found, checked
+	return nil, nil
+}
+func (m *memStore) Audit(context.Context, string, string, string, map[string]any) error { return nil }
+
+type allHealthy []string
+
+func (a allHealthy) Snapshot() []health.Status {
+	var out []health.Status
+	for _, n := range a {
+		out = append(out, health.Status{Node: n, State: health.Healthy})
+	}
+	return out
+}
+
+func setup(t *testing.T, names ...string) (*Syncer, *memStore, map[string]*fakeNode, *[]string) {
+	t.Helper()
+	if len(names) == 0 {
+		names = []string{"se", "dk", "de"}
+	}
+	st := newMemStore()
+	fakes := map[string]*fakeNode{}
+	var nodes []Node
+	var ensured []string
+	for _, n := range names {
+		f := newFakeNode(n)
+		fakes[n] = f
+		nodes = append(nodes, Node{Name: n, API: fakeAPI{f, "forgesync"}, As: func(login string) API { return fakeAPI{f, login} }})
+	}
+	s := NewSyncer(nodes, st, allHealthy(names), Options{EnsureUser: func(_ context.Context, login, from, to string) error {
+		if login == "ghost" {
+			return errors.New("not a SceneID user")
+		}
+		ensured = append(ensured, login+"@"+to)
+		return nil
+	}}, slog.New(slog.DiscardHandler))
+	return s, st, fakes, &ensured
+}
+
+func (s *Syncer) run(t *testing.T) {
+	t.Helper()
+	if err := s.RunRepo(context.Background(), "11111111-1111-1111-1111-111111111111"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writes(fakes map[string]*fakeNode) int {
+	n := 0
+	for _, f := range fakes {
+		f.mu.Lock()
+		n += len(f.writes)
+		f.writes = nil
+		f.mu.Unlock()
+	}
+	return n
+}
+
+func TestNewIssuesAreCopiedAsTheirAuthor(t *testing.T) {
+	s, st, f, ensured := setup(t)
+	f["se"].open("alice", "on se")
+	f["dk"].open("bob", "on dk") // same number 1 on dk, made later
+	s.run(t)
+
+	for _, n := range []string{"se", "dk", "de"} {
+		se, dk := f[n].byTitle("on se"), f[n].byTitle("on dk")
+		if se == nil || dk == nil || se.User.Login != "alice" || dk.User.Login != "bob" {
+			t.Fatalf("%s: %+v / %+v", n, se, dk)
+		}
+	}
+	// On de, created in creation order: numbers match the origin where possible.
+	if f["de"].byTitle("on se").Number != 1 || f["de"].byTitle("on dk").Number != 2 {
+		t.Errorf("de numbers: %d, %d", f["de"].byTitle("on se").Number, f["de"].byTitle("on dk").Number)
+	}
+	if len(st.issues) != 2 || len(st.checked) != 1 || len(st.found) != 0 {
+		t.Errorf("records %d, checked %v, conflicts %v", len(st.issues), st.checked, st.found)
+	}
+	if !strings.Contains(strings.Join(*ensured, ","), "bob@se") {
+		t.Errorf("bob wasn't created on se first: %v", *ensured)
+	}
+	writes(f)
+	s.run(t)
+	if n := writes(f); n != 0 {
+		t.Errorf("a second run wrote %d times", n)
+	}
+}
+
+func TestEditsAreMergedPerField(t *testing.T) {
+	s, st, f, _ := setup(t)
+	f["se"].open("alice", "first")
+	s.run(t)
+	writes(f)
+
+	// Title changed on a replica, body on the primary, closed on another
+	// replica: all three carry over everywhere.
+	f["dk"].issue(1).Title = "better title"
+	f["se"].issue(1).Body = "details"
+	f["de"].issue(1).State = "closed"
+	s.run(t)
+	for _, n := range []string{"se", "dk", "de"} {
+		is := f[n].issue(1)
+		if is.Title != "better title" || is.Body != "details" || is.State != "closed" {
+			t.Errorf("%s: %+v", n, is)
+		}
+	}
+	if len(st.found) != 0 {
+		t.Errorf("conflicts: %+v", st.found)
+	}
+
+	// Different titles on two nodes: a conflict, nothing overwritten.
+	writes(f)
+	f["se"].issue(1).Title = "title A"
+	f["dk"].issue(1).Title = "title B"
+	s.run(t)
+	if len(st.found) != 1 || st.found[0].Ref != "#1 title" || f["de"].issue(1).Title != "better title" || writes(f) != 0 {
+		t.Fatalf("conflict = %+v, de title %q", st.found, f["de"].issue(1).Title)
+	}
+	// Someone settles it by making one side match: it goes everywhere.
+	f["dk"].issue(1).Title = "title A"
+	s.run(t)
+	if len(st.found) != 0 || f["de"].issue(1).Title != "title A" {
+		t.Errorf("after settling: %+v, de %q", st.found, f["de"].issue(1).Title)
+	}
+}
+
+func TestNumbersCanDiffer(t *testing.T) {
+	s, st, f, _ := setup(t, "se", "dk")
+	f["dk"].pull() // a pull request took #1 on dk only
+	f["se"].open("alice", "first")
+	s.run(t)
+	var rec store.IssueRecord
+	for _, r := range st.issues {
+		rec = r
+	}
+	if rec.Copies["se"].Number != 1 || rec.Copies["dk"].Number != 2 {
+		t.Fatalf("copies = %+v", rec.Copies)
+	}
+	// Comments still land on the right issue on each node.
+	f["dk"].say("carol", 2, "seen on dk")
+	s.run(t)
+	if got := f["se"].commentsOn(1); len(got) != 1 || got[0] != "carol: seen on dk" {
+		t.Errorf("se #1 comments = %v", got)
+	}
+}
+
+func TestComments(t *testing.T) {
+	s, st, f, _ := setup(t)
+	f["se"].open("alice", "first")
+	s.run(t)
+	c := f["dk"].say("bob", 1, "hello")
+	s.run(t)
+	for _, n := range []string{"se", "de"} {
+		if got := f[n].commentsOn(1); len(got) != 1 || got[0] != "bob: hello" {
+			t.Fatalf("%s comments = %v", n, got)
+		}
+	}
+	// Edited on the replica: everywhere.
+	c.Body = "hello, edited"
+	s.run(t)
+	if got := f["de"].commentsOn(1); got[0] != "bob: hello, edited" {
+		t.Errorf("de = %v", got)
+	}
+	// Deleted on a replica: recreated. Deleted on the primary: gone everywhere.
+	f["de"].mu.Lock()
+	for id := range f["de"].comments {
+		delete(f["de"].comments, id)
+	}
+	f["de"].mu.Unlock()
+	s.run(t)
+	if got := f["de"].commentsOn(1); len(got) != 1 {
+		t.Fatalf("not recreated on de: %v", got)
+	}
+	f["se"].mu.Lock()
+	for id := range f["se"].comments {
+		delete(f["se"].comments, id)
+	}
+	f["se"].mu.Unlock()
+	s.run(t)
+	if len(f["dk"].commentsOn(1))+len(f["de"].commentsOn(1)) != 0 || len(st.comments) != 0 {
+		t.Errorf("after deleting on the primary: dk %v de %v records %d", f["dk"].commentsOn(1), f["de"].commentsOn(1), len(st.comments))
+	}
+}
+
+func TestIssueDeletedOnPrimary(t *testing.T) {
+	s, st, f, _ := setup(t)
+	f["se"].open("alice", "keep")
+	f["se"].open("alice", "delete me")
+	f["se"].open("alice", "changed elsewhere")
+	s.run(t)
+	f["dk"].issue(3).Body = "dk's own change"
+	f["se"].mu.Lock()
+	delete(f["se"].issues, 2)
+	delete(f["se"].issues, 3)
+	f["se"].mu.Unlock()
+	s.run(t)
+	if f["dk"].issue(2) != nil || f["de"].issue(2) != nil {
+		t.Error("the unchanged copies of #2 weren't deleted")
+	}
+	if f["dk"].issue(3) == nil || f["de"].issue(3) != nil {
+		t.Error("#3: dk's changed copy must stay, de's unchanged one go")
+	}
+	if len(st.found) != 1 || st.found[0].Ref != "#3 deleted" {
+		t.Errorf("conflicts = %+v", st.found)
+	}
+	// Later runs don't bring #3 back to the primary or touch dk's copy and
+	// its comment.
+	f["dk"].say("bob", 3, "still relevant")
+	s.run(t)
+	s.run(t)
+	if f["se"].byTitle("changed elsewhere") != nil || f["dk"].issue(3) == nil || len(f["dk"].commentsOn(3)) != 1 || len(st.found) != 1 {
+		t.Fatalf("after more runs: se %+v, dk %+v %v, conflicts %+v",
+			f["se"].byTitle("changed elsewhere"), f["dk"].issue(3), f["dk"].commentsOn(3), st.found)
+	}
+	// Recreating it on the primary keeps it: normal again.
+	f["se"].open("alice", "changed elsewhere")
+	s.run(t)
+	if len(st.found) != 0 || f["de"].byTitle("changed elsewhere") == nil {
+		t.Errorf("after recreating on the primary: conflicts %+v, de %+v", st.found, f["de"].byTitle("changed elsewhere"))
+	}
+	// Deleted on a replica: recreated there.
+	f["de"].mu.Lock()
+	delete(f["de"].issues, 1)
+	f["de"].mu.Unlock()
+	s.run(t)
+	if f["de"].byTitle("keep") == nil {
+		t.Error("#1 not recreated on de")
+	}
+}
+
+func TestExistingIdenticalIssuesAreAdopted(t *testing.T) {
+	s, st, f, _ := setup(t, "se", "dk")
+	f["se"].open("alice", "already here")
+	f["dk"].open("alice", "already here")
+	s.run(t)
+	if len(st.issues) != 1 || len(f["se"].issues) != 1 || len(f["dk"].issues) != 1 {
+		t.Errorf("records %d, se %d, dk %d", len(st.issues), len(f["se"].issues), len(f["dk"].issues))
+	}
+}
+
+func TestAuthorThatCantBeCreated(t *testing.T) {
+	s, st, f, _ := setup(t, "se", "dk")
+	f["se"].open("ghost", "by a deleted user")
+	s.run(t)
+	if len(f["dk"].issues) != 0 || len(st.checked) != 0 {
+		t.Errorf("dk issues %d, checked %v", len(f["dk"].issues), st.checked)
+	}
+}
+
+func TestCommentDeletedOnPrimaryButEditedElsewhere(t *testing.T) {
+	s, st, f, _ := setup(t, "se", "dk")
+	f["se"].open("alice", "first")
+	f["se"].say("alice", 1, "original")
+	s.run(t)
+	for _, c := range f["dk"].comments {
+		c.Body = "edited on dk"
+	}
+	f["se"].mu.Lock()
+	for id := range f["se"].comments {
+		delete(f["se"].comments, id)
+	}
+	f["se"].mu.Unlock()
+	s.run(t)
+	s.run(t)
+	if got := f["dk"].commentsOn(1); len(got) != 1 || got[0] != "alice: edited on dk" {
+		t.Errorf("dk comments = %v", got)
+	}
+	if len(f["se"].commentsOn(1)) != 0 || len(st.found) != 1 || !strings.HasSuffix(st.found[0].Ref, "comment deleted") {
+		t.Errorf("se %v, conflicts %+v", f["se"].commentsOn(1), st.found)
+	}
+}

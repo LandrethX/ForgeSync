@@ -176,3 +176,15 @@ func (e *Engine) ensureUser(ctx context.Context, login string, from, to Node) er
 	}
 	return nil
 }
+
+// EnsureUser makes the account login on node from exist on node to as the
+// same account, as for repository owners (e.g. an issue's author before
+// ForgeSync copies the issue as them).
+func (e *Engine) EnsureUser(ctx context.Context, login, from, to string) error {
+	f, ok1 := e.nodes[from]
+	t, ok2 := e.nodes[to]
+	if !ok1 || !ok2 || f.API == nil || t.API == nil {
+		return fmt.Errorf("no API for %s or %s", from, to)
+	}
+	return e.ensureUser(ctx, login, f, t)
+}

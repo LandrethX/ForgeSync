@@ -91,8 +91,8 @@ func TestReceiver(t *testing.T) {
 	// ForgeSync's own push, other events and test deliveries are accepted
 	// but not acted on.
 	own := strings.ReplaceAll(push, `"pusher":{"login":"alice"}`, `"pusher":{"login":"forgesync"}`)
-	issue := `{"action":"opened","repository":{"full_name":"alice/demo"},"sender":{"login":"alice"}}`
-	for _, d := range []struct{ event, body string }{{"push", own}, {"issues", issue}, {"push", `{"zen":"test"}`}} {
+	wiki := `{"action":"created","repository":{"full_name":"alice/demo"},"sender":{"login":"alice"}}`
+	for _, d := range []struct{ event, body string }{{"push", own}, {"wiki", wiki}, {"push", `{"zen":"test"}`}} {
 		if code := post("se", d.event, d.body, sign(se, d.body), false); code != 202 {
 			t.Errorf("%s = %d", d.event, code)
 		}
@@ -289,3 +289,18 @@ func TestHookURLChangesWithSecret(t *testing.T) {
 }
 
 var _ http.Handler = (*Receiver)(nil)
+
+type fakeIssues struct{ triggered []string }
+
+func (f *fakeIssues) Trigger(_ context.Context, id string) { f.triggered = append(f.triggered, id) }
+
+func TestDispatcherIssueEvents(t *testing.T) {
+	lk := &fakeLookup{ids: map[string]string{"alice/demo": "id-1"}, prev: map[string]string{}}
+	sc, rp, is := &fakeScanner{}, &fakeReplicator{}, &fakeIssues{}
+	d := &RepoDispatcher{Store: lk, Scanner: sc, Replicator: rp, Issues: is, Log: slog.New(slog.DiscardHandler)}
+	d.Changed(context.Background(), Change{Node: "dk", Event: "issue_comment", Repository: "alice/demo"})
+	d.Changed(context.Background(), Change{Node: "dk", Event: "issues", Repository: "alice/unknown"})
+	if strings.Join(is.triggered, ",") != "id-1" || len(rp.triggered) != 0 || len(sc.scanned) != 0 {
+		t.Errorf("issues %v, git %v, scanned %v", is.triggered, rp.triggered, sc.scanned)
+	}
+}

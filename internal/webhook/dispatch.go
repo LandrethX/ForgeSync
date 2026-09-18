@@ -21,6 +21,11 @@ type Replicator interface {
 	Trigger(ctx context.Context, id string) (bool, error)
 }
 
+// IssueReplicator replicates one repository's issues.
+type IssueReplicator interface {
+	Trigger(ctx context.Context, id string)
+}
+
 // RepoDispatcher turns a reported change into work on that one repository.
 type RepoDispatcher struct {
 	Store   Lookup
@@ -28,6 +33,8 @@ type RepoDispatcher struct {
 	// Replicator is nil when replication is off; then only the inventory is
 	// refreshed.
 	Replicator Replicator
+	// Issues is nil when issue replication is off.
+	Issues IssueReplicator
 	// Assign applies renames and the primary rules after the inventory
 	// changed (inventory.AssignPrimaries).
 	Assign func(ctx context.Context) error
@@ -42,6 +49,14 @@ func (d *RepoDispatcher) Changed(ctx context.Context, c Change) {
 	id, err := d.Store.RepositoryIDByName(ctx, c.Repository)
 	if err != nil {
 		d.Log.Error("webhook: looking up the repository failed", "repository", c.Repository, "error", err)
+		return
+	}
+	if IssueEvents[c.Event] {
+		// Issues of a repository ForgeSync doesn't know yet are picked up
+		// once it does (the next scan, or its first push).
+		if id != "" && d.Issues != nil {
+			d.Issues.Trigger(ctx, id)
+		}
 		return
 	}
 	if id == "" || c.Event == "repository" {

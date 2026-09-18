@@ -49,7 +49,9 @@ export function ConflictDetail({ id }: { id: number }) {
             <thead>
               <tr>
                 <th scope="col">Node</th>
-                <th scope="col">{c.kind === "default_branch_mismatch" ? "Default branch" : "Commit"}</th>
+                <th scope="col">
+                  {c.kind === "default_branch_mismatch" ? "Default branch" : c.kind === "issue_conflict" ? "Value" : "Commit"}
+                </th>
                 <th scope="col" />
               </tr>
             </thead>
@@ -60,7 +62,7 @@ export function ConflictDetail({ id }: { id: number }) {
                   <tr key={node}>
                     <th scope="row">{node}</th>
                     <td className="mono">
-                      {c.kind !== "default_branch_mismatch" && url && v ? (
+                      {c.kind !== "default_branch_mismatch" && c.kind !== "issue_conflict" && url && v ? (
                         <a href={`${url}/${c.full_name}/commit/${v}`} target="_blank" rel="noreferrer noopener">
                           {v.slice(0, 12)}
                         </a>

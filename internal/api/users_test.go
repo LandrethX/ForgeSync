@@ -95,3 +95,22 @@ func TestWebhookRoutes(t *testing.T) {
 		t.Errorf("status = %s", rec.Body)
 	}
 }
+
+func TestRepositoryIssues(t *testing.T) {
+	f := newFixture("s3cret")
+	withRepos(f)
+	f.db.issues = []store.IssueRecord{
+		{ID: "a", BaseTitle: "same everywhere", Copies: map[string]store.IssueCopy{"se": {Number: 1}, "dk": {Number: 1}}},
+		{ID: "b", BaseTitle: "shifted", Copies: map[string]store.IssueCopy{"se": {Number: 2}, "dk": {Number: 3}}},
+	}
+	f.db.comments = []store.CommentRecord{{ID: "c", IssueID: "b"}}
+	rec := f.do(req{path: "/api/v1/repositories/" + demoID + "/issues", bearer: "s3cret"})
+	body := rec.Body.String()
+	if rec.Code != 200 || !strings.Contains(body, `"title":"same everywhere"`) || strings.Count(body, `"numbers_differ":true`) != 1 ||
+		!strings.Contains(body, `"comments":1,"numbers_differ":true`) {
+		t.Errorf("issues = %d %s", rec.Code, body)
+	}
+	if rec := f.do(req{path: "/api/v1/repositories/nope/issues", bearer: "s3cret"}); rec.Code != 404 {
+		t.Errorf("unknown repository = %d", rec.Code)
+	}
+}

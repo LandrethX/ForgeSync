@@ -47,7 +47,8 @@ echo '<server-ip> sceneid.test forgesync.test forgejo-se.test forgejo-dk.test fo
 ```
 
 The names must be the same everywhere, because SceneID's issuer URL and the redirect URLs are
-checked exactly. The test credentials are public (they're in this repository), so only do this on
+checked exactly. Pass `PUBLIC_BIND=0.0.0.0` to every later `docker compose ... up` as well:
+a container recreated without it is published on localhost only. The test credentials are public (they're in this repository), so only do this on
 a network you trust.
 
 ## Usage

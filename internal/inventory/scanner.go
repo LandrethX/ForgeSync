@@ -136,7 +136,12 @@ func (s *Scanner) ScanAll(ctx context.Context) {
 			// assignment relies on) once both are recorded.
 			if t.SceneIDSourceID != 0 {
 				if err := s.rec.RecordNodeUsers(ctx, t.Name, finished, users); err != nil {
+					// Record the scan as failed, so this round doesn't count as
+					// complete on the strength of an older successful scan.
 					s.log.Error("recording users failed", "node", t.Name, "error", err)
+					if rerr := s.rec.RecordNodeScanFailure(ctx, t.Name, started, finished, err); rerr != nil {
+						s.log.Error("recording scan failure failed", "node", t.Name, "error", rerr)
+					}
 					return
 				}
 			}

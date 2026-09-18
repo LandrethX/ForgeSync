@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -25,6 +26,10 @@ func (s *Store) RecordNodeUsers(ctx context.Context, node string, finished time.
 		return err
 	}
 	defer tx.Rollback(ctx)
+	// Every node's scan upserts the same users at about the same time; taking
+	// the row locks in one order keeps them from deadlocking.
+	users = append([]ScannedUser(nil), users...)
+	sort.Slice(users, func(i, j int) bool { return users[i].Sub < users[j].Sub })
 	for _, u := range users {
 		var id string
 		if err := tx.QueryRow(ctx, `
@@ -141,6 +146,10 @@ func (s *Store) AssignPrimaries(ctx context.Context, nodes []string) (out Assign
 			JOIN users u ON lower(u.login) = lower(split_part(r.full_name, '/', 1))
 			WHERE r.primary_source <> 'manual' AND u.home_node = ANY($1)
 				AND (r.primary_node IS DISTINCT FROM u.home_node OR r.primary_source <> 'owner')
+				-- Pull mirrors are Forgejo's own copies; a repository that's only
+				-- a mirror isn't ForgeSync's to replicate.
+				AND EXISTS (SELECT 1 FROM repository_replicas rr
+					WHERE rr.repository_id = r.id AND rr.present AND NOT rr.mirror)
 			FOR UPDATE OF r
 		)
 		UPDATE repositories r SET primary_node = want.new, primary_source = 'owner'

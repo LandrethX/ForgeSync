@@ -241,7 +241,8 @@ func TestAssignPrimaries(t *testing.T) {
 		ScannedRepo{FullName: "team/app", Created: t0.Add(-day)},            // an organization: origin
 		ScannedRepo{FullName: "alice/chosen", Created: t0.Add(-day)},        // manual, kept
 		ScannedRepo{FullName: "siteadmin/notes", Created: t0.Add(-3 * day)}, // local owner: origin SE
-		ScannedRepo{FullName: "team/mirrored", Created: t0.Add(-3 * day), Mirror: true})
+		ScannedRepo{FullName: "team/mirrored", Created: t0.Add(-3 * day), Mirror: true},
+		ScannedRepo{FullName: "alice/mirror-only", Created: t0.Add(-day), Mirror: true}) // no primary at all
 	scan("dk", []ScannedUser{alice(t0.Add(-2 * day)), bob(t0.Add(-5 * day))},
 		ScannedRepo{FullName: "team/app", Created: t0.Add(-2 * day)},
 		ScannedRepo{FullName: "team/mirrored", Created: t0.Add(-2 * day)},
@@ -279,6 +280,7 @@ func TestAssignPrimaries(t *testing.T) {
 	want := map[string][2]string{
 		"alice/made-on-se": {"dk", "owner"}, "bob/tools": {"se", "owner"}, "team/app": {"dk", "origin"},
 		"alice/chosen": {"se", "manual"}, "siteadmin/notes": {"se", "origin"}, "team/mirrored": {"dk", "origin"},
+		"alice/mirror-only": {"", ""},
 	}
 	for name, r := range byName() {
 		if w := want[name]; r.PrimaryNode != w[0] || r.PrimarySource != w[1] {
@@ -561,5 +563,48 @@ func TestReplicaSync(t *testing.T) {
 	s.SetPrimary(ctx, id, "dk")
 	if counts, _ = s.ReplicationCounts(ctx); len(counts) != 0 {
 		t.Errorf("counts after primary change = %v", counts)
+	}
+}
+
+// Every node's scan records the same users at about the same time, each in
+// its own order; that must not deadlock.
+func TestRecordNodeUsersConcurrently(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	nodes := []string{"se", "dk", "de", "uk", "us"}
+	var recs []NodeRecord
+	for _, n := range nodes {
+		recs = append(recs, NodeRecord{Name: n, URL: "http://" + n})
+	}
+	if err := s.SyncNodes(ctx, recs); err != nil {
+		t.Fatal(err)
+	}
+	var users []ScannedUser
+	for i := range 200 {
+		users = append(users, ScannedUser{Login: "u" + strconv.Itoa(i), Sub: "sub-" + strconv.Itoa(i)})
+	}
+	for round := range 5 {
+		errs := make(chan error, len(nodes))
+		for i, n := range nodes {
+			own := append([]ScannedUser(nil), users...)
+			if i%2 == 1 { // half the nodes list them the other way round
+				for a, b := 0, len(own)-1; a < b; a, b = a+1, b-1 {
+					own[a], own[b] = own[b], own[a]
+				}
+			}
+			go func() { errs <- s.RecordNodeUsers(ctx, n, time.Now().Add(time.Duration(round)*time.Minute), own) }()
+		}
+		for range nodes {
+			if err := <-errs; err != nil {
+				t.Fatalf("round %d: %v", round, err)
+			}
+		}
+	}
+	all, _ := s.Users(ctx)
+	if len(all) != 200 || len(all[0].Accounts) != 5 {
+		t.Fatalf("%d users, first has %d accounts", len(all), len(all[0].Accounts))
 	}
 }

@@ -1,0 +1,151 @@
+# ForgeSync Phase 0 test environment (Docker Desktop on macOS, Apple Silicon or Intel).
+#
+# Each service listens inside its container on the same host:port it is
+# published on, and has a network alias equal to its public hostname. The
+# URL http://forgejo-se.test:3001 therefore works the same from the Mac
+# browser and from inside other containers, which OIDC and mirroring need.
+# The Mac needs /etc/hosts entries; see README.md.
+#
+# Nodes SE and DK start by default. DE starts with: docker compose --profile three up -d
+
+name: forgesync-test
+
+x-forgejo: &forgejo
+  image: codeberg.org/forgejo/forgejo:${FORGEJO_VERSION}
+  restart: unless-stopped
+  depends_on:
+    sceneid:
+      condition: service_healthy
+  extra_hosts:
+    # ForgeSync controller running on the Mac (go run ...) is reachable here.
+    - host.docker.internal:host-gateway
+
+# Settings shared by every node. The image turns GITEA__<section>__<KEY>
+# variables into app.ini entries on start.
+x-forgejo-env: &forgejo-env
+  USER_UID: "1000"
+  USER_GID: "1000"
+  GITEA__database__DB_TYPE: sqlite3
+  GITEA__security__INSTALL_LOCK: "true"
+  GITEA__mailer__ENABLED: "false"
+  GITEA__log__LEVEL: Info
+  # Identity rule: regular users only via SceneID; local accounts are admins
+  # created from the CLI.
+  GITEA__service__DISABLE_REGISTRATION: "false"
+  GITEA__service__ALLOW_ONLY_EXTERNAL_REGISTRATION: "true"
+  GITEA__openid__ENABLE_OPENID_SIGNIN: "false"
+  GITEA__openid__ENABLE_OPENID_SIGNUP: "false"
+  GITEA__oauth2_client__ENABLE_AUTO_REGISTRATION: "true"
+  GITEA__oauth2_client__USERNAME: nickname
+  GITEA__oauth2_client__ACCOUNT_LINKING: auto
+  GITEA__oauth2_client__OPENID_CONNECT_SCOPES: profile email
+  GITEA__oauth2_client__REGISTER_EMAIL_CONFIRM: "false"
+  # Test only: let webhooks and mirrors target private/local addresses.
+  GITEA__webhook__ALLOWED_HOST_LIST: "*"
+  GITEA__migrations__ALLOW_LOCALNETWORKS: "true"
+
+services:
+  sceneid:
+    # Keycloak stands in for SceneID (OIDC provider).
+    image: quay.io/keycloak/keycloak:${KEYCLOAK_VERSION}
+    command: ["start-dev", "--import-realm", "--http-port=8080", "--hostname=http://sceneid.test:8080", "--health-enabled=true"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${SCENEID_ADMIN_USER}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${SCENEID_ADMIN_PASSWORD}
+    volumes:
+      - ./sceneid/realm-sceneid.json:/opt/keycloak/data/import/realm-sceneid.json:ro
+    ports:
+      - "8080:8080"
+    networks:
+      default:
+        aliases: [sceneid.test]
+    healthcheck:
+      # The image has no curl; use bash's /dev/tcp against the management port.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+
+  hooksink:
+    # Records webhook deliveries for the Phase 0 probes (phase0/).
+    image: python:3.13-alpine
+    command: ["python", "-u", "/sink.py"]
+    environment:
+      HOOK_SECRET: ${HOOK_SECRET}
+    volumes:
+      - ./hooksink/sink.py:/sink.py:ro
+    ports:
+      - "8099:8099"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8099/events')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  forgejo-se:
+    <<: *forgejo
+    environment:
+      <<: *forgejo-env
+      GITEA__server__DOMAIN: forgejo-se.test
+      GITEA__server__HTTP_PORT: "3001"
+      GITEA__server__ROOT_URL: http://forgejo-se.test:3001/
+      GITEA__server__SSH_DOMAIN: forgejo-se.test
+      GITEA__server__SSH_PORT: "2221"
+    volumes:
+      - forgejo-se:/data
+    ports:
+      - "3001:3001"
+      - "2221:22"
+    networks:
+      default:
+        aliases: [forgejo-se.test]
+    healthcheck: &forgejo-health
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:$${GITEA__server__HTTP_PORT}/api/healthz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  forgejo-dk:
+    <<: *forgejo
+    environment:
+      <<: *forgejo-env
+      GITEA__server__DOMAIN: forgejo-dk.test
+      GITEA__server__HTTP_PORT: "3002"
+      GITEA__server__ROOT_URL: http://forgejo-dk.test:3002/
+      GITEA__server__SSH_DOMAIN: forgejo-dk.test
+      GITEA__server__SSH_PORT: "2222"
+    volumes:
+      - forgejo-dk:/data
+    ports:
+      - "3002:3002"
+      - "2222:22"
+    networks:
+      default:
+        aliases: [forgejo-dk.test]
+    healthcheck: *forgejo-health
+
+  forgejo-de:
+    <<: *forgejo
+    profiles: [three]
+    environment:
+      <<: *forgejo-env
+      GITEA__server__DOMAIN: forgejo-de.test
+      GITEA__server__HTTP_PORT: "3003"
+      GITEA__server__ROOT_URL: http://forgejo-de.test:3003/
+      GITEA__server__SSH_DOMAIN: forgejo-de.test
+      GITEA__server__SSH_PORT: "2223"
+    volumes:
+      - forgejo-de:/data
+    ports:
+      - "3003:3003"
+      - "2223:22"
+    networks:
+      default:
+        aliases: [forgejo-de.test]
+    healthcheck: *forgejo-health
+
+volumes:
+  forgejo-se:
+  forgejo-dk:
+  forgejo-de:

@@ -1,0 +1,91 @@
+{
+  "realm": "sceneid",
+  "displayName": "SceneID (test stand-in)",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "clients": [
+    {
+      "clientId": "forgejo",
+      "name": "Forgejo nodes",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "forgejo-test-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://forgejo-se.test:3001/*",
+        "http://forgejo-dk.test:3002/*",
+        "http://forgejo-de.test:3003/*"
+      ],
+      "webOrigins": ["+"],
+      "protocolMappers": [
+        {
+          "name": "nickname",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "config": {
+            "user.attribute": "username",
+            "claim.name": "nickname",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "forgesync",
+      "name": "ForgeSync controller (reads and disables SceneID users)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "forgesync-test-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-forgesync",
+      "enabled": true,
+      "serviceAccountClientId": "forgesync",
+      "clientRoles": {
+        "realm-management": ["view-users", "manage-users"]
+      }
+    },
+    {
+      "username": "alice",
+      "enabled": true,
+      "email": "alice@sceneid.test",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Andersson",
+      "credentials": [{ "type": "password", "value": "alice-pw", "temporary": false }]
+    },
+    {
+      "username": "bob",
+      "enabled": true,
+      "email": "bob@sceneid.test",
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "Berg",
+      "credentials": [{ "type": "password", "value": "bob-pw", "temporary": false }]
+    },
+    {
+      "username": "carol",
+      "enabled": true,
+      "email": "carol@sceneid.test",
+      "emailVerified": true,
+      "firstName": "Carol",
+      "lastName": "Christensen",
+      "credentials": [{ "type": "password", "value": "carol-pw", "temporary": false }]
+    }
+  ]
+}

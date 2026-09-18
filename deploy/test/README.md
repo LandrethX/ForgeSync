@@ -11,6 +11,7 @@ developing ForgeSync, running on Docker Desktop for macOS.
 | `forgejo-de` | http://forgejo-de.test:3003 (SSH port 2223) | Forgejo node DE (optional, `--three`) |
 | `forgesync-db` | localhost:5432 | PostgreSQL for ForgeSync's own state (user/db `forgesync`) |
 | `hooksink` | http://localhost:8099 | Records webhook deliveries for the Phase 0 tests |
+| `forgesync` | http://forgesync.test:8090 | The ForgeSync controller and admin UI, built from this repository |
 
 Versions are pinned in `.env`: Forgejo 16 (current LTS) and Keycloak 26.7.4. Both images
 run natively on Apple Silicon.
@@ -21,12 +22,33 @@ run natively on Apple Silicon.
 - Add the hostnames once:
 
   ```sh
-  echo '127.0.0.1 sceneid.test forgejo-se.test forgejo-dk.test forgejo-de.test' | sudo tee -a /etc/hosts
+  echo '127.0.0.1 sceneid.test forgesync.test forgejo-se.test forgejo-dk.test forgejo-de.test' | sudo tee -a /etc/hosts
   ```
 
   Every service is reached by the same URL from the Mac and from inside other containers.
   OIDC needs this, because the issuer URL the browser sees must match the one Forgejo sees.
   Mirroring between nodes needs it too.
+
+## Running on a server
+
+The same setup runs on a Linux server with Docker. On the server:
+
+```sh
+echo '127.0.0.1 sceneid.test forgesync.test forgejo-se.test forgejo-dk.test forgejo-de.test' | sudo tee -a /etc/hosts
+PUBLIC_BIND=0.0.0.0 ./setup.sh
+```
+
+`PUBLIC_BIND=0.0.0.0` publishes SceneID (8080), Forgejo (3001–3003, SSH 2221–2223) and the
+ForgeSync UI (8090) on the server's network interfaces. The database and webhook sink stay on
+localhost. On each machine whose browser should use it, point the names at the server:
+
+```sh
+echo '<server-ip> sceneid.test forgesync.test forgejo-se.test forgejo-dk.test forgejo-de.test' | sudo tee -a /etc/hosts
+```
+
+The names must be the same everywhere, because SceneID's issuer URL and the redirect URLs are
+checked exactly. The test credentials are public (they're in this repository), so only do this on
+a network you trust.
 
 ## Usage
 
@@ -75,17 +97,27 @@ Keycloak keeps no volume, so recreating the container resets SceneID to the JSON
 edits: `docker compose up -d --force-recreate sceneid`. This also discards any users or changes
 made in the admin console.
 
-## ForgeSync on the Mac
+## The ForgeSync controller
 
-Run the controller on the Mac from the repo root. It uses `forgesync.yaml`, the tokens
-`setup.sh` created in `.tokens/`, and the `forgesync-db` database:
+`setup.sh` builds the controller image from this repository and starts it as the `forgesync`
+service, with `forgesync.docker.yaml` as its config. After changing the code, rebuild and restart it:
 
 ```sh
-make web && make run                                       # builds the UI, then runs the controller
-go run ./cmd/forgesync --token-file deploy/test/.tokens/admin.token node list
+docker compose --profile controller up -d --build forgesync
+docker compose --profile controller logs -f forgesync
 ```
 
-The admin UI is at http://127.0.0.1:8090. Sign in with SceneID as one of the test users:
+To run it from source instead (e.g. with `make web-dev` for hot reload), stop the container first
+(`docker compose --profile controller stop forgesync`), since both use port 8090. Then, from the repo
+root, `make web && make run` uses `forgesync.yaml` and serves the UI at http://127.0.0.1:8090.
+
+The CLI works against either:
+
+```sh
+go run ./cmd/forgesync --server http://forgesync.test:8090 --token-file deploy/test/.tokens/admin.token node list
+```
+
+The admin UI is at http://forgesync.test:8090. Sign in with SceneID as one of the test users:
 
 | User | ForgeSync role |
 |---|---|

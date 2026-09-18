@@ -7,6 +7,11 @@
 # The Mac needs /etc/hosts entries; see README.md.
 #
 # Nodes SE and DK start by default. DE starts with: docker compose --profile three up -d
+#
+# Ports the browser needs (SceneID, Forgejo, the ForgeSync UI) are published on
+# 127.0.0.1 by default. To reach them from other machines, e.g. when the test
+# environment runs on a server, set PUBLIC_BIND=0.0.0.0. The database and the
+# webhook sink always stay on localhost.
 
 name: forgesync-test
 
@@ -55,7 +60,7 @@ services:
     volumes:
       - ./sceneid/realm-sceneid.json:/opt/keycloak/data/import/realm-sceneid.json:ro
     ports:
-      - "8080:8080"
+      - "${PUBLIC_BIND:-127.0.0.1}:8080:8080"
     networks:
       default:
         aliases: [sceneid.test]
@@ -78,12 +83,50 @@ services:
     volumes:
       - forgesync-db:/var/lib/postgresql
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U forgesync -d forgesync"]
       interval: 5s
       timeout: 5s
       retries: 20
+
+  forgesync:
+    # The ForgeSync controller with its admin UI, built from this repository.
+    # setup.sh starts it once the nodes are configured and tokens exist.
+    profiles: [controller]
+    build:
+      context: ../..
+      args:
+        VERSION: ${FORGESYNC_VERSION:-dev}
+        COMMIT: ${FORGESYNC_COMMIT:-unknown}
+    image: forgesync:test
+    # Test only: runs as root so it can read the token files bind-mounted
+    # from .tokens/ (they are 0600 and owned by whoever ran setup.sh).
+    user: "0:0"
+    restart: unless-stopped
+    depends_on:
+      forgesync-db:
+        condition: service_healthy
+      sceneid:
+        condition: service_healthy
+      forgejo-se:
+        condition: service_healthy
+      forgejo-dk:
+        condition: service_healthy
+    volumes:
+      - ./forgesync.docker.yaml:/etc/forgesync/forgesync.yaml:ro
+      - ./.tokens:/etc/forgesync/tokens:ro
+      - forgesync-git:/var/lib/forgesync
+    ports:
+      - "${PUBLIC_BIND:-127.0.0.1}:8090:8090"
+    networks:
+      default:
+        aliases: [forgesync.test]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8090/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
 
   hooksink:
     # Records webhook deliveries for the Phase 0 probes (phase0/).
@@ -94,7 +137,7 @@ services:
     volumes:
       - ./hooksink/sink.py:/sink.py:ro
     ports:
-      - "8099:8099"
+      - "127.0.0.1:8099:8099"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8099/events')"]
       interval: 5s
@@ -113,8 +156,8 @@ services:
     volumes:
       - forgejo-se:/data
     ports:
-      - "3001:3001"
-      - "2221:22"
+      - "${PUBLIC_BIND:-127.0.0.1}:3001:3001"
+      - "${PUBLIC_BIND:-127.0.0.1}:2221:22"
     networks:
       default:
         aliases: [forgejo-se.test]
@@ -136,8 +179,8 @@ services:
     volumes:
       - forgejo-dk:/data
     ports:
-      - "3002:3002"
-      - "2222:22"
+      - "${PUBLIC_BIND:-127.0.0.1}:3002:3002"
+      - "${PUBLIC_BIND:-127.0.0.1}:2222:22"
     networks:
       default:
         aliases: [forgejo-dk.test]
@@ -156,8 +199,8 @@ services:
     volumes:
       - forgejo-de:/data
     ports:
-      - "3003:3003"
-      - "2223:22"
+      - "${PUBLIC_BIND:-127.0.0.1}:3003:3003"
+      - "${PUBLIC_BIND:-127.0.0.1}:2223:22"
     networks:
       default:
         aliases: [forgejo-de.test]
@@ -165,6 +208,7 @@ services:
 
 volumes:
   forgesync-db:
+  forgesync-git:
   forgejo-se:
   forgejo-dk:
   forgejo-de:

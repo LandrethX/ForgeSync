@@ -109,8 +109,10 @@ func run(configPath string) error {
 		}
 		engine = replication.NewEngine(gitNodes, git, db, monitor, replication.Options{
 			Concurrency: cfg.Replication.Concurrency,
-			// The scanner exists by the time a manual replication finishes.
-			AfterTriggered: func() { scanner.Trigger() },
+			// Rescan so the inventory shows the result. Forgejo updates some
+			// repository fields (e.g. "empty" after the first push) just after
+			// a push, so give it a moment first. The scanner exists by then.
+			AfterTriggered: func() { time.AfterFunc(5*time.Second, func() { scanner.Trigger() }) },
 		}, log)
 		log.Info("replication enabled", "git", v, "work_dir", cfg.Replication.WorkDir)
 	}

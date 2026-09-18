@@ -1,0 +1,8 @@
+.git
+.claude
+**/node_modules
+bin
+deploy
+phase0
+docs
+internal/webui/dist

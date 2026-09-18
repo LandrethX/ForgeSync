@@ -5,8 +5,14 @@
 #   - an API token for the forgesync account in .tokens/<node>.token
 # Then smoke-tests connectivity. Safe to re-run.
 #
+# Then builds and starts the ForgeSync controller (with its admin UI) as a
+# container.
+#
 # Usage: ./setup.sh           # nodes SE and DK
 #        ./setup.sh --three   # also node DE
+#
+# To reach the environment from other machines (e.g. on a server), run it as
+# PUBLIC_BIND=0.0.0.0 ./setup.sh and add the hostnames on those machines too.
 #
 # Written for macOS bash 3.2 (no associative arrays).
 
@@ -29,7 +35,7 @@ FAILED=0
 
 echo "==> Checking /etc/hosts entries"
 missing=""
-for h in sceneid.test $(for n in $NODES; do printf 'forgejo-%s.test ' "$n"; done); do
+for h in sceneid.test forgesync.test $(for n in $NODES; do printf 'forgejo-%s.test ' "$n"; done); do
   if command -v dscacheutil >/dev/null; then
     dscacheutil -q host -a name "$h" | grep -q '127.0.0.1' || missing="$missing $h"
   else
@@ -39,7 +45,7 @@ done
 if [ -n "$missing" ]; then
   echo "Missing hostnames:$missing"
   echo "Add them with:"
-  echo "  echo '127.0.0.1 sceneid.test forgejo-se.test forgejo-dk.test forgejo-de.test' | sudo tee -a /etc/hosts"
+  echo "  echo '127.0.0.1 sceneid.test forgesync.test forgejo-se.test forgejo-dk.test forgejo-de.test' | sudo tee -a /etc/hosts"
   exit 1
 fi
 ok "hostnames resolve to 127.0.0.1"
@@ -101,17 +107,24 @@ if [ ! -s .tokens/admin.token ]; then
   ok "generated ForgeSync admin API token -> .tokens/admin.token"
 fi
 
+echo "==> Building and starting the ForgeSync controller (first build takes a few minutes)"
+FORGESYNC_VERSION=$(git -C ../.. describe --tags --always --dirty 2>/dev/null || echo dev)
+FORGESYNC_COMMIT=$(git -C ../.. rev-parse --short HEAD 2>/dev/null || echo unknown)
+export FORGESYNC_VERSION FORGESYNC_COMMIT
+docker compose $PROFILE_ARGS --profile controller up -d --build --wait forgesync
+ok "controller running ($FORGESYNC_VERSION)"
+
 echo "==> Smoke tests"
 disco="http://sceneid.test:8080/realms/sceneid/.well-known/openid-configuration"
 if curl -fsS "$disco" | grep -q '"issuer":"http://sceneid.test:8080/realms/sceneid"'; then
-  ok "Mac -> SceneID discovery, issuer matches"
+  ok "host -> SceneID discovery, issuer matches"
 else
-  fail "Mac -> SceneID discovery"
+  fail "host -> SceneID discovery"
 fi
 
 for n in $NODES; do
   url="http://forgejo-$n.test:$(port_of "$n")"
-  curl -fsS "$url/api/healthz" >/dev/null && ok "Mac -> $url healthy" || fail "Mac -> $url"
+  curl -fsS "$url/api/healthz" >/dev/null && ok "host -> $url healthy" || fail "host -> $url"
 
   tok=$(cat ".tokens/$n.token")
   login=$(curl -fsS -H "Authorization: token $tok" "$url/api/v1/user" | sed -n 's/.*"login":"\([^"]*\)".*/\1/p')
@@ -128,6 +141,14 @@ for n in $NODES; do
   done
 done
 
+if curl -fsS http://forgesync.test:8090/readyz | grep -q ready; then
+  ok "host -> ForgeSync controller ready"
+else
+  fail "ForgeSync controller not ready (docker compose --profile controller logs forgesync)"
+fi
+compose exec -T forgejo-se curl -fsS -o /dev/null http://forgesync.test:8090/healthz \
+  && ok "forgejo-se -> ForgeSync controller reachable" || fail "forgejo-se -> ForgeSync controller"
+
 echo
 if [ "$FAILED" -ne 0 ]; then
   echo "Some checks failed; see above. Logs: docker compose logs <service>"
@@ -140,6 +161,8 @@ $(for n in $NODES; do echo "  Forgejo $(echo "$n" | tr a-z A-Z)            : htt
   SceneID test users    : alice / alice-pw (ForgeSync administrator), bob / bob-pw (operator),
                           carol / carol-pw (viewer), erin / erin-pw (no ForgeSync role)
   Local admins per node : siteadmin / $FORGEJO_SITEADMIN_PASSWORD, forgesync (API tokens in .tokens/)
+  ForgeSync admin UI    : http://forgesync.test:8090   (sign in with SceneID, or "Use the admin token instead")
+  Admin token           : .tokens/admin.token
   ForgeSync database    : localhost:5432 (forgesync / $FORGESYNC_DB_PASSWORD)
-  Run the controller    : make web && make run   (from the repo root), then open http://127.0.0.1:8090
+  Controller logs       : docker compose --profile controller logs -f forgesync
 EOF

@@ -137,6 +137,18 @@ func (f *fakeForgejo) ListUsers(_ context.Context, src int64, page, limit int) (
 	return of[start:min(start+limit, len(of))], len(of), nil
 }
 
+func (f *fakeForgejo) GetRepo(_ context.Context, owner, name string) (forgejo.Repository, bool, error) {
+	if f.listErr != nil {
+		return forgejo.Repository{}, false, f.listErr
+	}
+	for _, r := range f.repos {
+		if r.FullName == owner+"/"+name {
+			return r, true, nil
+		}
+	}
+	return forgejo.Repository{}, false, nil
+}
+
 func (f *fakeForgejo) BranchHead(_ context.Context, owner, repo, branch string) (string, error) {
 	n := f.inFlight.Add(1)
 	defer f.inFlight.Add(-1)
@@ -158,6 +170,21 @@ type fakeRecorder struct {
 	scans    map[string][]store.ScannedRepo
 	users    map[string][]store.ScannedUser
 	failures map[string]error
+	observed map[string]string
+}
+
+func (r *fakeRecorder) RecordRepoObservation(_ context.Context, node string, _ time.Time, name string, found bool, repo store.ScannedRepo) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.observed == nil {
+		r.observed = map[string]string{}
+	}
+	if found {
+		r.observed[node] = name + " " + repo.HeadSHA
+	} else {
+		r.observed[node] = name + " gone"
+	}
+	return nil
 }
 
 func (r *fakeRecorder) RecordNodeUsers(_ context.Context, node string, _ time.Time, users []store.ScannedUser) error {
@@ -259,5 +286,18 @@ func TestScannerSkipsOwners(t *testing.T) {
 	s.ScanAll(context.Background())
 	if got := rec.scans["se"]; len(got) != 1 || got[0].FullName != "alice/a" {
 		t.Errorf("scanned %+v, want only alice/a", got)
+	}
+}
+
+func TestScanRepo(t *testing.T) {
+	se := &fakeForgejo{repos: []forgejo.Repository{{ID: 1, Name: "a", FullName: "alice/a", Owner: forgejo.User{Login: "alice"}, DefaultBranch: "main"}}}
+	dk := &fakeForgejo{}
+	de := &fakeForgejo{listErr: errors.New("connection refused")}
+	rec := &fakeRecorder{}
+	s := NewScanner([]Target{{Name: "se", Client: se}, {Name: "dk", Client: dk}, {Name: "de", Client: de}},
+		Options{Interval: time.Hour}, rec, slog.New(slog.DiscardHandler))
+	s.ScanRepo(context.Background(), "alice/a")
+	if rec.observed["se"] != "alice/a sha-alice-a" || rec.observed["dk"] != "alice/a gone" || rec.observed["de"] != "" {
+		t.Errorf("observed = %v (de failed, so nothing is recorded for it)", rec.observed)
 	}
 }

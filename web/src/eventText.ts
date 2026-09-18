@@ -52,6 +52,8 @@ export function describe(e: HistoryEvent): string {
       return `Created on ${str(d.node)}, copied from ${str(d.from || d.primary)}`;
     case "user.created_on_node":
       return `SceneID user created on ${str(d.node)} (as on ${str(d.from)}), linked on first sign-in`;
+    case "node.webhook_installed":
+      return "ForgeSync's system webhook installed on this node";
     case "repo.renamed_on_primary":
       return `Renamed on the primary ${str(d.primary)} from ${str(d.from)} to ${str(d.to)}`;
     case "repo.renamed_on_node":

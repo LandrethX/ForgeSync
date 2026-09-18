@@ -1,11 +1,13 @@
 package api
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
 	"scenegit.org/forgesync/internal/auth"
 	"scenegit.org/forgesync/internal/store"
+	"scenegit.org/forgesync/internal/webhook"
 )
 
 const aliceID = "33333333-3333-3333-3333-333333333333"
@@ -63,5 +65,33 @@ func TestSetUserHomeNeedsAdministrator(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("%d user.set_home audit entries, want 1", n)
+	}
+}
+
+func TestWebhookRoutes(t *testing.T) {
+	f := newFixture("s3cret")
+	if rec := f.do(req{path: "/api/v1/webhooks", bearer: "s3cret"}); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"enabled":false`) {
+		t.Errorf("status with webhooks off = %d %s", rec.Code, rec.Body)
+	}
+	if rec := f.do(req{method: "POST", path: "/api/v1/hooks/forgejo/se", body: "{}"}); rec.Code == 202 {
+		t.Error("webhook route exists while webhooks are off")
+	}
+
+	var gotNode string
+	f.srv.Webhooks = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotNode = r.PathValue("node")
+		w.WriteHeader(http.StatusAccepted)
+	})
+	f.srv.WebhookStatus = webhook.NewTracker([]string{"se"})
+	f.h = f.srv.Handler()
+	// No session or token: the receiver checks Forgejo's signature itself.
+	if rec := f.do(req{method: "POST", path: "/api/v1/hooks/forgejo/se", body: "{}"}); rec.Code != 202 || gotNode != "se" {
+		t.Errorf("delivery = %d, node %q", rec.Code, gotNode)
+	}
+	if rec := f.do(req{path: "/api/v1/webhooks"}); rec.Code != 401 {
+		t.Errorf("status without signing in = %d", rec.Code)
+	}
+	if rec := f.do(req{path: "/api/v1/webhooks", bearer: "s3cret"}); !strings.Contains(rec.Body.String(), `"enabled":true,"nodes":[{"node":"se"`) {
+		t.Errorf("status = %s", rec.Body)
 	}
 }

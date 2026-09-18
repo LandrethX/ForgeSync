@@ -34,7 +34,14 @@ health:
   timeout: 5s
   failure_threshold: 3
 inventory:
-  interval: 2m
+  # Webhooks report changes as they happen; the full scan is a safety net
+  # for lost deliveries and changes Forgejo sends no webhook for.
+  interval: 30m
+webhooks:
+  # How the Forgejo containers reach the controller (the compose network
+  # alias). ForgeSync installs a system webhook on each node pointing here.
+  url: http://forgesync.test:8090/api/v1/hooks/forgejo
+  secret_file: /etc/forgesync/tokens/webhook.secret
 replication:
   enabled: true
   work_dir: /var/lib/forgesync/git

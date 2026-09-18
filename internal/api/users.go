@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"scenegit.org/forgesync/internal/store"
+	"scenegit.org/forgesync/internal/webhook"
 )
 
 type userList struct {
@@ -82,4 +83,19 @@ func (s *Server) setUserHome(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"user_id": id, "from": prev, "to": body.Node})
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"home_node": body.Node, "previous": prev})
+}
+
+type webhookStatus struct {
+	Enabled bool             `json:"enabled"`
+	Nodes   []webhook.Status `json:"nodes"`
+}
+
+// webhookStatus: GET /webhooks. Whether each node's webhook is installed and
+// delivering.
+func (s *Server) webhookStatus(w http.ResponseWriter, _ *http.Request) {
+	if s.WebhookStatus == nil {
+		writeJSON(w, http.StatusOK, webhookStatus{Nodes: []webhook.Status{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, webhookStatus{Enabled: true, Nodes: s.WebhookStatus.Snapshot()})
 }

@@ -149,6 +149,24 @@ export interface User {
   accounts: UserAccount[];
 }
 
+export interface NodeWebhook {
+  node: string;
+  installed: boolean;
+  hook_id?: number;
+  error?: string;
+  checked_at?: string;
+  deliveries: number;
+  rejected: number;
+  last_delivery_at?: string;
+  last_event?: string;
+  last_repository?: string;
+}
+
+export interface WebhookStatus {
+  enabled: boolean;
+  nodes: NodeWebhook[];
+}
+
 export interface RepositoryList {
   total: number;
   counts: Partial<Record<RepoStatus, number>>;
@@ -338,6 +356,7 @@ export const api = {
       node,
     }),
   inventory: () => request<InventoryStatus>("GET", "/inventory"),
+  webhooks: () => request<WebhookStatus>("GET", "/webhooks"),
   users: (q?: string) =>
     request<{ total: number; items: User[] }>("GET", `/users${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   setUserHome: (id: string, node: string) =>

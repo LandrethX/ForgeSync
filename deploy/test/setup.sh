@@ -111,6 +111,11 @@ if [ ! -s .tokens/admin.token ]; then
   chmod 600 .tokens/admin.token
   ok "generated ForgeSync admin API token -> .tokens/admin.token"
 fi
+if [ ! -s .tokens/webhook.secret ]; then
+  openssl rand -hex 32 > .tokens/webhook.secret
+  chmod 600 .tokens/webhook.secret
+  ok "generated the webhook secret -> .tokens/webhook.secret"
+fi
 
 echo "==> Building and starting the ForgeSync controller (first build takes a few minutes)"
 FORGESYNC_VERSION=$(git -C ../.. describe --tags --always --dirty 2>/dev/null || echo dev)

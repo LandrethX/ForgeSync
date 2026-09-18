@@ -55,3 +55,35 @@ describe("Nodes", () => {
     expect(se.getByText("16.0.5")).toBeTruthy();
   });
 });
+
+describe("Nodes with webhooks", () => {
+  it("shows whether each node's webhook is installed and delivering", async () => {
+    const { vi } = await import("vitest");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            enabled: true,
+            nodes: [
+              { node: "dk", installed: false, error: "connection refused", deliveries: 0, rejected: 0 },
+              { node: "se", installed: true, hook_id: 3, deliveries: 12, rejected: 1, last_delivery_at: new Date().toISOString() },
+            ],
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    render(
+      <NodeStreamContext.Provider value={{ nodes, connection: "live" }}>
+        <Nodes />
+      </NodeStreamContext.Provider>,
+    );
+    expect(await screen.findByRole("columnheader", { name: "Webhook" })).toBeTruthy();
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]!).getByText("Not installed")).toBeTruthy();
+    expect(within(rows[1]!).getByText("Installed")).toBeTruthy();
+    expect(within(rows[1]!).getByText(/12 so far\) · 1 rejected/)).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+});

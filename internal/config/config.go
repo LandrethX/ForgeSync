@@ -31,7 +31,26 @@ type Config struct {
 	Health      Health      `yaml:"health"`
 	Inventory   Inventory   `yaml:"inventory"`
 	Replication Replication `yaml:"replication"`
+	Webhooks    Webhooks    `yaml:"webhooks"`
 	Nodes       []Node      `yaml:"nodes"`
+}
+
+// Webhooks makes every node report changes to ForgeSync as they happen,
+// through a Forgejo system webhook that ForgeSync installs and maintains. Off
+// while URL is empty. With it on, inventory.interval can be much longer
+// (e.g. 30m to 1h): scans become a safety net.
+type Webhooks struct {
+	// URL is how the nodes reach the controller's webhook endpoint, e.g.
+	// https://sync.scenegit.org/api/v1/hooks/forgejo; each node posts to
+	// <url>/<node name>.
+	URL string `yaml:"url"`
+	// SecretFile holds the secret each node's signing secret is derived from
+	// (at least 32 characters).
+	SecretFile string `yaml:"secret_file"`
+	Secret     string `yaml:"-"`
+	// CheckInterval is how often the hooks are checked and repaired.
+	// Default 10m.
+	CheckInterval time.Duration `yaml:"check_interval"`
 }
 
 // Replication copies Git branches and tags from each repository's primary
@@ -207,6 +226,9 @@ func (c *Config) applyDefaults() {
 	if c.Replication.BackupDays == 0 {
 		c.Replication.BackupDays = 30
 	}
+	if c.Webhooks.CheckInterval == 0 {
+		c.Webhooks.CheckInterval = 10 * time.Minute
+	}
 	if c.Replication.ArchiveOrg == "" {
 		c.Replication.ArchiveOrg = "forgesync-archive"
 	}
@@ -238,6 +260,11 @@ func (c *Config) resolveSecrets(dir string) error {
 	if c.HTTP.AdminTokenFile != "" {
 		if c.HTTP.AdminToken, err = readSecret(dir, c.HTTP.AdminTokenFile); err != nil {
 			return fmt.Errorf("http.admin_token_file: %w", err)
+		}
+	}
+	if c.Webhooks.SecretFile != "" {
+		if c.Webhooks.Secret, err = readSecret(dir, c.Webhooks.SecretFile); err != nil {
+			return fmt.Errorf("webhooks.secret_file: %w", err)
 		}
 	}
 	if c.OIDC.ClientSecretFile != "" {
@@ -312,6 +339,17 @@ func (c *Config) validate() error {
 	}
 	if c.Replication.Concurrency < 1 || c.Replication.Concurrency > 16 {
 		errs = append(errs, errors.New("replication.concurrency must be 1 to 16"))
+	}
+	if c.Webhooks.URL != "" {
+		if u, err := url.Parse(c.Webhooks.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			errs = append(errs, errors.New("webhooks.url must be an http(s) URL"))
+		}
+		if len(c.Webhooks.Secret) < 32 {
+			errs = append(errs, errors.New("webhooks.secret_file must hold at least 32 characters"))
+		}
+		if c.Webhooks.CheckInterval < time.Minute {
+			errs = append(errs, errors.New("webhooks.check_interval must be at least 1m"))
+		}
 	}
 	if c.Replication.BackupDays < 1 {
 		errs = append(errs, errors.New("replication.backup_days must be at least 1"))

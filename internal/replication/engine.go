@@ -83,8 +83,9 @@ type Options struct {
 	// Default "forgesync-archive".
 	ArchiveOrg string
 	// AfterTriggered, if set, runs after a replication started by Trigger,
-	// e.g. to rescan so the inventory reflects the new state right away.
-	AfterTriggered func()
+	// e.g. to look at the repository again so the inventory reflects the new
+	// state right away.
+	AfterTriggered func(rec store.RepositoryRecord)
 }
 
 // Engine replicates repositories that have a primary to all other nodes.
@@ -100,6 +101,7 @@ type Engine struct {
 
 	mu      sync.Mutex
 	running map[string]bool // repository id -> a run is in progress
+	again   map[string]bool // repository id -> changed during the run: run once more
 }
 
 func NewEngine(nodes []Node, git *Git, st Store, h HealthSource, opts Options, log *slog.Logger) *Engine {
@@ -112,7 +114,7 @@ func NewEngine(nodes []Node, git *Git, st Store, h HealthSource, opts Options, l
 	if opts.ArchiveOrg == "" {
 		opts.ArchiveOrg = "forgesync-archive"
 	}
-	e := &Engine{nodes: map[string]Node{}, git: git, store: st, health: h, opts: opts, log: log, now: time.Now, running: map[string]bool{}}
+	e := &Engine{nodes: map[string]Node{}, git: git, store: st, health: h, opts: opts, log: log, now: time.Now, running: map[string]bool{}, again: map[string]bool{}}
 	for _, n := range nodes {
 		e.nodes[n.Name] = n
 		e.order = append(e.order, n.Name)
@@ -148,7 +150,8 @@ func (e *Engine) RunAll(ctx context.Context) {
 var errBusy = errors.New("replication of this repository is already running")
 
 // Trigger replicates one repository in the background. It returns false if
-// that repository is already being replicated.
+// that repository is already being replicated; it then runs once more when
+// that run ends, so the change that prompted this isn't missed.
 func (e *Engine) Trigger(ctx context.Context, id string) (bool, error) {
 	rec, err := e.store.Repository(ctx, id)
 	if err != nil {
@@ -159,6 +162,9 @@ func (e *Engine) Trigger(ctx context.Context, id string) (bool, error) {
 	}
 	e.mu.Lock()
 	busy := e.running[id]
+	if busy {
+		e.again[id] = true
+	}
 	e.mu.Unlock()
 	if busy {
 		return false, nil
@@ -169,7 +175,7 @@ func (e *Engine) Trigger(ctx context.Context, id string) (bool, error) {
 			e.log.Warn("replication failed", "repository", rec.FullName, "error", err)
 		}
 		if !errors.Is(err, errBusy) && e.opts.AfterTriggered != nil {
-			e.opts.AfterTriggered()
+			e.opts.AfterTriggered(rec)
 		}
 	}()
 	return true, nil
@@ -179,17 +185,35 @@ func (e *Engine) Trigger(ctx context.Context, id string) (bool, error) {
 func (e *Engine) RunRepo(ctx context.Context, rec store.RepositoryRecord) error {
 	e.mu.Lock()
 	if e.running[rec.ID] {
+		e.again[rec.ID] = true // changed while running: once more afterwards
 		e.mu.Unlock()
 		return errBusy
 	}
 	e.running[rec.ID] = true
 	e.mu.Unlock()
-	defer func() {
+	for {
+		err := e.runPasses(ctx, rec)
 		e.mu.Lock()
-		delete(e.running, rec.ID)
+		if !e.again[rec.ID] || ctx.Err() != nil {
+			delete(e.running, rec.ID)
+			delete(e.again, rec.ID)
+			e.mu.Unlock()
+			return err
+		}
+		delete(e.again, rec.ID)
 		e.mu.Unlock()
-	}()
+		if fresh, ferr := e.store.Repository(ctx, rec.ID); ferr == nil {
+			rec = fresh
+		} else if errors.Is(ferr, store.ErrNotFound) {
+			e.mu.Lock()
+			delete(e.running, rec.ID)
+			e.mu.Unlock()
+			return nil // forgotten meanwhile (e.g. a deleted repository's last archive went)
+		}
+	}
+}
 
+func (e *Engine) runPasses(ctx context.Context, rec store.RepositoryRecord) error {
 	// A fix can move the primary (e.g. taking a replica's new commits); a
 	// second pass then carries that to the other replicas right away.
 	for pass := 0; pass < 2; pass++ {

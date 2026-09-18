@@ -200,3 +200,39 @@ nodes: [{name: se, url: "http://se", token_file: se.token}]
 		t.Errorf("work dir = %q", cfg.Replication.WorkDir)
 	}
 }
+
+func TestWebhooks(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "se.token", "tok")
+	writeFile(t, dir, "hook.secret", strings.Repeat("s", 40))
+	writeFile(t, dir, "short.secret", "short")
+	load := func(hooks string) (*Config, error) {
+		t.Helper()
+		t.Setenv(EnvDatabaseURL, "")
+		return Load(writeFile(t, dir, "c.yaml", `
+database: {url: postgres://x}
+`+hooks+`
+nodes: [{name: se, url: "http://se", token_file: se.token}]
+`))
+	}
+	cfg, err := load(`webhooks: {url: "http://forgesync.test:8090/api/v1/hooks/forgejo", secret_file: hook.secret}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Webhooks.Secret != strings.Repeat("s", 40) || cfg.Webhooks.CheckInterval != 10*time.Minute {
+		t.Errorf("webhooks = %+v", cfg.Webhooks)
+	}
+	if cfg, err := load(``); err != nil || cfg.Webhooks.URL != "" {
+		t.Errorf("off by default: %+v, %v", cfg.Webhooks, err)
+	}
+	for _, bad := range []string{
+		`webhooks: {url: "http://x/hooks", secret_file: short.secret}`,
+		`webhooks: {url: "http://x/hooks"}`,
+		`webhooks: {url: "ftp://x/hooks", secret_file: hook.secret}`,
+		`webhooks: {url: "http://x/hooks", secret_file: hook.secret, check_interval: 10s}`,
+	} {
+		if _, err := load(bad); err == nil {
+			t.Errorf("accepted: %s", bad)
+		}
+	}
+}

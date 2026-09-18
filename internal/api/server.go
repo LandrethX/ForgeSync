@@ -27,6 +27,7 @@ import (
 	"scenegit.org/forgesync/internal/buildinfo"
 	"scenegit.org/forgesync/internal/health"
 	"scenegit.org/forgesync/internal/store"
+	"scenegit.org/forgesync/internal/webhook"
 )
 
 // DB is the database access the API needs.
@@ -87,6 +88,11 @@ type Server struct {
 	Sessions         *Sessions
 	SecureCookies    bool
 	Frontend         http.Handler // nil serves nothing outside the API
+	// Webhooks receives Forgejo's deliveries at /api/v1/hooks/forgejo/{node};
+	// it checks their signatures itself. nil when webhooks are off.
+	Webhooks http.Handler
+	// WebhookStatus reports each node's webhook; nil when webhooks are off.
+	WebhookStatus interface{ Snapshot() []webhook.Status }
 
 	limiter *loginLimiter
 }
@@ -111,6 +117,13 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/auth/login", s.oidcLogin)
 		r.Get("/auth/callback", s.oidcCallback)
 		r.Post("/session", s.createSession)
+		if s.Webhooks != nil {
+			// Signed by the node, not signed in: no session or token.
+			r.Post("/hooks/forgejo/{node}", func(w http.ResponseWriter, r *http.Request) {
+				r.SetPathValue("node", chi.URLParam(r, "node"))
+				s.Webhooks.ServeHTTP(w, r)
+			})
+		}
 		r.Get("/session", s.getSession)
 		r.Delete("/session", s.deleteSession)
 
@@ -131,6 +144,7 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/repositories/{id}", s.getRepository)
 				r.Get("/inventory", s.inventoryStatus)
 				r.Get("/users", s.listUsers)
+				r.Get("/webhooks", s.webhookStatus)
 				r.Get("/users/{id}", s.getUser)
 				r.Get("/conflicts", s.listConflicts)
 				r.Get("/conflicts/{id}", s.getConflict)

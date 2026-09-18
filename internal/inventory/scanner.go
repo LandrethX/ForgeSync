@@ -19,6 +19,7 @@ type Lister interface {
 	ListRepos(ctx context.Context, page, limit int) ([]forgejo.Repository, int, error)
 	BranchHead(ctx context.Context, owner, repo, branch string) (string, error)
 	ListUsers(ctx context.Context, sourceID int64, page, limit int) ([]forgejo.User, int, error)
+	GetRepo(ctx context.Context, owner, name string) (forgejo.Repository, bool, error)
 }
 
 // Recorder stores scan results.
@@ -26,6 +27,7 @@ type Recorder interface {
 	RecordNodeScan(ctx context.Context, node string, started, finished time.Time, repos []store.ScannedRepo) error
 	RecordNodeScanFailure(ctx context.Context, node string, started, finished time.Time, err error) error
 	RecordNodeUsers(ctx context.Context, node string, finished time.Time, users []store.ScannedUser) error
+	RecordRepoObservation(ctx context.Context, node string, at time.Time, fullName string, found bool, r store.ScannedRepo) error
 }
 
 type Target struct {
@@ -160,6 +162,44 @@ func (s *Scanner) ScanAll(ctx context.Context) {
 	if s.opts.AfterScan != nil && ctx.Err() == nil {
 		s.opts.AfterScan(ctx)
 	}
+}
+
+// ScanRepo looks at one repository on every node and records what each has,
+// without a full scan (e.g. after a webhook or a replication run). A node
+// that can't be asked keeps what was recorded before.
+func (s *Scanner) ScanRepo(ctx context.Context, fullName string) {
+	owner, name, ok := strings.Cut(fullName, "/")
+	if !ok || s.skipOwner(owner) {
+		return
+	}
+	var wg sync.WaitGroup
+	for _, t := range s.targets {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r, found, err := t.Client.GetRepo(ctx, owner, name)
+			if err != nil {
+				s.log.Warn("checking a repository failed", "node", t.Name, "repository", fullName, "error", err)
+				return
+			}
+			obs := store.ScannedRepo{}
+			if found {
+				obs = store.ScannedRepo{FullName: r.FullName, ForgejoID: r.ID, Private: r.Private, Fork: r.Fork, Mirror: r.Mirror,
+					Archived: r.Archived, Empty: r.Empty, DefaultBranch: r.DefaultBranch, Updated: r.Updated, Created: r.Created}
+				if !r.Empty && r.DefaultBranch != "" {
+					if sha, err := t.Client.BranchHead(ctx, r.Owner.Login, r.Name, r.DefaultBranch); err != nil {
+						obs.HeadError = err.Error()
+					} else {
+						obs.HeadSHA = sha
+					}
+				}
+			}
+			if err := s.rec.RecordRepoObservation(ctx, t.Name, s.now().UTC(), fullName, found, obs); err != nil {
+				s.log.Error("recording a repository failed", "node", t.Name, "repository", fullName, "error", err)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // scanUsers lists a node's SceneID accounts.

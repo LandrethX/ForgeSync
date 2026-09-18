@@ -135,3 +135,20 @@ func (s *Store) RenamedTo(ctx context.Context, repositoryID, node string) (strin
 	}
 	return name, err
 }
+
+// PreviousName returns another name under which the inventory still lists
+// the repository that is fullName on node (same Forgejo id there), e.g. the
+// old name right after a rename ("" if none).
+func (s *Store) PreviousName(ctx context.Context, node, fullName string) (string, error) {
+	var name string
+	err := s.pool.QueryRow(ctx, `
+		SELECT old.full_name FROM repository_replicas cur
+		JOIN repository_replicas old ON old.node = cur.node AND old.forgejo_id = cur.forgejo_id
+			AND old.repository_id <> cur.repository_id AND old.present
+		WHERE cur.node = $1 AND lower(cur.full_name) = lower($2) AND cur.present AND cur.forgejo_id <> 0
+		LIMIT 1`, node, fullName).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return name, err
+}

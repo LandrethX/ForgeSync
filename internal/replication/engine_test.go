@@ -28,6 +28,8 @@ type memStore struct {
 	deleted  bool // DeleteRepository was called
 	// renamedTo is what RenamedTo answers.
 	renamedTo string
+	// onSave, if set, runs whenever a replica's state is saved.
+	onSave func()
 }
 
 func (m *memStore) RenamedTo(context.Context, string, string) (string, error) {
@@ -132,6 +134,9 @@ func (m *memStore) NoteCreatedAccount(_ context.Context, node, login string) err
 	return nil
 }
 func (m *memStore) SaveReplicaSync(_ context.Context, st store.ReplicaSync, refs map[string]string) error {
+	if m.onSave != nil {
+		m.onSave()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.syncs[st.Node] = st
@@ -331,6 +336,12 @@ func TestEngineOneRunPerRepository(t *testing.T) {
 	if queued, err := e.Trigger(context.Background(), st.rec.ID); queued || err != nil {
 		t.Errorf("trigger while running = %v, %v", queued, err)
 	}
+	e.mu.Lock()
+	again := e.again[st.rec.ID]
+	e.mu.Unlock()
+	if !again {
+		t.Error("a trigger while running wasn't kept for afterwards")
+	}
 	st.rec.PrimaryNode = ""
 	if _, err := e.Trigger(context.Background(), st.rec.ID); err == nil {
 		t.Error("trigger without a primary accepted")
@@ -342,7 +353,7 @@ func TestTriggerRunsAfterHook(t *testing.T) {
 	w.commit("a")
 	w.push(se, "alice/demo", "main")
 	done := make(chan struct{})
-	e.opts.AfterTriggered = func() { close(done) }
+	e.opts.AfterTriggered = func(store.RepositoryRecord) { close(done) }
 	if queued, err := e.Trigger(context.Background(), st.rec.ID); !queued || err != nil {
 		t.Fatalf("trigger = %v, %v", queued, err)
 	}
@@ -353,5 +364,32 @@ func TestTriggerRunsAfterHook(t *testing.T) {
 	}
 	if st.sync("dk").State != StateSynced {
 		t.Errorf("state = %+v", st.sync("dk"))
+	}
+}
+
+// A change reported while the repository is replicating isn't lost: the
+// run goes once more with the latest state.
+func TestChangeDuringRunRunsAgain(t *testing.T) {
+	e, st, se, dk, w, _ := setup(t)
+	w.commit("a")
+	w.push(se, "alice/demo", "main")
+	var b string
+	var once sync.Once
+	st.onSave = func() {
+		// While the first run records its result, someone pushes again and
+		// a webhook asks for another run.
+		once.Do(func() {
+			b = w.commit("b")
+			w.push(se, "alice/demo", "main")
+			if queued, _ := e.Trigger(context.Background(), st.rec.ID); queued {
+				t.Error("trigger during a run started a second run")
+			}
+		})
+	}
+	if err := e.RunRepo(context.Background(), st.rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := dk.refs("alice/demo")["refs/heads/main"]; got != b {
+		t.Errorf("dk main = %s, want the commit pushed during the first run (%s)", got, b)
 	}
 }

@@ -27,6 +27,7 @@ import (
 	"scenegit.org/forgesync/internal/inventory"
 	"scenegit.org/forgesync/internal/replication"
 	"scenegit.org/forgesync/internal/store"
+	"scenegit.org/forgesync/internal/webhook"
 	"scenegit.org/forgesync/internal/webui"
 )
 
@@ -77,6 +78,8 @@ func run(configPath string) error {
 	var nodeNames []string
 	comparers := map[string]conflicts.Comparer{}
 	var gitNodes []replication.Node
+	var hookTargets []webhook.Target
+	serviceUsers := map[string]string{}
 	for _, n := range cfg.Nodes {
 		client, err := forgejo.New(n.URL, n.Token, nil)
 		if err != nil {
@@ -88,6 +91,8 @@ func run(configPath string) error {
 		scanTargets = append(scanTargets, inventory.Target{Name: n.Name, Client: client, SceneIDSourceID: n.SceneIDSourceID})
 		nodeNames = append(nodeNames, n.Name)
 		comparers[n.Name] = client
+		hookTargets = append(hookTargets, webhook.Target{Name: n.Name, Client: client})
+		serviceUsers[n.Name] = n.ServiceUser
 		gitNodes = append(gitNodes, replication.Node{Name: n.Name, URL: n.URL, User: n.ServiceUser, Token: n.Token,
 			API: client, SceneIDSourceID: n.SceneIDSourceID})
 	}
@@ -118,11 +123,21 @@ func run(configPath string) error {
 			// Rescan so the inventory shows the result. Forgejo updates some
 			// repository fields (e.g. "empty" after the first push) just after
 			// a push, so give it a moment first. The scanner exists by then.
-			AfterTriggered: func() { time.AfterFunc(5*time.Second, func() { scanner.Trigger() }) },
+			AfterTriggered: func(rec store.RepositoryRecord) {
+				time.AfterFunc(5*time.Second, func() { scanner.ScanRepo(ctx, rec.FullName) })
+			},
 		}, log)
 		log.Info("replication enabled", "git", v, "work_dir", cfg.Replication.WorkDir,
 			"create_missing", *cfg.Replication.CreateMissing, "auto_fix", *cfg.Replication.AutoFix,
 			"hand_off_conflicts", *cfg.Replication.HandOffConflicts, "backup_days", cfg.Replication.BackupDays)
+	}
+	// Renames and primaries are assigned after scans and after webhooks;
+	// one at a time.
+	var assignMu sync.Mutex
+	assignPrimaries := func(ctx context.Context) error {
+		assignMu.Lock()
+		defer assignMu.Unlock()
+		return inventory.AssignPrimaries(ctx, db, nodeNames, log)
 	}
 	detector := conflicts.NewDetector(nodeNames, comparers, db, log)
 	detector.ReplicationOwnsPrimaries = engine != nil
@@ -132,7 +147,7 @@ func run(configPath string) error {
 		// Archived copies of deleted repositories aren't inventoried.
 		SkipOwners: []string{cfg.Replication.ArchiveOrg},
 		AfterScan: func(ctx context.Context) {
-			if err := inventory.AssignPrimaries(ctx, db, nodeNames, log); err != nil {
+			if err := assignPrimaries(ctx); err != nil {
 				log.Error("assigning primaries failed", "error", err)
 			}
 			if err := detector.Run(ctx); err != nil {
@@ -143,12 +158,38 @@ func run(configPath string) error {
 			}
 		},
 	}, db, log)
+	var hooks http.Handler
+	var hookStatus *webhook.Tracker
+	var installer *webhook.Installer
+	if cfg.Webhooks.URL != "" {
+		hookStatus = webhook.NewTracker(nodeNames)
+		installer = &webhook.Installer{
+			Targets: hookTargets, BaseURL: cfg.Webhooks.URL, Secret: cfg.Webhooks.Secret,
+			Interval: cfg.Webhooks.CheckInterval, Tracker: hookStatus, Log: log,
+			Audit: func(ctx context.Context, action, target string, details map[string]any) {
+				if err := db.Audit(ctx, "forgesync", action, target, details); err != nil {
+					log.Error("writing audit log failed", "error", err)
+				}
+			},
+		}
+		dispatch := &webhook.RepoDispatcher{Store: db, Scanner: scanner, Assign: assignPrimaries, Log: log}
+		if engine != nil { // a nil *Engine in the interface would look enabled
+			dispatch.Replicator = engine
+		}
+		hooks = &webhook.Receiver{Secret: cfg.Webhooks.Secret, ServiceUsers: serviceUsers, Dispatch: dispatch,
+			Tracker: hookStatus, Log: log, Context: ctx}
+		log.Info("webhooks enabled", "url", cfg.Webhooks.URL, "events", webhook.Events)
+	}
 	monitorDone := make(chan struct{})
 	go func() {
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() { defer wg.Done(); monitor.Run(ctx) }()
 		go func() { defer wg.Done(); scanner.Run(ctx) }()
+		if installer != nil {
+			wg.Add(1)
+			go func() { defer wg.Done(); installer.Run(ctx) }()
+		}
 		wg.Wait()
 		close(monitorDone)
 	}()
@@ -194,6 +235,8 @@ func run(configPath string) error {
 			StartedAt:        startedAt,
 			SecureCookies:    *cfg.HTTP.SecureCookies,
 			Frontend:         webui.Handler(),
+			Webhooks:         hooks,
+			WebhookStatus:    statusOrNil(hookStatus),
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -232,4 +275,13 @@ func newLogger(c config.Log) *slog.Logger {
 		return slog.New(slog.NewJSONHandler(os.Stderr, opts))
 	}
 	return slog.New(slog.NewTextHandler(os.Stderr, opts))
+}
+
+// statusOrNil keeps a nil tracker a nil interface, so the API reports
+// webhooks as off.
+func statusOrNil(t *webhook.Tracker) interface{ Snapshot() []webhook.Status } {
+	if t == nil {
+		return nil
+	}
+	return t
 }

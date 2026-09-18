@@ -495,3 +495,42 @@ type CreateOrgOption struct {
 func (c *Client) AdminCreateOrg(ctx context.Context, owner string, opt CreateOrgOption) error {
 	return c.do(ctx, http.MethodPost, "/api/v1/admin/users/"+url.PathEscape(owner)+"/orgs", true, opt, nil)
 }
+
+// Hook is a webhook as the admin API lists it (modules/structs/hook.go).
+type Hook struct {
+	ID     int64             `json:"id"`
+	Type   string            `json:"type"`
+	URL    string            `json:"url"`
+	Config map[string]string `json:"config"`
+	Events []string          `json:"events"`
+	Active bool              `json:"active"`
+}
+
+// SystemHooks lists the instance's system and default webhooks. Site admin
+// only.
+func (c *Client) SystemHooks(ctx context.Context) ([]Hook, error) {
+	var hooks []Hook
+	err := c.do(ctx, http.MethodGet, "/api/v1/admin/hooks?limit=50", true, nil, &hooks)
+	return hooks, err
+}
+
+// CreateSystemHook adds a system webhook: it fires for every repository.
+func (c *Client) CreateSystemHook(ctx context.Context, url, secret string, events []string) (Hook, error) {
+	var h Hook
+	err := c.do(ctx, http.MethodPost, "/api/v1/admin/hooks", true, map[string]any{
+		"type": "forgejo", "active": true, "events": events, "branch_filter": "*",
+		"config": map[string]string{"url": url, "content_type": "json", "secret": secret,
+			// Without this it's a "default" webhook, copied into new repositories.
+			"is_system_webhook": "true"},
+	}, &h)
+	return h, err
+}
+
+// DeleteSystemHook removes a system or default webhook.
+func (c *Client) DeleteSystemHook(ctx context.Context, id int64) error {
+	err := c.do(ctx, http.MethodDelete, fmt.Sprintf("/api/v1/admin/hooks/%d", id), true, nil, nil)
+	if isNotFound(err) {
+		return nil
+	}
+	return err
+}

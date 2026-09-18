@@ -32,6 +32,12 @@ type ScannedRepo struct {
 // RecordNodeScan stores a successful scan of a node: every repository it
 // found, and which previously seen ones are gone.
 func (s *Store) RecordNodeScan(ctx context.Context, node string, started, finished time.Time, repos []ScannedRepo) error {
+	return s.recordRepos(ctx, node, started, finished, repos, true)
+}
+
+// recordRepos records repositories a node has; full means repos is
+// everything it has (a scan), so the rest are gone and the scan is recorded.
+func (s *Store) recordRepos(ctx context.Context, node string, started, finished time.Time, repos []ScannedRepo, full bool) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -85,6 +91,9 @@ func (s *Store) RecordNodeScan(ctx context.Context, node string, started, finish
 		if err != nil {
 			return fmt.Errorf("record %s on %s: %w", r.FullName, node, err)
 		}
+	}
+	if !full {
+		return tx.Commit(ctx)
 	}
 	// Anything on this node the scan didn't touch is gone from it.
 	if _, err := tx.Exec(ctx, `
@@ -292,4 +301,35 @@ func isUUID(s string) bool {
 		}
 	}
 	return true
+}
+
+// RepositoryIDByName returns the repository with this name, or whose old
+// name this is ("" if none).
+func (s *Store) RepositoryIDByName(ctx context.Context, fullName string) (string, error) {
+	var id string
+	err := s.pool.QueryRow(ctx, `
+		SELECT id::text FROM repositories WHERE lower(full_name) = lower($1)
+		UNION ALL
+		SELECT repository_id::text FROM repository_aliases WHERE name = lower($1)
+		LIMIT 1`, fullName).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+// RecordRepoObservation stores what a node has of one repository right now,
+// outside a full scan (e.g. after a webhook): found or not. It doesn't touch
+// the node's other repositories or its scan status.
+func (s *Store) RecordRepoObservation(ctx context.Context, node string, at time.Time, fullName string, found bool, r ScannedRepo) error {
+	if !found {
+		_, err := s.pool.Exec(ctx, `
+			UPDATE repository_replicas rr SET present = false, checked_at = $3
+			FROM repositories r
+			WHERE rr.repository_id = r.id AND rr.node = $1 AND lower(rr.full_name) = lower($2) AND rr.present`,
+			node, fullName, at)
+		return err
+	}
+	r.FullName = fullName
+	return s.recordRepos(ctx, node, at, at, []ScannedRepo{r}, false)
 }

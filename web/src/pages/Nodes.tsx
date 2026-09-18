@@ -1,18 +1,23 @@
+import { api, type NodeWebhook } from "../api";
 import { PageHeader } from "../components/Layout";
-import { StatusBadge } from "../components/StatusBadge";
+import { StatusBadge, StatusIcon } from "../components/StatusBadge";
 import { formatAgo, formatDateTime } from "../format";
-import { useNodes, useNow } from "../hooks";
+import { useLoad, useNodes, useNow } from "../hooks";
 import { Link } from "../router";
 
 export function Nodes() {
   const { nodes } = useNodes();
   const now = useNow();
+  const hooks = useLoad(() => api.webhooks(), []);
+  const showHooks = hooks.data?.enabled === true;
 
   return (
     <>
       <PageHeader title="Nodes" />
       <p className="muted page-intro">
         Nodes come from the controller's config file. Their health is checked on the configured interval and updates here live.
+        {showHooks &&
+          " Each node reports changes to ForgeSync through a system webhook, so replication starts within seconds; the regular scan is a safety net."}
       </p>
       {!nodes ? (
         <p className="muted">Waiting for the first health check…</p>
@@ -27,6 +32,7 @@ export function Nodes() {
                 <th scope="col">Version</th>
                 <th scope="col">Last seen</th>
                 <th scope="col">Last checked</th>
+                {showHooks && <th scope="col">Webhook</th>}
                 <th scope="col">URL</th>
               </tr>
             </thead>
@@ -47,6 +53,11 @@ export function Nodes() {
                   <td className="num" title={n.last_checked ? formatDateTime(n.last_checked) : undefined}>
                     {n.state === "UNKNOWN" ? "–" : formatAgo(n.last_checked, now)}
                   </td>
+                  {showHooks && (
+                    <td>
+                      <WebhookCell hook={hooks.data?.nodes.find((h) => h.node === n.name)} now={now} />
+                    </td>
+                  )}
                   <td>
                     <a href={n.url} target="_blank" rel="noreferrer noopener">
                       {n.url}
@@ -58,6 +69,33 @@ export function Nodes() {
           </table>
         </div>
       )}
+    </>
+  );
+}
+
+function WebhookCell({ hook, now }: { hook?: NodeWebhook; now: number }) {
+  if (!hook) return <>–</>;
+  if (hook.error && !hook.installed) {
+    return (
+      <span className="status-badge tone-critical" title={hook.error}>
+        <StatusIcon tone="critical" />
+        <span>Not installed</span>
+      </span>
+    );
+  }
+  if (!hook.installed) return <span className="muted">Checking…</span>;
+  return (
+    <>
+      <span className="status-badge tone-good" title={hook.error || undefined}>
+        <StatusIcon tone="good" />
+        <span>Installed</span>
+      </span>
+      <div className="small muted">
+        {hook.last_delivery_at
+          ? `Last delivery ${formatAgo(hook.last_delivery_at, now)} (${hook.deliveries} so far)`
+          : "No deliveries yet"}
+        {hook.rejected > 0 && ` · ${hook.rejected} rejected`}
+      </div>
     </>
   );
 }

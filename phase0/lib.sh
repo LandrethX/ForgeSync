@@ -52,21 +52,30 @@ is() { if [ "$1" = "$2" ]; then echo true; else echo false; fi; }
 
 # ---------------------------------------------------------------- nodes
 
+# The probes are written for two roles, "se" (node A, where things happen first)
+# and "dk" (node B, the replica). NODE_A / NODE_B pick the real nodes, so the
+# same probes run against any pair: NODE_A=de NODE_B=uk ./run-all.sh
+NODE_A=${NODE_A:-se}
+NODE_B=${NODE_B:-dk}
+real_node() { case $1 in se) echo "$NODE_A";; dk) echo "$NODE_B";; *) echo "$1";; esac; }
+
 node_url() {
-  case $1 in
+  case $(real_node "$1") in
     se) echo http://forgejo-se.test:3001;;
     dk) echo http://forgejo-dk.test:3002;;
     de) echo http://forgejo-de.test:3003;;
-    *) echo "unknown node $1" >&2; return 1;;
+    uk) echo http://forgejo-uk.test:3004;;
+    us) echo http://forgejo-us.test:3005;;
+    *) echo "unknown node $(real_node "$1")" >&2; return 1;;
   esac
 }
 node_host() { node_url "$1" | sed 's|^http://||'; }
-node_token() { cat "$TEST_DIR/.tokens/$1.token"; }
+node_token() { cat "$TEST_DIR/.tokens/$(real_node "$1").token"; }
 
 # fj NODE ARGS...  run the forgejo CLI on a node as the git user
 fj() {
-  local node=$1; shift
-  (cd "$TEST_DIR" && docker compose --profile three exec -T -u git "forgejo-$node" forgejo "$@")
+  local node; node=$(real_node "$1"); shift
+  (cd "$TEST_DIR" && docker compose --profile all exec -T -u git "forgejo-$node" forgejo "$@")
 }
 
 sceneid_source_id() { fj "$1" admin auth list | awk '$2 == "SceneID" {print $1}'; }
@@ -121,7 +130,7 @@ branch_sha() { api GET "$1" "/repos/$2/branches/$3" | jq -r '.commit.id // empty
 
 # user_token NODE USER  API token for a SceneID user, generated with the CLI (cached)
 user_token() {
-  local f="$CACHE/token-$1-$2"
+  local f; f="$CACHE/token-$(real_node "$1")-$2"
   # Tokens go stale when the test environment is reset; check before reuse.
   if [ -s "$f" ] && [ "$(AS_TOKEN=$(cat "$f") api GET "$1" /user | jq -r '.login // empty')" != "$2" ]; then
     rm -f "$f"
@@ -159,7 +168,7 @@ try_git() {
   GIT_OUT=$(printf '%s' "$GIT_OUT" | { grep -E 'remote:|error:|rejected|->|fatal:' || true; } | { grep -v '^remote: *$' || true; } | head -4 | tr '\n' ' ' | sed 's/http:\/\/[^@]*@/http:\/\/***@/g')
 }
 
-ssh_port() { case $1 in se) echo 2221;; dk) echo 2222;; de) echo 2223;; esac; }
+ssh_port() { case $(real_node "$1") in se) echo 2221;; dk) echo 2222;; de) echo 2223;; uk) echo 2224;; us) echo 2225;; esac; }
 ssh_url() { echo "ssh://git@$(node_host "$1" | cut -d: -f1):$(ssh_port "$1")/$2.git"; }
 
 # new_key NAME  creates an ed25519 key pair in $WORK; prints the private key path
@@ -235,8 +244,17 @@ sceneid_login() {
     --data-urlencode "username=$2" --data-urlencode "password=$3" --data credentialId= "$action"
 }
 
-# session_login JAR NODE  login name of the Forgejo session in JAR (empty if none)
-session_login() { curl -sS -b "$1" "$(node_url "$2")/api/v1/user" | jq -r '.login // empty' 2>/dev/null || true; }
+# session_login JAR NODE  login name of the Forgejo web session in JAR (empty if none).
+# Forgejo's API doesn't accept session cookies ("token is required"), so this
+# reads the settings page, which redirects to the login page without a session.
+# A prohibit_login user gets an "Account is suspended" page instead, which still
+# shows "Signed in as" in the navbar, so that counts as no session too.
+session_login() {
+  local out; out=$(curl -sS -L -b "$1" -w '\n%{url_effective}' "$(node_url "$2")/user/settings" 2>/dev/null || true)
+  case $(printf '%s' "$out" | tail -n 1) in */user/login*) return 0;; esac
+  case $out in *"<title>Account is suspended"*) return 0;; esac
+  printf '%s' "$out" | sed -n 's/.*Signed in as <strong>\([^<]*\)<.*/\1/p' | head -n 1
+}
 
 # ---------------------------------------------------------------- webhooks
 

@@ -73,6 +73,9 @@ fi
 
 # ------------------------------------------------------------------------------------
 section "Migration with metadata SE -> DK (service=gitea)"
+# Let the clock move on, so "creation times preserved" can't pass just because
+# the issues and the migration happened in the same second.
+sleep 3
 IMPORT=alice/$NAME-import
 api POST dk /repos/migrate "$(jq -nc --arg c "$(node_url se)/$SRC" --arg n "$NAME-import" --arg t "$SE_TOK" \
   '{clone_addr:$c, repo_owner:"alice", repo_name:$n, service:"gitea", auth_token:$t, mirror:false,

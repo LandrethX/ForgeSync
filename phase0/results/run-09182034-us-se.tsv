@@ -1,0 +1,111 @@
+09182034-us-se	p01-identity	INFO	SceneID login source id	se=1 dk=1 (ids are per node; ForgeSync must map them)
+09182034-us-se	p01-identity	CONFIRMED	First SceneID login creates the account automatically	landed on http://forgejo-us.test:3005/, session user 'p01a09182034-us-se'
+09182034-us-se	p01-identity	INFO	How Forgejo records an auto-registered SceneID user	{"id":3,"login":"p01a09182034-us-se","source_id":1,"login_name":"8b4aa436-274b-40a4-b1db-caa09b231cbf"} (SceneID sub = 8b4aa436-274b-40a4-b1db-caa09b231cbf)
+09182034-us-se	p01-identity	CONFIRMED	login_name holds the SceneID sub	
+09182034-us-se	p01-identity	CONFIRMED	Admin API can look up a user by SceneID sub (source_id + login_name filter)	result: [p01a09182034-us-se]
+09182034-us-se	p01-identity	CONFIRMED	Admin API can create a user bound to the SceneID source (no password)	HTTP 201  {"id":13,"login":"p01b09182034-us-se","source_id":1,"login_name":"595fc3d7-0229-4c96-9bbb-1130a84e4224"}
+09182034-us-se	p01-identity	CONFIRMED	First login attaches to the pre-created account (same id, no link page, no duplicate)	landed on http://forgejo-se.test:3001/; session user 'p01b09182034-us-se' id=13 (pre-created id=13); accounts with this name: 1
+09182034-us-se	p01-identity	CONFIRMED	ACCOUNT_LINKING=auto links SceneID to a pre-created local account	landed on http://forgejo-se.test:3001/; session user 'p01c09182034-us-se'; accounts now: [{"id":14,"login":"p01c09182034-us-se","source_id":0,"login_name":""}]
+09182034-us-se	p01-identity	INFO	After linking, the account's source_id/login_name	[{"id":14,"login":"p01c09182034-us-se","source_id":0,"login_name":""}] (source_id 0 means it is still a local account and keeps its local password)
+09182034-us-se	p01-identity	INFO	Login when the username differs but sub and email match	landed on http://forgejo-se.test:3001/; session user 'p01d09182034-us-sex' (pre-created as 'p01d09182034-us-sex'). Shows whether Forgejo matches on sub, on email or on username.
+09182034-us-se	p01-identity	CONFIRMED	The sign-up page offers no local password registration	
+09182034-us-se	p01-identity	CONFIRMED	Local admin 'siteadmin' can still authenticate with a password	HTTP 200
+09182034-us-se	p01-identity	INFO	Local-source accounts on se (what a ForgeSync compliance check would flag, apart from admins)	forgesync(admin), siteadmin(admin)
+09182034-us-se	p01-identity	INFO	Local-source accounts on dk (what a ForgeSync compliance check would flag, apart from admins)	forgesync(admin), p01c09182034-us-se, p08ut3, pbx26340, siteadmin(admin)
+09182034-us-se	p02-replica-protection	CONFIRMED	Owner can push while the repo is unprotected (sanity check)	   8a113e9..98597d1  HEAD -> main 
+09182034-us-se	p02-replica-protection	CONFIRMED	Owner's push to main is rejected (apply_to_admins=false)	remote: Forgejo: Not allowed to push to protected branch main          ! [remote rejected] HEAD -> main (pre-receive hook declined) error: failed to push some refs to 'http://forgejo-se.test:3001/alice/p02-09182034-us-se.git' 
+09182034-us-se	p02-replica-protection	CONFIRMED	Owner's push to main is rejected	remote: Forgejo: Not allowed to push to protected branch main          ! [remote rejected] HEAD -> main (pre-receive hook declined) error: failed to push some refs to 'http://forgejo-se.test:3001/alice/p02-09182034-us-se.git' 
+09182034-us-se	p02-replica-protection	CONFIRMED	Owner can't create a new branch by pushing	remote: Forgejo: Not allowed to push to protected branch alice-feature          ! [remote rejected] HEAD -> alice-feature (pre-receive hook declined) error: failed to push some refs to 'http://forgejo-se.test:3001/alice/p02-09182034-us-se.git' 
+09182034-us-se	p02-replica-protection	CONFIRMED	Owner can't push a tag	remote: Forgejo: Tag alice-tag is protected          ! [remote rejected] alice-tag -> alice-tag (pre-receive hook declined) error: failed to push some refs to 'http://forgejo-se.test:3001/alice/p02-09182034-us-se.git' 
+09182034-us-se	p02-replica-protection	CONFIRMED	Owner can't commit through the contents API (web editor path)	HTTP 403 user cannot commit to repo [user: alice]
+09182034-us-se	p02-replica-protection	CONFIRMED	Owner can't create a branch through the API	HTTP 500 
+09182034-us-se	p02-replica-protection	INFO	Branch protection doesn't restrict issues (owner creating an issue)	HTTP 201 - issues need their own policy
+09182034-us-se	p02-replica-protection	CONFIRMED	ForgeSync can push to main	   98597d1..0767b44  HEAD -> main 
+09182034-us-se	p02-replica-protection	CONFIRMED	ForgeSync can create a branch	remote: Create a new pull request for 'replicated-branch':         remote:   http://forgejo-se.test:3001/alice/p02-09182034-us-se/compare/main...replicated-branch          * [new branch]      HEAD -> replicated-branch 
+09182034-us-se	p02-replica-protection	CONFIRMED	ForgeSync can push a tag	 * [new tag]         v1.0 -> v1.0 
+09182034-us-se	p02-replica-protection	CONFIRMED	A push whose expected old value is stale is rejected (safe replication)	 ! [rejected]        HEAD -> main (stale info) error: failed to push some refs to 'http://forgejo-se.test:3001/alice/p02-09182034-us-se.git' 
+09182034-us-se	p02-replica-protection	CONFIRMED	A push with the correct expected old value succeeds	   0767b44..e75396c  HEAD -> main 
+09182034-us-se	p02-replica-protection	INFO	ForgeSync force-push to a protected branch	exit 1: remote: Forgejo: branch main is protected from force push          ! [remote rejected] HEAD -> main (pre-receive hook declined) error: failed to push some refs to 'http://forgejo-se.test:3001/alice/p02-09182034-us-se.git' 
+09182034-us-se	p02-replica-protection	REFUTED	Owner can't delete the replica's branch rule	HTTP 204 . If the owner can remove it, protection alone isn't enough; users would need a lower role than owner/admin, or ForgeSync must detect and restore the rule.
+09182034-us-se	p03-mirror-and-migration	INFO	Deleting issue #2 on the source to leave a numbering gap	HTTP 204
+09182034-us-se	p03-mirror-and-migration	CONFIRMED	ForgeSync can create a pull mirror on DK of a repo on SE	HTTP 201 
+09182034-us-se	p03-mirror-and-migration	CONFIRMED	Owner can't push to the mirror	remote: mirror repository is read-only fatal: unable to access 'http://forgejo-se.test:3001/alice/p03-09182034-us-se-mirror.git/': The requested URL returned error: 403 
+09182034-us-se	p03-mirror-and-migration	INFO	ForgeSync push to the mirror	exit 128: remote: mirror repository is read-only fatal: unable to access 'http://forgejo-se.test:3001/alice/p03-09182034-us-se-mirror.git/': The requested URL returned error: 403  (rejected means ForgeSync can only update it via mirror-sync)
+09182034-us-se	p03-mirror-and-migration	CONFIRMED	mirror-sync pulls a new source commit on demand	mirror-sync HTTP 200; landed after about 2s
+09182034-us-se	p03-mirror-and-migration	INFO	Creating an issue on a mirror	HTTP 201 
+09182034-us-se	p03-mirror-and-migration	CONFIRMED	The API can't convert a mirror into a normal repository (promotion needs another route)	PATCH {mirror:false} -> HTTP 200; mirror is now: true
+09182034-us-se	p03-mirror-and-migration	CONFIRMED	Forgejo can migrate a repo with metadata from another Forgejo	HTTP 201 
+09182034-us-se	p03-mirror-and-migration	CONFIRMED	Issue numbers are preserved, including the gap	source #1,3, migrated #1,3
+09182034-us-se	p03-mirror-and-migration	CONFIRMED	Issue creation times are preserved	source 2026-09-18T20:39:15Z,2026-09-18T20:39:15Z | migrated 2026-09-18T20:39:15Z,2026-09-18T20:39:15Z
+09182034-us-se	p03-mirror-and-migration	INFO	Authors after migration (source login -> migrated user / original_author)	#1 bob -> Ghost / ; #3 alice -> Ghost / 
+09182034-us-se	p03-mirror-and-migration	INFO	Comments after migration	[{"user":"Ghost","original_author":"","created_at":"2026-09-18T20:39:15Z"}]
+09182034-us-se	p03-mirror-and-migration	INFO	Labels / milestones after migration	1 labels, 1 milestones
+09182034-us-se	p04-issues-sudo	CONFIRMED	An issue created with Sudo: bob is authored by bob	author=bob
+09182034-us-se	p04-issues-sudo	CONFIRMED	The issue's created_at can't be set (it gets the current time)	sent created_at=2020-01-02T03:04:05Z, got 2026-09-18T20:39:22Z
+09182034-us-se	p04-issues-sudo	CONFIRMED	Only site admins can use sudo (so ForgeSync needs a site-admin token)	non-admin token + Sudo -> HTTP 403 Only administrators allowed to sudo.
+09182034-us-se	p04-issues-sudo	INFO	Setting updated_at before the issue was created	HTTP 403: user needs to have admin or repository owner right to set an update date
+09182034-us-se	p04-issues-sudo	REFUTED	An edit made with Sudo: bob (not the owner) can set updated_at	HTTP 403 user needs to have admin or repository owner right to set an update date
+09182034-us-se	p04-issues-sudo	CONFIRMED	An edit made as forgesync (site admin, no sudo) can set updated_at, within creation..now	HTTP 201; updated_at=2026-09-18T20:39:22Z . So the author (sudo) and the timestamp can't both be kept, and history can't be backdated.
+09182034-us-se	p04-issues-sudo	CONFIRMED	A comment made with Sudo: carol is carol's	HTTP 201 ; created_at=2026-09-18T20:39:22Z
+09182034-us-se	p04-issues-sudo	INFO	Next issue number on each node	DK gave #1, SE gave #2
+09182034-us-se	p04-issues-sudo	CONFIRMED	Nodes number issues independently, so concurrent issues on two nodes can collide	SE already had issues up to #2; DK started at #1 and continued with #2. Any issue created on a replica takes a number the primary may also use.
+09182034-us-se	p05-webhooks	CONFIRMED	git push sends a webhook	received: push by forgesync
+09182034-us-se	p05-webhooks	CONFIRMED	create branch (API) sends a webhook	received: create by forgesync, push by forgesync
+09182034-us-se	p05-webhooks	CONFIRMED	delete branch (API) sends a webhook	received: delete by forgesync
+09182034-us-se	p05-webhooks	CONFIRMED	create issue (sudo alice) sends a webhook	received: issues/opened by alice
+09182034-us-se	p05-webhooks	CONFIRMED	edit issue title sends a webhook	received: issues/edited by forgesync
+09182034-us-se	p05-webhooks	CONFIRMED	comment on issue sends a webhook	received: issue_comment/created by forgesync
+09182034-us-se	p05-webhooks	CONFIRMED	edit comment sends a webhook	received: issue_comment/edited by forgesync
+09182034-us-se	p05-webhooks	CONFIRMED	create repo label sends no webhook (must be found by polling)	received: nothing
+09182034-us-se	p05-webhooks	CONFIRMED	edit repo label sends no webhook (must be found by polling)	received: nothing
+09182034-us-se	p05-webhooks	CONFIRMED	add label to issue sends a webhook	received: issue_label/label_updated by forgesync
+09182034-us-se	p05-webhooks	CONFIRMED	create milestone sends no webhook (must be found by polling)	received: nothing
+09182034-us-se	p05-webhooks	CONFIRMED	edit milestone sends no webhook (must be found by polling)	received: nothing
+09182034-us-se	p05-webhooks	CONFIRMED	set issue milestone sends a webhook	received: issue_milestone/milestoned by forgesync
+09182034-us-se	p05-webhooks	CONFIRMED	add reaction sends no webhook (must be found by polling)	received: nothing
+09182034-us-se	p05-webhooks	CONFIRMED	close issue sends a webhook	received: issues/closed by forgesync
+09182034-us-se	p05-webhooks	CONFIRMED	create release sends a webhook	received: push by forgesync, create by forgesync, release/published by forgesync
+09182034-us-se	p05-webhooks	CONFIRMED	create wiki page sends a webhook	received: wiki/created by forgesync
+09182034-us-se	p05-webhooks	CONFIRMED	change repo description sends no webhook (must be found by polling)	received: nothing
+09182034-us-se	p05-webhooks	CONFIRMED	add collaborator sends no webhook (must be found by polling)	received: nothing
+09182034-us-se	p05-webhooks	CONFIRMED	add branch protection sends no webhook (must be found by polling)	received: nothing
+09182034-us-se	p05-webhooks	CONFIRMED	Every delivery carries a valid HMAC-SHA256 signature	15/15 valid; headers: X-Forgejo-Signature, X-Gitea-Signature, X-Gogs-Signature, X-Hub-Signature
+09182034-us-se	p05-webhooks	CONFIRMED	A replicated git push shows forgesync as the pusher (so loop prevention can filter it)	pusher=forgesync
+09182034-us-se	p05-webhooks	CONFIRMED	An issue replicated with Sudo: bob shows bob as the sender, so it can't be told apart from bob's own edits	sender=bob. Loop prevention then needs an expected-change record, not a sender filter.
+09182034-us-se	p06-pull-requests	CONFIRMED	The replicated PR gets the same number on both nodes (when no issue was created in between)	SE #1, DK #1. PRs share the issue number sequence, so any issue on a replica shifts them.
+09182034-us-se	p06-pull-requests	CONFIRMED	A review replicated with Sudo: carol is carol's approval	HTTP 200; {"user":"carol","state":"APPROVED","submitted_at":"2026-09-18T20:41:33Z"}
+09182034-us-se	p06-pull-requests	INFO	DK PR after the merged main arrives	open merged=false sha=- by=- (SE merge commit 956dd5339e6b267fddb2f04e2edcf9184a6fdc98)
+09182034-us-se	p06-pull-requests	INFO	Do=manually-merged with the repo's default settings	HTTP 405 manually-merged is not an allowed merge style for this repository
+09182034-us-se	p06-pull-requests	CONFIRMED	With allow_manual_merge on, Do=manually-merged (Sudo: alice) marks the DK PR merged with SE's merge commit	HTTP 200 ; now: closed merged=true sha=956dd5339e6b267fddb2f04e2edcf9184a6fdc98 by=alice
+09182034-us-se	p06-pull-requests	CONFIRMED	The manual merge is credited to the sudo user (alice), not forgesync	closed merged=true sha=956dd5339e6b267fddb2f04e2edcf9184a6fdc98 by=alice
+09182034-us-se	p06-pull-requests	CONFIRMED	No second merge commit was created on DK (main is still SE's merge commit)	DK main=956dd5339e6b267fddb2f04e2edcf9184a6fdc98
+09182034-us-se	p06-pull-requests	INFO	Repeating manually-merged on an already merged PR	HTTP 405  (whether a retried replication is harmless)
+09182034-us-se	p06-pull-requests	CONFIRMED	With autodetect on, DK marks the PR merged by itself once the merged main arrives	closed merged=true sha=00c1e5f120279f912e6cb88b59dd8002779eebd3 by=alice (SE merge commit 00c1e5f120279f912e6cb88b59dd8002779eebd3; merged_by shows who Forgejo credits)
+09182034-us-se	p06-pull-requests	INFO	PR refs Forgejo maintains on DK	refs/pull/1/head refs/pull/2/head 
+09182034-us-se	p06-pull-requests	CONFIRMED	ForgeSync can't push refs/pull/* (Forgejo owns them; replication must exclude them)	exit 1:  ! [remote rejected] HEAD -> refs/pull/999/head (deny updating a hidden ref) error: failed to push some refs to 'http://forgejo-se.test:3001/alice/p06-09182034-us-se.git' 
+09182034-us-se	p07-ssh-keys	CONFIRMED	ForgeSync can read a key alice added herself on SE	[{"id":1,"title":"laptop-09182034-us-se","fingerprint":"SHA256:oDXXKoXu8Hzkiqv+6UHBJfax6h+UWc7BO1MPzn7HZTw"}]
+09182034-us-se	p07-ssh-keys	CONFIRMED	ForgeSync can add the same key for alice on DK through the admin API	HTTP 201 
+09182034-us-se	p07-ssh-keys	CONFIRMED	Alice can clone over SSH on DK with the copied key	
+09182034-us-se	p07-ssh-keys	CONFIRMED	Alice can push over SSH on DK with the copied key	
+09182034-us-se	p07-ssh-keys	CONFIRMED	The same key can't be added to a second user on the same node	HTTP 422 Key content has been used as non-deploy key. ForgeSync must treat this as a conflict, not retry.
+09182034-us-se	p07-ssh-keys	CONFIRMED	Keys can be added for a pre-created user who has never logged in	HTTP 201 
+09182034-us-se	p07-ssh-keys	CONFIRMED	After the admin API deletes the key, SSH access on DK stops	DELETE HTTP 204; ls-remote exit 128: fatal: Could not read from remote repository. 
+09182034-us-se	p07-ssh-keys	INFO	Configured SceneID claim 'ssh_public_keys' and set it as the DK login source's SSH key attribute	source id 1
+09182034-us-se	p07-ssh-keys	INFO	Stored a key in the SceneID user's 'sshkeys' attribute	HTTP 204
+09182034-us-se	p07-ssh-keys	CONFIRMED	First login creates the user with the key from the claim	landed on http://forgejo-se.test:3001/; keys on DK: 1
+09182034-us-se	p07-ssh-keys	CONFIRMED	After the key is removed in SceneID, the next login removes it on DK	SceneID update HTTP 204; landed on http://forgejo-se.test:3001/
+09182034-us-se	p07-ssh-keys	CONFIRMED	A key ForgeSync added through the admin API survives that login sync	keys now on DK: 1
+09182034-us-se	p07-ssh-keys	INFO	The DK login source's SSH key attribute is reset when this probe exits	so other probes see the default configuration
+09182034-us-se	p08-deprovisioning	INFO	Access before any change	token SE:p08u09182034-us-se | token DK:p08u09182034-us-se | session SE:p08u09182034-us-se | session DK:p08u09182034-us-se | SSH DK:p08u09182034-us-se
+09182034-us-se	p08-deprovisioning	CONFIRMED	Before deprovisioning, token, session and SSH access all work (sanity check)	token SE:p08u09182034-us-se | token DK:p08u09182034-us-se | session SE:p08u09182034-us-se | session DK:p08u09182034-us-se | SSH DK:p08u09182034-us-se
+09182034-us-se	p08-deprovisioning	CONFIRMED	ForgeSync's SceneID client can disable a user	HTTP 204
+09182034-us-se	p08-deprovisioning	CONFIRMED	A new SceneID login is refused	ended at http://sceneid.test:8080/realms/sceneid/login-actions/authenticate?session_code=gNg4VPDtJFFN93lXLnPt39SOn82F65Wk3_A24cCD0jQ&execution=d75867ba-1014-4f73-aef6-ccbdd2e5eb18&client_id=forgejo&tab_id=A9PZVeN4QUc&client_data=eyJydSI6Imh0dHA6Ly9mb3JnZWpvLXNlLnRlc3Q6MzAwMS91c2VyL29hdXRoMi9TY2VuZUlEL2NhbGxiYWNrIiwicnQiOiJjb2RlIiwic3QiOiI5M2E5MDRlNC01MzRmLTQ2ODgtYWRhNS0wMDY3OWMxYzU5ZjYifQ
+09182034-us-se	p08-deprovisioning	INFO	Access after disabling in SceneID	token SE:p08u09182034-us-se | token DK:p08u09182034-us-se | session SE:p08u09182034-us-se | session DK:p08u09182034-us-se | SSH DK:p08u09182034-us-se
+09182034-us-se	p08-deprovisioning	CONFIRMED	Existing tokens, sessions and SSH keys keep working after SceneID disables the user (the gap ForgeSync must close)	token SE:p08u09182034-us-se | token DK:p08u09182034-us-se | session SE:p08u09182034-us-se | session DK:p08u09182034-us-se | SSH DK:p08u09182034-us-se
+09182034-us-se	p08-deprovisioning	CONFIRMED	ForgeSync can find disabled users by polling SceneID (users?enabled=false)	
+09182034-us-se	p08-deprovisioning	CONFIRMED	Admin API sets prohibit_login on se	HTTP 200 
+09182034-us-se	p08-deprovisioning	CONFIRMED	Admin API sets prohibit_login on dk	HTTP 200 
+09182034-us-se	p08-deprovisioning	INFO	Access after prohibit_login	token SE:no | token DK:no | session SE:no | session DK:no | SSH DK:no
+09182034-us-se	p08-deprovisioning	CONFIRMED	prohibit_login cuts off tokens, sessions and SSH on both nodes	token SE:no | token DK:no | session SE:no | session DK:no | SSH DK:no
+09182034-us-se	p08-deprovisioning	INFO	Access after re-enabling	token SE:p08u09182034-us-se | token DK:p08u09182034-us-se | session SE:p08u09182034-us-se | session DK:p08u09182034-us-se | SSH DK:p08u09182034-us-se
+09182034-us-se	p08-deprovisioning	CONFIRMED	Re-enabling in SceneID and clearing prohibit_login restores access, with the same tokens and keys	token SE:p08u09182034-us-se | token DK:p08u09182034-us-se | session SE:p08u09182034-us-se | session DK:p08u09182034-us-se | SSH DK:p08u09182034-us-se

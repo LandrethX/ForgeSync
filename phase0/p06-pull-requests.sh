@@ -79,15 +79,21 @@ st=$(pr_state dk "$PR_DK")
 info "DK PR after the merged main arrives" "$st (SE merge commit $M)"
 
 api POST dk "/repos/$REPO/pulls/$PR_DK/merge" "$(jq -nc --arg m "$M" '{Do:"manually-merged", MergeCommitID:$m}')" >/dev/null
+info "Do=manually-merged with the repo's default settings" "HTTP $(status) $(api_msg)"
+
+must PATCH dk "/repos/$REPO" '{"allow_manual_merge":true}' >/dev/null
+SUDO=alice api POST dk "/repos/$REPO/pulls/$PR_DK/merge" "$(jq -nc --arg m "$M" '{Do:"manually-merged", MergeCommitID:$m}')" >/dev/null
 code=$(status); msg=$(api_msg)
 st=$(pr_state dk "$PR_DK")
-hyp "Do=manually-merged marks the DK PR merged with SE's merge commit" \
+hyp "With allow_manual_merge on, Do=manually-merged (Sudo: alice) marks the DK PR merged with SE's merge commit" \
   "$(printf '%s' "$st" | grep -q "merged=true sha=$M" && echo true || echo false)" "HTTP $code $msg; now: $st"
+hyp "The manual merge is credited to the sudo user (alice), not forgesync" \
+  "$(printf '%s' "$st" | grep -q "by=alice" && echo true || echo false)" "$st"
 dk_main=$(branch_sha dk "$REPO" main)
 hyp "No second merge commit was created on DK (main is still SE's merge commit)" "$(is "$dk_main" "$M")" "DK main=$dk_main"
 
-SUDO=alice api POST dk "/repos/$REPO/pulls/$PR_DK/merge" "$(jq -nc --arg m "$M" '{Do:"manually-merged", MergeCommitID:$m}')" >/dev/null
-info "manually-merged with Sudo: alice (to credit the real merger)" "HTTP $(status) $(api_msg) (merged_by is already set by the call above; this shows whether a repeat is rejected)"
+api POST dk "/repos/$REPO/pulls/$PR_DK/merge" "$(jq -nc --arg m "$M" '{Do:"manually-merged", MergeCommitID:$m}')" >/dev/null
+info "Repeating manually-merged on an already merged PR" "HTTP $(status) $(api_msg) (whether a retried replication is harmless)"
 
 # ------------------------------------------------------------------------------------
 section "Merge replicated, autodetect_manual_merge on"
@@ -98,7 +104,7 @@ M=$(merge_on_se "$PR_SE")
 st=$(pr_state dk "$PR_DK")
 hyp "With autodetect on, DK marks the PR merged by itself once the merged main arrives" \
   "$(printf '%s' "$st" | grep -q 'merged=true' && echo true || echo false)" \
-  "$st (SE merge commit $M; merged_by shows who Forgejo credits - probably the pusher, forgesync)"
+  "$st (SE merge commit $M; merged_by shows who Forgejo credits)"
 
 # ------------------------------------------------------------------------------------
 section "PR refs"

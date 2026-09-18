@@ -44,7 +44,7 @@ if [ "$(ok_status)" = true ]; then
 pre_id=$(printf '%s' "$pre" | jq -r .id)
 final=$(sceneid_login dk "$U_SRC" "$U_SRC-pw" "$WORK/jar-b")
 who=$(session_login "$WORK/jar-b" dk)
-after_id=$(api GET dk "/users/$who" | jq -r '.id // empty')
+after_id=""; [ -n "$who" ] && after_id=$(api GET dk "/users/$who" | jq -r '.id // empty')
 dups=$(admin_users dk | jq -r --arg u "$U_SRC" '[.[] | select(.login | startswith($u))] | length')
 attached=false
 if [ "$after_id" = "$pre_id" ] && [ "$dups" = 1 ] && ! printf '%s' "$final" | grep -q link_account; then attached=true; fi
@@ -62,7 +62,7 @@ final=$(sceneid_login dk "$U_LOCAL" "$U_LOCAL-pw" "$WORK/jar-c")
 who=$(session_login "$WORK/jar-c" dk)
 after=$(admin_users dk | jq -c --arg u "$U_LOCAL" '[.[] | select(.login | startswith($u)) | {id, login, source_id, login_name}]')
 hyp "ACCOUNT_LINKING=auto links SceneID to a pre-created local account" \
-  "$( [ "$(api GET dk "/users/$who" | jq -r '.id // empty')" = "$pre_id" ] && echo true || echo false)" \
+  "$( [ -n "$who" ] && [ "$(api GET dk "/users/$who" | jq -r '.id // empty')" = "$pre_id" ] && echo true || echo false)" \
   "landed on $final; session user '$who'; accounts now: $after"
 info "After linking, the account's source_id/login_name" "$after (source_id 0 means it is still a local account and keeps its local password)"
 

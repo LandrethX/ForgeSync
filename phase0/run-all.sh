@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 # Runs every Phase 0 probe (or the ones named) and writes a Markdown report.
 #
-# Usage: ./run-all.sh               # all probes
+# Usage: ./run-all.sh               # all probes, SE as node A and DK as node B
 #        ./run-all.sh p02 p05       # only these
+#        NODE_A=de NODE_B=uk ./run-all.sh   # another pair; the probes' "SE"/"DK"
+#                                          # labels then mean node A / node B
 set -uo pipefail
 cd "$(dirname "$0")"
 
-export RUN_ID=${RUN_ID:-$(date +%m%d%H%M%S)}
+export NODE_A=${NODE_A:-se} NODE_B=${NODE_B:-dk}
+export RUN_ID=${RUN_ID:-$(date +%m%d%H%M%S)-$NODE_A-$NODE_B}
 export RESULTS=results/run-$RUN_ID.tsv
 REPORT=results/run-$RUN_ID.md
 mkdir -p results
+
+node_a_url() {
+  case $NODE_A in se) echo http://forgejo-se.test:3001;; dk) echo http://forgejo-dk.test:3002;;
+    de) echo http://forgejo-de.test:3003;; uk) echo http://forgejo-uk.test:3004;; us) echo http://forgejo-us.test:3005;; esac
+}
 
 probes=$(ls p[0-9][0-9]-*.sh)
 if [ $# -gt 0 ]; then
@@ -26,7 +34,9 @@ done
 {
   echo "# ForgeSync Phase 0 results, run $RUN_ID"
   echo
-  echo "Forgejo $(curl -fsS http://forgejo-se.test:3001/api/v1/version | jq -r .version), generated $(date '+%Y-%m-%d %H:%M')."
+  echo "Forgejo $(curl -fsS "$(node_a_url)/api/v1/version" | jq -r .version), generated $(date '+%Y-%m-%d %H:%M')."
+  echo
+  echo "Node A (called SE in the checks): **$NODE_A**. Node B (called DK in the checks): **$NODE_B**."
   echo
   echo "CONFIRMED / REFUTED: whether the stated hypothesis held. INFO: an observed fact. ERROR: the probe itself failed."
   echo

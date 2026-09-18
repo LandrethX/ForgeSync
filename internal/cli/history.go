@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -29,6 +31,8 @@ type historyFlags struct {
 	details    bool
 	export     string
 	file       string
+	follow     bool
+	interval   time.Duration
 }
 
 func historyCommand(o *options) *cobra.Command {
@@ -42,7 +46,9 @@ func historyCommand(o *options) *cobra.Command {
 		Example: "  forgesync history --since 24h\n" +
 			"  forgesync history --category node -q unreachable --since 7d\n" +
 			"  forgesync history --actor sceneid:alice --from 2026-09-01 --to 2026-09-30\n" +
-			"  forgesync history --category session --since 30d --export csv --file sign-ins.csv",
+			"  forgesync history --category session --since 30d --export csv --file sign-ins.csv\n" +
+			"  forgesync history -f -c node,conflict\n" +
+			"  forgesync history -f -o json | jq -r .action",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			params, err := f.params(time.Now())
@@ -51,6 +57,9 @@ func historyCommand(o *options) *cobra.Command {
 			}
 			if f.export != "" {
 				return f.runExport(cmd, o, params)
+			}
+			if f.follow {
+				return f.runFollow(cmd, o, params)
 			}
 			events, more, err := fetchHistory(cmd.Context(), o, params, f.limit)
 			if err != nil {
@@ -82,7 +91,11 @@ func historyCommand(o *options) *cobra.Command {
 	fl.BoolVar(&f.details, "details", false, "add a column with each entry's details")
 	fl.StringVar(&f.export, "export", "", "export everything that matches as csv or json (ignores --limit, max 50,000 rows); the export is audited")
 	fl.StringVar(&f.file, "file", "", "with --export: write to this file instead of standard output")
+	fl.BoolVarP(&f.follow, "follow", "f", false, "keep running and print new entries as they happen (oldest first; Ctrl-C to stop)")
+	fl.DurationVar(&f.interval, "interval", 2*time.Second, "with --follow: how often to check for new entries")
 	cmd.MarkFlagsMutuallyExclusive("since", "from")
+	cmd.MarkFlagsMutuallyExclusive("follow", "export")
+	cmd.MarkFlagsMutuallyExclusive("follow", "to")
 	return cmd
 }
 
@@ -127,6 +140,9 @@ func (f *historyFlags) params(now time.Time) (url.Values, error) {
 	}
 	if f.file != "" && f.export == "" {
 		return nil, errors.New("--file needs --export")
+	}
+	if f.follow && f.interval < time.Second {
+		return nil, errors.New("--interval must be at least 1s")
 	}
 	return v, nil
 }
@@ -243,4 +259,24 @@ func (f *historyFlags) runExport(cmd *cobra.Command, o *options, params url.Valu
 		fmt.Fprintf(cmd.ErrOrStderr(), "wrote %d bytes to %s\n", n, f.file)
 	}
 	return nil
+}
+
+func (f *historyFlags) runFollow(cmd *cobra.Command, o *options, params url.Values) error {
+	// The time window moves while following; keep only the user's start.
+	var from time.Time
+	if v := params.Get("from"); v != "" {
+		from, _ = time.Parse(time.RFC3339, v)
+		params.Del("from")
+	}
+	initial := f.limit
+	if !cmd.Flags().Changed("limit") {
+		initial = 10 // like tail -f
+	}
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	fw := &follower{
+		o: o, params: params, from: from, jsonOut: o.output == "json", details: f.details,
+		out: cmd.OutOrStdout(), err: cmd.ErrOrStderr(), interval: f.interval,
+	}
+	return fw.run(ctx, initial)
 }

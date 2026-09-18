@@ -321,9 +321,19 @@ func (o *options) send(ctx context.Context, method, path string, in any, timeout
 		defer resp.Body.Close()
 		var e struct{ Message string }
 		_ = json.NewDecoder(resp.Body).Decode(&e)
-		return nil, fmt.Errorf("%s: %s %s", path, resp.Status, e.Message)
+		return nil, &httpError{Path: path, Status: resp.Status, Code: resp.StatusCode, Message: e.Message}
 	}
 	return resp, nil
+}
+
+// httpError is a non-200 answer from the controller.
+type httpError struct {
+	Path, Status, Message string
+	Code                  int
+}
+
+func (e *httpError) Error() string {
+	return strings.TrimSpace(fmt.Sprintf("%s: %s %s", e.Path, e.Status, e.Message))
 }
 
 func envOr(key, def string) string {

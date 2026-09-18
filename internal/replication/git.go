@@ -206,7 +206,16 @@ func parsePorcelain(out string) map[string]PushResult {
 
 func notFound(stderr string) bool {
 	s := strings.ToLower(stderr)
-	return strings.Contains(s, "not found") || strings.Contains(s, "404") || strings.Contains(s, "does not exist")
+	if strings.Contains(s, "not found") || strings.Contains(s, "404") || strings.Contains(s, "does not exist") {
+		return true
+	}
+	// A redirect means the name moved: not here under this name.
+	for _, code := range []string{"301", "302", "307", "308"} {
+		if strings.Contains(s, "returned error: "+code) {
+			return true
+		}
+	}
+	return false
 }
 
 // run executes git with a clean environment: no user or system config, no
@@ -237,10 +246,17 @@ func (g *Git) run(ctx context.Context, dir string, auth *Remote, args ...string)
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 	}
+	// Never follow redirects: ForgeSync addresses repositories by their exact
+	// name, and Forgejo redirects an old name after a rename or transfer
+	// (e.g. to the archived copy of a deleted repository).
+	cfg := [][2]string{{"http.followRedirects", "false"}}
 	if auth != nil && auth.Token != "" {
 		basic := base64.StdEncoding.EncodeToString([]byte(auth.User + ":" + auth.Token))
-		env = append(env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader",
-			"GIT_CONFIG_VALUE_0=Authorization: Basic "+basic)
+		cfg = append(cfg, [2]string{"http.extraHeader", "Authorization: Basic " + basic})
+	}
+	env = append(env, fmt.Sprintf("GIT_CONFIG_COUNT=%d", len(cfg)))
+	for i, kv := range cfg {
+		env = append(env, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, kv[0]), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, kv[1]))
 	}
 	cmd.Env = env
 	var stdout, stderr bytes.Buffer

@@ -2,6 +2,8 @@ package replication
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,5 +167,21 @@ func TestParsePorcelain(t *testing.T) {
 	if len(res) != 5 || !res["refs/heads/main"].OK || !res["refs/heads/gone"].OK || !res["refs/tags/v1"].OK ||
 		res["refs/heads/x"].OK || res["refs/heads/x"].Reason != "[rejected] (stale info)" {
 		t.Errorf("parsed = %+v", res)
+	}
+}
+
+// A git URL that redirects (an old name after a rename or transfer) counts as
+// not found, instead of being followed to wherever it points.
+func TestLsRemoteDoesNotFollowRedirects(t *testing.T) {
+	target := newGitNode(t)
+	target.create("forgesync-archive/alice--demo--x")
+	moved := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.srv.URL+"/forgesync-archive/alice--demo--x.git"+strings.TrimPrefix(r.URL.Path, "/alice/demo.git"),
+			http.StatusMovedPermanently)
+	}))
+	defer moved.Close()
+	_, err := testGit(t).LsRemote(bg(), Remote{URL: moved.URL + "/alice/demo.git", User: testUser, Token: testToken})
+	if !errors.Is(err, ErrRepoNotFound) {
+		t.Errorf("err = %v, want ErrRepoNotFound", err)
 	}
 }

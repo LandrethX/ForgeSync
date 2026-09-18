@@ -153,3 +153,26 @@ func TestCommitsAhead(t *testing.T) {
 		t.Error("server error not reported")
 	}
 }
+
+// Forgejo redirects an old repository name after a rename or transfer; for
+// ForgeSync that name is simply not there.
+func TestRedirectIsNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/repos/alice/deltest" {
+			http.Redirect(w, r, "/api/v1/repos/forgesync-archive/alice--deltest--x", http.StatusMovedPermanently)
+			return
+		}
+		w.Write([]byte(`{"full_name":"forgesync-archive/alice--deltest--x"}`))
+	}))
+	defer srv.Close()
+	c, err := New(srv.URL, "secret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := c.GetRepo(context.Background(), "alice", "deltest"); err != nil || found {
+		t.Errorf("found %v, err %v; want not found", found, err)
+	}
+	if err := c.DeleteRepo(context.Background(), "alice", "deltest"); err != nil {
+		t.Errorf("delete of a redirected name: %v", err)
+	}
+}

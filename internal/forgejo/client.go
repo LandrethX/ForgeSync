@@ -37,7 +37,13 @@ func New(baseURL, token string, httpClient *http.Client) (*Client, error) {
 		return nil, err
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 30 * time.Second}
+		httpClient = &http.Client{
+			Timeout: 30 * time.Second,
+			// Forgejo redirects an old repository name after a rename or
+			// transfer; ForgeSync means the exact name, so a redirect is
+			// "not here" (see isNotFound), not the repository it points to.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
 	}
 	return &Client{base: u, token: token, http: httpClient}, nil
 }
@@ -262,10 +268,18 @@ func (c *Client) CommitsAhead(ctx context.Context, owner, repo, base, head strin
 	return res.TotalCommits, true, nil
 }
 
-// isNotFound reports whether err is a 404 from Forgejo.
+// isNotFound reports whether err is a 404 from Forgejo, or a redirect: an
+// old name that now points elsewhere isn't the repository asked for.
 func isNotFound(err error) bool {
 	var apiErr *APIError
-	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.StatusCode {
+	case http.StatusNotFound, http.StatusMovedPermanently, http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		return true
+	}
+	return false
 }
 
 // IsConflict reports whether err is a 409 or 422 from Forgejo, which it

@@ -217,7 +217,7 @@ func TestConflicts(t *testing.T) {
 	demo, tools := recs[0].ID, recs[1].ID
 	diverged := FoundConflict{RepositoryID: demo, Kind: "git_diverged", Ref: "refs/heads/main", Details: map[string]any{"heads": map[string]any{"se": "a", "dk": "b"}}}
 
-	changes, err := s.SyncConflicts(ctx, []FoundConflict{diverged}, []string{demo, tools}, t0)
+	changes, err := s.SyncConflicts(ctx, []FoundConflict{diverged}, []string{demo, tools}, nil, t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,11 +226,11 @@ func TestConflicts(t *testing.T) {
 	}
 	// Found again: refreshed, not reopened.
 	diverged.Details = map[string]any{"heads": map[string]any{"se": "a2", "dk": "b"}}
-	if changes, err = s.SyncConflicts(ctx, []FoundConflict{diverged}, []string{demo}, t0.Add(time.Minute)); err != nil || len(changes) != 0 {
+	if changes, err = s.SyncConflicts(ctx, []FoundConflict{diverged}, []string{demo}, nil, t0.Add(time.Minute)); err != nil || len(changes) != 0 {
 		t.Fatalf("second sync = %+v, %v", changes, err)
 	}
 	// Not concluded for demo this time (not in checked): stays open.
-	if changes, err = s.SyncConflicts(ctx, nil, []string{tools}, t0.Add(2*time.Minute)); err != nil || len(changes) != 0 {
+	if changes, err = s.SyncConflicts(ctx, nil, []string{tools}, nil, t0.Add(2*time.Minute)); err != nil || len(changes) != 0 {
 		t.Fatalf("unchecked repo = %+v, %v", changes, err)
 	}
 	items, total, counts, err := s.Conflicts(ctx, ConflictFilter{State: "open", Limit: 10})
@@ -250,7 +250,7 @@ func TestConflicts(t *testing.T) {
 	}
 
 	// Checked and not found: cleared.
-	changes, err = s.SyncConflicts(ctx, nil, []string{demo}, t0.Add(3*time.Minute))
+	changes, err = s.SyncConflicts(ctx, nil, []string{demo}, nil, t0.Add(3*time.Minute))
 	if err != nil || len(changes) != 1 || changes[0].Change != "cleared" {
 		t.Fatalf("clearing = %+v, %v", changes, err)
 	}
@@ -259,7 +259,7 @@ func TestConflicts(t *testing.T) {
 		t.Fatalf("cleared conflict = %+v, %v", c, err)
 	}
 	// It can come back as a new conflict.
-	if changes, _ = s.SyncConflicts(ctx, []FoundConflict{diverged}, []string{demo}, t0.Add(4*time.Minute)); len(changes) != 1 {
+	if changes, _ = s.SyncConflicts(ctx, []FoundConflict{diverged}, []string{demo}, nil, t0.Add(4*time.Minute)); len(changes) != 1 {
 		t.Fatalf("reopening = %+v", changes)
 	}
 	_, total, counts, _ = s.Conflicts(ctx, ConflictFilter{RepositoryID: demo, Limit: 10})
@@ -268,6 +268,14 @@ func TestConflicts(t *testing.T) {
 	}
 	if n, err := s.OpenConflicts(ctx); err != nil || n != 1 {
 		t.Errorf("open count = %d, %v", n, err)
+	}
+
+	// A check scoped to other kinds doesn't clear this one.
+	if changes, _ = s.SyncConflicts(ctx, nil, []string{demo}, []string{"default_branch_mismatch"}, t0.Add(5*time.Minute)); len(changes) != 0 {
+		t.Errorf("a scoped check cleared another kind: %+v", changes)
+	}
+	if changes, _ = s.SyncConflicts(ctx, nil, []string{demo}, []string{"git_diverged"}, t0.Add(6*time.Minute)); len(changes) != 1 {
+		t.Errorf("a check for this kind should clear it: %+v", changes)
 	}
 }
 
@@ -380,5 +388,64 @@ func TestHistory(t *testing.T) {
 	actors, err := s.HistoryActors(ctx)
 	if err != nil || strings.Join(actors, ",") != "forgesync,sceneid:alice,sceneid:bob" {
 		t.Errorf("actors = %v, %v", actors, err)
+	}
+}
+
+func TestReplicaSync(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncNodes(ctx, []NodeRecord{{Name: "se", URL: "http://se"}, {Name: "dk", URL: "http://dk"}}); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	if err := s.RecordNodeScan(ctx, "se", t0, t0, []ScannedRepo{{FullName: "alice/demo"}}); err != nil {
+		t.Fatal(err)
+	}
+	recs, _ := s.Repositories(ctx)
+	id := recs[0].ID
+	if _, err := s.SetPrimary(ctx, id, "se"); err != nil {
+		t.Fatal(err)
+	}
+
+	save := func(state string, at time.Time, refs map[string]string) {
+		t.Helper()
+		if err := s.SaveReplicaSync(ctx, ReplicaSync{RepositoryID: id, Node: "dk", State: state, LastAttemptAt: at, RefsUpdated: 2}, refs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save("synced", t0, map[string]string{"refs/heads/main": "aaa", "refs/tags/v1": "ttt"})
+	save("conflict", t0.Add(time.Minute), nil) // refs untouched
+	save("error", t0.Add(2*time.Minute), nil)
+
+	st, err := s.ReplicaSyncs(ctx, id)
+	if err != nil || len(st) != 1 {
+		t.Fatalf("syncs = %+v, %v", st, err)
+	}
+	if st[0].State != "error" || !st[0].LastSuccessAt.Equal(t0) || !st[0].OutOfSyncSince.Equal(t0.Add(time.Minute)) {
+		t.Errorf("streak should start at the first non-synced attempt: %+v", st[0])
+	}
+	refs, _ := s.ReplicatedRefs(ctx, id, "dk")
+	if len(refs) != 2 || refs["refs/heads/main"] != "aaa" {
+		t.Errorf("refs kept across attempts without refs: %v", refs)
+	}
+
+	save("synced", t0.Add(3*time.Minute), map[string]string{"refs/heads/main": "bbb"})
+	st, _ = s.ReplicaSyncs(ctx, id)
+	refs, _ = s.ReplicatedRefs(ctx, id, "dk")
+	if st[0].OutOfSyncSince != nil || !st[0].LastSuccessAt.Equal(t0.Add(3*time.Minute)) || len(refs) != 1 || refs["refs/heads/main"] != "bbb" {
+		t.Errorf("after success: %+v, refs %v", st[0], refs)
+	}
+
+	counts, err := s.ReplicationCounts(ctx)
+	if err != nil || counts["synced"] != 1 {
+		t.Errorf("counts = %v, %v", counts, err)
+	}
+	// If dk becomes the primary, its old replica row no longer counts.
+	s.SetPrimary(ctx, id, "dk")
+	if counts, _ = s.ReplicationCounts(ctx); len(counts) != 0 {
+		t.Errorf("counts after primary change = %v", counts)
 	}
 }

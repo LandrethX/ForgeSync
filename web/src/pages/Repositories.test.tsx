@@ -103,3 +103,53 @@ describe("RepositoryDetail", () => {
     expect(call[1].body).toBe(JSON.stringify({ node: "dk" }));
   });
 });
+
+describe("ReplicationPanel", () => {
+  const withReplication = (enabled: boolean): Repository => ({
+    ...demo,
+    primary_node: "dk",
+    replication: {
+      enabled,
+      replicas: [
+        { node: "se", state: "conflict", detail: "1 ref(s) need a person; see Conflicts", last_attempt_at: "2026-09-18T10:00:00Z", out_of_sync_since: "2026-09-18T09:00:00Z", refs_updated: 2 },
+      ],
+    },
+  });
+
+  function mockRepo(repo: Repository) {
+    const fn = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = url.replace(/^\/api\/v1/, "");
+      if (path === `/repositories/${repo.id}` && (init?.method ?? "GET") === "GET") return new Response(JSON.stringify(repo));
+      if (path.endsWith("/replicate")) return new Response(JSON.stringify({ queued: true, running: false }), { status: 202 });
+      if (path.startsWith("/conflicts?")) return new Response(JSON.stringify({ total: 0, counts: {}, items: [] }));
+      return new Response("{}");
+    });
+    vi.stubGlobal("fetch", fn);
+    return fn;
+  }
+
+  it("says when replication is off", async () => {
+    mockRepo(withReplication(false));
+    render(wrap("administrator", <RepositoryDetail id={demo.id} />));
+    expect(await screen.findByText(/replication.enabled in its config/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Replicate now" })).toBeNull();
+  });
+
+  it("shows each replica's state with a label and detail", async () => {
+    mockRepo(withReplication(true));
+    render(wrap("viewer", <RepositoryDetail id={demo.id} />));
+    const row = (await screen.findByText("Conflict")).closest("tr")!;
+    expect(within(row).getByText("1 ref(s) need a person; see Conflicts")).toBeTruthy();
+    expect(within(row).getByText("Never")).toBeTruthy(); // never in sync
+    expect(screen.queryByRole("button", { name: "Replicate now" })).toBeNull(); // viewers can't
+  });
+
+  it("lets operators start replication", async () => {
+    const fetch = mockRepo(withReplication(true));
+    render(wrap("operator", <RepositoryDetail id={demo.id} />));
+    await userEvent.click(await screen.findByRole("button", { name: "Replicate now" }));
+    expect(await screen.findByText("Replication started.")).toBeTruthy();
+    const call = fetch.mock.calls.find(([u]) => (u as string).endsWith("/replicate")) as unknown as [string, RequestInit];
+    expect(call[1].method).toBe("POST");
+  });
+});

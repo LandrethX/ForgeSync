@@ -41,6 +41,8 @@ type DB interface {
 	ConflictByID(ctx context.Context, id int64) (store.Conflict, error)
 	AcknowledgeConflict(ctx context.Context, id int64, actor, note string, at time.Time) error
 	OpenConflicts(ctx context.Context) (int, error)
+	ReplicaSyncs(ctx context.Context, repositoryID string) ([]store.ReplicaSync, error)
+	ReplicationCounts(ctx context.Context) (map[string]int, error)
 	History(ctx context.Context, f store.EventFilter) ([]store.Event, string, error)
 	HistoryEach(ctx context.Context, f store.EventFilter, max int, fn func(store.Event) error) error
 	HistoryActors(ctx context.Context) ([]string, error)
@@ -74,6 +76,7 @@ type Server struct {
 	Nodes            []NodeInfo
 	Health           HealthSource
 	Inventory        Inventory
+	Replication      Replicator // nil when replication is off
 	DB               DB
 	Log              *slog.Logger
 	StartedAt        time.Time
@@ -129,6 +132,7 @@ func (s *Server) Handler() http.Handler {
 			r.With(requireRole(auth.Operator)).Post("/conflicts/{id}/acknowledge", s.acknowledgeConflict)
 			r.With(requireRole(auth.Operator)).Post("/inventory/scan", s.scanNow)
 			r.With(requireRole(auth.Administrator)).Put("/repositories/{id}/primary", s.setPrimary)
+			r.With(requireRole(auth.Operator)).Post("/repositories/{id}/replicate", s.replicateNow)
 			// The history shows who signed in from where: operators and up.
 			r.Group(func(r chi.Router) {
 				r.Use(requireRole(auth.Operator))
@@ -214,7 +218,14 @@ type Overview struct {
 	Database  DatabaseStatus `json:"database"`
 	Nodes     map[string]int `json:"nodes"` // count per state, plus "total"
 	// OpenConflicts is -1 when it couldn't be counted.
-	OpenConflicts int `json:"open_conflicts"`
+	OpenConflicts int                `json:"open_conflicts"`
+	Replication   ReplicationSummary `json:"replication"`
+}
+
+// ReplicationSummary counts replicas (of repositories with a primary) by state.
+type ReplicationSummary struct {
+	Enabled bool           `json:"enabled"`
+	Counts  map[string]int `json:"counts"`
 }
 
 type DatabaseStatus struct {
@@ -243,6 +254,14 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		s.Log.Warn("counting conflicts failed", "error", err)
 	} else {
 		o.OpenConflicts = n
+	}
+	o.Replication = ReplicationSummary{Enabled: s.Replication != nil, Counts: map[string]int{}}
+	if s.Replication != nil {
+		if counts, err := s.DB.ReplicationCounts(ctx); err != nil {
+			s.Log.Warn("counting replication states failed", "error", err)
+		} else {
+			o.Replication.Counts = counts
+		}
 	}
 	for _, n := range s.nodes() {
 		o.Nodes[string(n.State)]++

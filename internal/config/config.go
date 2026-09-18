@@ -24,13 +24,25 @@ import (
 const EnvDatabaseURL = "FORGESYNC_DATABASE_URL"
 
 type Config struct {
-	Log       Log       `yaml:"log"`
-	HTTP      HTTP      `yaml:"http"`
-	OIDC      OIDC      `yaml:"oidc"`
-	Database  Database  `yaml:"database"`
-	Health    Health    `yaml:"health"`
-	Inventory Inventory `yaml:"inventory"`
-	Nodes     []Node    `yaml:"nodes"`
+	Log         Log         `yaml:"log"`
+	HTTP        HTTP        `yaml:"http"`
+	OIDC        OIDC        `yaml:"oidc"`
+	Database    Database    `yaml:"database"`
+	Health      Health      `yaml:"health"`
+	Inventory   Inventory   `yaml:"inventory"`
+	Replication Replication `yaml:"replication"`
+	Nodes       []Node      `yaml:"nodes"`
+}
+
+// Replication copies Git branches and tags from each repository's primary
+// to the other nodes. Off unless enabled.
+type Replication struct {
+	Enabled bool `yaml:"enabled"`
+	// WorkDir holds a bare cache per repository; relative paths are resolved
+	// against the config file.
+	WorkDir     string `yaml:"work_dir"`
+	Concurrency int    `yaml:"concurrency"` // repositories in parallel
+	Git         string `yaml:"git"`         // git binary
 }
 
 // Inventory controls the periodic repository scan of every node.
@@ -160,6 +172,15 @@ func (c *Config) applyDefaults() {
 	if c.Health.FailureThreshold == 0 {
 		c.Health.FailureThreshold = 3
 	}
+	if c.Replication.WorkDir == "" {
+		c.Replication.WorkDir = "/var/lib/forgesync/git"
+	}
+	if c.Replication.Concurrency == 0 {
+		c.Replication.Concurrency = 2
+	}
+	if c.Replication.Git == "" {
+		c.Replication.Git = "git"
+	}
 	if c.Inventory.Interval == 0 {
 		c.Inventory.Interval = 5 * time.Minute
 	}
@@ -175,6 +196,13 @@ func (c *Config) applyDefaults() {
 
 func (c *Config) resolveSecrets(dir string) error {
 	var err error
+	if !filepath.IsAbs(c.Replication.WorkDir) {
+		abs, err := filepath.Abs(filepath.Join(dir, c.Replication.WorkDir))
+		if err != nil {
+			return fmt.Errorf("replication.work_dir: %w", err)
+		}
+		c.Replication.WorkDir = abs
+	}
 	if c.HTTP.AdminTokenFile != "" {
 		if c.HTTP.AdminToken, err = readSecret(dir, c.HTTP.AdminTokenFile); err != nil {
 			return fmt.Errorf("http.admin_token_file: %w", err)
@@ -249,6 +277,9 @@ func (c *Config) validate() error {
 	}
 	if c.Inventory.Interval < 10*time.Second {
 		errs = append(errs, errors.New("inventory.interval must be at least 10s"))
+	}
+	if c.Replication.Concurrency < 1 || c.Replication.Concurrency > 16 {
+		errs = append(errs, errors.New("replication.concurrency must be 1 to 16"))
 	}
 	if c.Inventory.BranchConcurrency < 1 || c.Inventory.BranchConcurrency > 32 {
 		errs = append(errs, errors.New("inventory.branch_concurrency must be 1 to 32"))

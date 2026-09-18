@@ -71,6 +71,18 @@ export function Dashboard() {
           <p className="tile-note">Differences between nodes that need a person</p>
         </div>
         <div className="tile">
+          <p className="tile-label">Replication</p>
+          {overview.data ? (
+            overview.data.replication.enabled ? (
+              <ReplicationTile counts={overview.data.replication.counts} />
+            ) : (
+              <p className="tile-value muted">Off</p>
+            )
+          ) : (
+            <p className="tile-value muted">–</p>
+          )}
+        </div>
+        <div className="tile">
           <p className="tile-label">Controller</p>
           <p className="tile-value">{overview.data?.role === "single" ? "Single controller" : overview.data?.role ?? "–"}</p>
           <p className="tile-note">Leader election comes with high availability</p>
@@ -159,5 +171,32 @@ function NodeCard({ node, now }: { node: Node; now: number }) {
       </dl>
       {node.last_error && node.state !== "HEALTHY" && <p className="node-card-error">{node.last_error}</p>}
     </li>
+  );
+}
+
+function ReplicationTile({ counts }: { counts: Partial<Record<string, number>> }) {
+  const total = Object.values(counts).reduce((a: number, b) => a + (b ?? 0), 0);
+  const synced = counts.synced ?? 0;
+  const problems = (counts.conflict ?? 0) + (counts.error ?? 0) + (counts.missing ?? 0);
+  if (total === 0) {
+    return (
+      <>
+        <p className="tile-value muted">Nothing yet</p>
+        <p className="tile-note">Set a primary on a repository to start</p>
+      </>
+    );
+  }
+  return (
+    <>
+      <p className="tile-value">
+        <StatusIcon tone={problems > 0 ? "serious" : synced === total ? "good" : "warning"} />
+        {synced} of {total}
+      </p>
+      <p className="tile-note">
+        replicas in sync
+        {problems > 0 ? ` · ${problems} need attention` : ""}
+        {counts.waiting ? ` · ${counts.waiting} waiting` : ""}
+      </p>
+    </>
   );
 }

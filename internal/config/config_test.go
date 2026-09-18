@@ -56,6 +56,9 @@ nodes:
 	if cfg.Inventory.Interval != 5*time.Minute || cfg.Inventory.BranchConcurrency != 4 {
 		t.Errorf("inventory = %+v", cfg.Inventory)
 	}
+	if cfg.Replication.Enabled || cfg.Replication.WorkDir != "/var/lib/forgesync/git" || cfg.Replication.Concurrency != 2 {
+		t.Errorf("replication defaults = %+v", cfg.Replication)
+	}
 	if !*cfg.HTTP.SecureCookies {
 		t.Error("secure_cookies should default to true")
 	}
@@ -177,5 +180,23 @@ nodes: [{name: se, url: "http://se", token_file: se.token}]
 	}
 	if !cfg.OIDC.Enabled() || cfg.OIDC.ClientSecret != "client-secret" || len(cfg.OIDC.Roles.Viewer) != 2 || cfg.OIDC.AllowTokenSignIn {
 		t.Errorf("oidc = %+v", cfg.OIDC)
+	}
+}
+
+func TestReplicationWorkDirIsRelativeToConfig(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "se.token", "tok")
+	path := writeFile(t, dir, "c.yaml", `
+database: {url: postgres://x}
+replication: {enabled: true, work_dir: .work/git}
+nodes: [{name: se, url: "http://se", token_file: se.token}]
+`)
+	t.Setenv(EnvDatabaseURL, "")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Replication.WorkDir != filepath.Join(dir, ".work/git") {
+		t.Errorf("work dir = %q", cfg.Replication.WorkDir)
 	}
 }

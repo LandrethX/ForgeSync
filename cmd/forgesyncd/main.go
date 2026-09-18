@@ -25,6 +25,7 @@ import (
 	"scenegit.org/forgesync/internal/forgejo"
 	"scenegit.org/forgesync/internal/health"
 	"scenegit.org/forgesync/internal/inventory"
+	"scenegit.org/forgesync/internal/replication"
 	"scenegit.org/forgesync/internal/store"
 	"scenegit.org/forgesync/internal/webui"
 )
@@ -75,6 +76,7 @@ func run(configPath string) error {
 	var scanTargets []inventory.Target
 	var nodeNames []string
 	comparers := map[string]conflicts.Comparer{}
+	var gitNodes []replication.Node
 	for _, n := range cfg.Nodes {
 		client, err := forgejo.New(n.URL, n.Token, nil)
 		if err != nil {
@@ -86,6 +88,7 @@ func run(configPath string) error {
 		scanTargets = append(scanTargets, inventory.Target{Name: n.Name, Client: client})
 		nodeNames = append(nodeNames, n.Name)
 		comparers[n.Name] = client
+		gitNodes = append(gitNodes, replication.Node{Name: n.Name, URL: n.URL, User: n.ServiceUser, Token: n.Token})
 	}
 	if err := db.SyncNodes(ctx, records); err != nil {
 		return err
@@ -96,13 +99,32 @@ func run(configPath string) error {
 		Timeout:          cfg.Health.Timeout,
 		FailureThreshold: cfg.Health.FailureThreshold,
 	}, db, log)
+	var scanner *inventory.Scanner
+	var engine *replication.Engine
+	if cfg.Replication.Enabled {
+		git := &replication.Git{Bin: cfg.Replication.Git, WorkDir: cfg.Replication.WorkDir}
+		v, err := git.Version(ctx)
+		if err != nil {
+			return fmt.Errorf("replication is enabled but %w", err)
+		}
+		engine = replication.NewEngine(gitNodes, git, db, monitor, replication.Options{
+			Concurrency: cfg.Replication.Concurrency,
+			// The scanner exists by the time a manual replication finishes.
+			AfterTriggered: func() { scanner.Trigger() },
+		}, log)
+		log.Info("replication enabled", "git", v, "work_dir", cfg.Replication.WorkDir)
+	}
 	detector := conflicts.NewDetector(nodeNames, comparers, db, log)
-	scanner := inventory.NewScanner(scanTargets, inventory.Options{
+	detector.ReplicationOwnsPrimaries = engine != nil
+	scanner = inventory.NewScanner(scanTargets, inventory.Options{
 		Interval:          cfg.Inventory.Interval,
 		BranchConcurrency: cfg.Inventory.BranchConcurrency,
 		AfterScan: func(ctx context.Context) {
 			if err := detector.Run(ctx); err != nil {
 				log.Error("conflict detection failed", "error", err)
+			}
+			if engine != nil {
+				engine.RunAll(ctx)
 			}
 		},
 	}, db, log)
@@ -137,6 +159,11 @@ func run(configPath string) error {
 	if cfg.HTTP.AdminToken == "" && oidcFlow == nil {
 		log.Warn("admin API disabled: set http.admin_token_file or oidc")
 	}
+	// Only a non-nil engine: a nil *Engine in the interface would look enabled.
+	var replicator api.Replicator
+	if engine != nil {
+		replicator = engine
+	}
 	srv := &http.Server{
 		Addr: cfg.HTTP.Listen,
 		Handler: (&api.Server{
@@ -146,6 +173,7 @@ func run(configPath string) error {
 			Nodes:            infos,
 			Health:           monitor,
 			Inventory:        scanner,
+			Replication:      replicator,
 			DB:               db,
 			Log:              log,
 			StartedAt:        startedAt,

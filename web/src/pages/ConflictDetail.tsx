@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, hasRole, type Conflict } from "../api";
 import { ErrorNote, PageHeader } from "../components/Layout";
 import { StatusIcon } from "../components/StatusBadge";
-import { conflictSides, conflictTitle, relationText } from "../conflictText";
+import { conflictExplanation, conflictFix, conflictSides, conflictTitle, relationText } from "../conflictText";
 import { formatDateTime } from "../format";
 import { useLoad, useNodes, useSession } from "../hooks";
 import { Link } from "../router";
@@ -49,7 +49,7 @@ export function ConflictDetail({ id }: { id: number }) {
             <thead>
               <tr>
                 <th scope="col">Node</th>
-                <th scope="col">{c.kind === "git_diverged" ? `Head of ${c.details.branch ?? "the branch"}` : "Default branch"}</th>
+                <th scope="col">{c.kind === "default_branch_mismatch" ? "Default branch" : "Commit"}</th>
                 <th scope="col" />
               </tr>
             </thead>
@@ -60,12 +60,12 @@ export function ConflictDetail({ id }: { id: number }) {
                   <tr key={node}>
                     <th scope="row">{node}</th>
                     <td className="mono">
-                      {c.kind === "git_diverged" && url ? (
+                      {c.kind !== "default_branch_mismatch" && url && v ? (
                         <a href={`${url}/${c.full_name}/commit/${v}`} target="_blank" rel="noreferrer noopener">
                           {v.slice(0, 12)}
                         </a>
                       ) : (
-                        v
+                        v || <span className="muted">not there</span>
                       )}
                     </td>
                     <td>{node === primary && <span className="tag">Primary</span>}</td>
@@ -75,6 +75,7 @@ export function ConflictDetail({ id }: { id: number }) {
             </tbody>
           </table>
         </div>
+        {conflictExplanation(c) && <p>{conflictExplanation(c)}</p>}
         {c.details.relations && c.details.relations.length > 0 && (
           <ul className="relations">
             {c.details.relations.map((r) => (
@@ -93,19 +94,8 @@ export function ConflictDetail({ id }: { id: number }) {
       {c.state === "open" && (
         <section className="panel" aria-labelledby="fix-heading">
           <h2 id="fix-heading">How to fix it</h2>
-          {c.kind === "git_diverged" ? (
-            <p>
-              ForgeSync never overwrites diverged history. Someone who knows the repository has to reconcile it: start
-              from {primary ? `the primary (${primary})` : "the side you trust"}, merge or rebase the other node's commits
-              into it, and push the result to every node. The next scan clears this conflict once the nodes agree, or
-              the others are simply behind.
-            </p>
-          ) : (
-            <p>
-              Pick one default branch and set it in the repository settings on every node that differs. The next scan
-              clears this conflict.
-            </p>
-          )}
+          <p>{conflictFix(c)}</p>
+          <p className="muted">The next check clears this conflict once the nodes agree.</p>
         </section>
       )}
 

@@ -58,7 +58,7 @@ describe("Conflicts", () => {
   it("lists open conflicts with each node's head", async () => {
     mockApi([diverged]);
     render(wrap("viewer", <Conflicts />));
-    const row = (await screen.findByRole("link", { name: "Diverged history on main" })).closest("tr")!;
+    const row = (await screen.findByRole("link", { name: "Diverged history: main" })).closest("tr")!;
     expect(within(row).getByText("se: a1b2c3d")).toBeTruthy();
     expect(within(row).getByText("dk: 9f8e7d6")).toBeTruthy();
     expect(screen.getByRole("button", { name: /Cleared\s*3/ })).toBeTruthy();
@@ -92,5 +92,17 @@ describe("ConflictDetail", () => {
     expect(call[1].method).toBe("POST");
     expect(call[1].body).toBe(JSON.stringify({ note: "Bob is merging it" }));
     expect(await screen.findByText("Bob is merging it", { selector: "q" })).toBeTruthy();
+  });
+});
+
+describe("replication conflict text", () => {
+  it("names the ref and explains what happened", async () => {
+    const { conflictTitle, conflictExplanation, conflictFix } = await import("../conflictText");
+    const ahead: Conflict = { ...diverged, kind: "git_replica_ahead", details: { branch: "main", primary: "se", heads: { se: "a", dk: "b" } } };
+    expect(conflictTitle(ahead)).toBe("Replica has its own commits: main");
+    expect(conflictExplanation(ahead)).toContain("pushed commits to a replica that se doesn't have");
+    expect(conflictFix(ahead)).toContain("push them to se");
+    const tag: Conflict = { ...diverged, kind: "git_primary_rewrote", ref: "refs/tags/v1", details: { tag: "v1", primary: "se" } };
+    expect(conflictTitle(tag)).toBe("History rewritten on the primary: tag v1");
   });
 });

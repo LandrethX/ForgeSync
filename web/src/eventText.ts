@@ -1,5 +1,6 @@
 import type { HistoryEvent, NodeState } from "./api";
 import { stateInfo } from "./components/StatusBadge";
+import { KIND_LABEL } from "./conflictText";
 
 /** Filter labels for the categories ForgeSync writes today; others show as-is. */
 export const CATEGORIES: { key: string; label: string }[] = [
@@ -34,6 +35,8 @@ export function describe(e: HistoryEvent): string {
       const to = str(d.to) || "not set";
       return `Primary changed from ${from} to ${to}`;
     }
+    case "repo.replicate_requested":
+      return "Asked for replication";
     case "inventory.scan_requested":
       return "Asked for a repository scan";
     case "conflict.opened":
@@ -51,9 +54,8 @@ export function describe(e: HistoryEvent): string {
 }
 
 function kindText(kind: string): string {
-  if (kind === "git_diverged") return "diverged history";
-  if (kind === "default_branch_mismatch") return "different default branches";
-  return kind;
+  const label = KIND_LABEL[kind as keyof typeof KIND_LABEL];
+  return label ? label.toLowerCase() : kind;
 }
 
 /** Where the event's target lives in the UI, if anywhere. */

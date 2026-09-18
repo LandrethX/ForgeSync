@@ -43,7 +43,7 @@ type Comparer interface {
 type Store interface {
 	Repositories(ctx context.Context) ([]store.RepositoryRecord, error)
 	NodeScans(ctx context.Context) ([]store.NodeScan, error)
-	SyncConflicts(ctx context.Context, found []store.FoundConflict, checked []string, at time.Time) ([]store.ConflictChange, error)
+	SyncConflicts(ctx context.Context, found []store.FoundConflict, checked, kinds []string, at time.Time) ([]store.ConflictChange, error)
 	Audit(ctx context.Context, actor, action, target string, details map[string]any) error
 }
 
@@ -53,6 +53,11 @@ type Detector struct {
 	store   Store
 	log     *slog.Logger
 	now     func() time.Time
+
+	// ReplicationOwnsPrimaries: when replication is on, it compares every
+	// ref of repositories that have a primary, and owns their git_*
+	// conflicts; the detector then only checks their default branch names.
+	ReplicationOwnsPrimaries bool
 }
 
 func NewDetector(nodes []string, clients map[string]Comparer, st Store, log *slog.Logger) *Detector {
@@ -74,18 +79,40 @@ func (d *Detector) Run(ctx context.Context) error {
 		scans[s.Node] = s
 	}
 
-	var found []store.FoundConflict
-	var checked []string
+	// Two scopes: repositories the detector fully owns, and (with
+	// replication on) repositories with a primary, where it only owns
+	// default-branch mismatches.
+	var found, foundPrimaried []store.FoundConflict
+	var checked, checkedPrimaried []string
 	for _, rec := range recs {
 		f, conclusive := d.check(ctx, rec, scans)
+		if d.ReplicationOwnsPrimaries && rec.PrimaryNode != "" {
+			for _, c := range f {
+				if c.Kind == KindBranchMismatch {
+					foundPrimaried = append(foundPrimaried, c)
+				}
+			}
+			if conclusive {
+				checkedPrimaried = append(checkedPrimaried, rec.ID)
+			}
+			continue
+		}
 		found = append(found, f...)
 		if conclusive {
 			checked = append(checked, rec.ID)
 		}
 	}
-	changes, err := d.store.SyncConflicts(ctx, found, checked, d.now().UTC())
+	at := d.now().UTC()
+	changes, err := d.store.SyncConflicts(ctx, found, checked, []string{KindDiverged, KindBranchMismatch}, at)
 	if err != nil {
 		return err
+	}
+	if d.ReplicationOwnsPrimaries {
+		more, err := d.store.SyncConflicts(ctx, foundPrimaried, checkedPrimaried, []string{KindBranchMismatch}, at)
+		if err != nil {
+			return err
+		}
+		changes = append(changes, more...)
 	}
 	for _, c := range changes {
 		action := "conflict." + c.Change // conflict.opened / conflict.cleared

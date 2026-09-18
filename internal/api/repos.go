@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -21,11 +22,23 @@ type Inventory interface {
 	Interval() time.Duration
 }
 
+// Replicator is the replication engine.
+type Replicator interface {
+	Trigger(ctx context.Context, id string) (bool, error)
+}
+
 // Repository is what the repository endpoints return.
 type Repository struct {
 	store.RepositoryRecord
-	Status inventory.Status     `json:"status"`
-	Nodes  []inventory.NodeView `json:"nodes"`
+	Status      inventory.Status     `json:"status"`
+	Nodes       []inventory.NodeView `json:"nodes"`
+	Replication *RepoReplication     `json:"replication,omitempty"` // only on the single-repository endpoint
+}
+
+// RepoReplication is a repository's replication state per replica.
+type RepoReplication struct {
+	Enabled  bool                `json:"enabled"`
+	Replicas []store.ReplicaSync `json:"replicas"`
 }
 
 type repositoryList struct {
@@ -119,12 +132,55 @@ func (s *Server) getRepository(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, views := inventory.Compare(rec, s.nodeNames(), scans)
-	writeJSON(w, http.StatusOK, Repository{RepositoryRecord: rec, Status: st, Nodes: views})
+	repl := &RepoReplication{Enabled: s.Replication != nil, Replicas: []store.ReplicaSync{}}
+	if s.Replication != nil && rec.PrimaryNode != "" {
+		syncs, err := s.DB.ReplicaSyncs(r.Context(), rec.ID)
+		if err != nil {
+			s.serverError(w, "get replication state", err)
+			return
+		}
+		for _, x := range syncs {
+			if x.Node != rec.PrimaryNode { // rows left from before a primary change
+				repl.Replicas = append(repl.Replicas, x)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, Repository{RepositoryRecord: rec, Status: st, Nodes: views, Replication: repl})
+}
+
+// replicateNow starts replicating one repository. Operators and up.
+func (s *Server) replicateNow(w http.ResponseWriter, r *http.Request) {
+	if s.Replication == nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"message": "replication is turned off on this controller (replication.enabled)"})
+		return
+	}
+	id := chi.URLParam(r, "id")
+	rec, err := s.DB.Repository(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "no such repository"})
+		return
+	}
+	if err != nil {
+		s.serverError(w, "get repository", err)
+		return
+	}
+	if rec.PrimaryNode == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"message": "set a primary before replicating"})
+		return
+	}
+	queued, err := s.Replication.Trigger(r.Context(), id)
+	if err != nil {
+		s.serverError(w, "start replication", err)
+		return
+	}
+	if queued {
+		s.audit(r.Context(), identity(r).Actor(), "repo.replicate_requested", rec.FullName, map[string]any{"repository_id": id})
+	}
+	writeJSON(w, http.StatusAccepted, map[string]bool{"queued": queued, "running": !queued})
 }
 
 // setPrimary: PUT {"node": "se"} or {"node": ""} to clear. Administrators only.
-// For now this only records the designation; nothing acts on it until
-// replication exists.
+// With replication on, the primary is where branches and tags are copied from.
 func (s *Server) setPrimary(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Node *string `json:"node"`

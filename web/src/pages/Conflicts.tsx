@@ -22,8 +22,8 @@ export function Conflicts() {
     <>
       <PageHeader title="Conflicts" />
       <p className="muted page-intro">
-        Differences between nodes that ForgeSync won't settle by itself. For now it checks each repository's default
-        branch after every scan. A conflict clears on its own once the nodes agree again, or one is simply behind.
+        Differences between nodes that ForgeSync won't settle by itself: diverged history, commits made on a replica,
+        history rewritten on a primary. A conflict clears on its own once a later check finds the nodes agree.
       </p>
 
       <div className="segmented tabs" role="group" aria-label="Show">
@@ -76,7 +76,7 @@ export function Conflicts() {
                     <td className="mono">
                       {conflictSides(c).map(([node, v]) => (
                         <div key={node}>
-                          {node}: {c.kind === "git_diverged" ? v.slice(0, 7) : v}
+                          {node}: {c.kind === "default_branch_mismatch" ? v : v ? v.slice(0, 7) : "–"}
                         </div>
                       ))}
                     </td>

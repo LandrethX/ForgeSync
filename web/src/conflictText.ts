@@ -3,12 +3,22 @@ import type { Conflict, Relation } from "./api";
 export const KIND_LABEL: Record<Conflict["kind"], string> = {
   git_diverged: "Diverged history",
   default_branch_mismatch: "Different default branches",
+  git_replica_ahead: "Replica has its own commits",
+  git_primary_rewrote: "History rewritten on the primary",
+  git_replica_changed: "Changed on the replica",
+  git_replica_extra_ref: "Only on the replica",
 };
+
+function refName(c: Conflict): string {
+  return c.details.branch ?? c.details.tag ?? c.ref.replace(/^refs\/(heads|tags)\//, "");
+}
 
 /** One-line summary, e.g. "Diverged history on main". */
 export function conflictTitle(c: Conflict): string {
-  if (c.kind === "git_diverged") return `${KIND_LABEL.git_diverged} on ${c.details.branch ?? c.ref.replace(/^refs\/heads\//, "")}`;
-  return KIND_LABEL[c.kind] ?? c.kind;
+  const label = KIND_LABEL[c.kind] ?? c.kind;
+  if (c.kind === "default_branch_mismatch") return label;
+  const what = c.details.tag !== undefined || c.ref.startsWith("refs/tags/") ? `tag ${refName(c)}` : refName(c);
+  return `${label}: ${what}`;
 }
 
 export function relationText(r: Relation): string {
@@ -26,4 +36,40 @@ export function relationText(r: Relation): string {
 export function conflictSides(c: Conflict): [string, string][] {
   const m = (c.kind === "default_branch_mismatch" ? c.details.branches : c.details.heads) ?? {};
   return Object.entries(m).sort(([a], [b]) => a.localeCompare(b));
+}
+
+/** What happened, in a sentence, for replication conflicts. */
+export function conflictExplanation(c: Conflict): string | undefined {
+  const primary = c.details.primary || c.primary_node || "the primary";
+  switch (c.kind) {
+    case "git_replica_ahead":
+      return `Someone pushed commits to a replica that ${primary} doesn't have. Replication won't overwrite them.`;
+    case "git_primary_rewrote":
+      return `The history on ${primary} was rewritten (a force-push or a moved tag) since it was last replicated. Copying it would discard what the replicas have.`;
+    case "git_replica_changed":
+      return "This ref was changed on a replica after replication wrote it, or a tag there points somewhere else.";
+    case "git_replica_extra_ref":
+      return `This ref exists only on a replica; it wasn't created on ${primary}.`;
+  }
+  return undefined;
+}
+
+/** Guidance for fixing each kind of conflict. */
+export function conflictFix(c: Conflict): string {
+  const primary = c.details.primary || c.primary_node;
+  const onPrimary = primary ? `on the primary (${primary})` : "on the side you trust";
+  switch (c.kind) {
+    case "git_replica_ahead":
+      return `If the replica's commits should be kept, push them to ${primary || "the primary"}; replication then catches the replica up. If they should go, reset the branch on the replica to the primary's commit.`;
+    case "git_primary_rewrote":
+      return "If the rewrite was intended, reset the branch or tag on each replica to the primary's value; replication won't do this itself. Otherwise restore the old value on the primary.";
+    case "git_replica_changed":
+      return `Decide which value is right. Set it ${onPrimary} and make the replica match, or delete the ref on the replica so replication recreates it from the primary.`;
+    case "git_replica_extra_ref":
+      return `If the ref should exist, push it to ${primary || "the primary"} so it replicates from there. Otherwise delete it on the replica.`;
+    case "default_branch_mismatch":
+      return "Pick one default branch and set it in the repository settings on every node that differs.";
+    default:
+      return `ForgeSync never overwrites diverged history. Someone who knows the repository has to reconcile it ${onPrimary}: either merge the replica's commits in (a merge keeps them, so replication can then fast-forward the replica), or bring their changes over some other way (rebase, cherry-pick) and then reset the branch on the replica to the primary's commit, since those create new commits and the replica's originals stay diverged.`;
+  }
 }

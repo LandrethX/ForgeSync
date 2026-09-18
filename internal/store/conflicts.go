@@ -27,9 +27,11 @@ type ConflictChange struct {
 
 // SyncConflicts records the outcome of a conflict check at time at. Found
 // conflicts are opened, or refreshed if already open. Open conflicts of the
-// checked repositories that weren't found again are cleared. Repositories not
-// in checked (the check couldn't reach a conclusion) keep their conflicts.
-func (s *Store) SyncConflicts(ctx context.Context, found []FoundConflict, checked []string, at time.Time) ([]ConflictChange, error) {
+// checked repositories that weren't found again are cleared, but only of the
+// given kinds (nil: all kinds), so checks that look for different things
+// don't clear each other's conflicts. Repositories not in checked (the check
+// couldn't reach a conclusion) keep their conflicts.
+func (s *Store) SyncConflicts(ctx context.Context, found []FoundConflict, checked, kinds []string, at time.Time) ([]ConflictChange, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -68,10 +70,11 @@ func (s *Store) SyncConflicts(ctx context.Context, found []FoundConflict, checke
 			WITH cl AS (
 				UPDATE conflicts SET state = 'cleared', cleared_at = $2
 				WHERE state = 'open' AND repository_id = ANY($1::uuid[]) AND last_seen_at < $2
+					AND ($3::text[] IS NULL OR kind = ANY($3::text[]))
 				RETURNING id, repository_id, kind, ref
 			)
 			SELECT cl.id, r.full_name, cl.kind, cl.ref FROM cl JOIN repositories r ON r.id = cl.repository_id`,
-			checked, at)
+			checked, at, kinds)
 		if err != nil {
 			return nil, err
 		}

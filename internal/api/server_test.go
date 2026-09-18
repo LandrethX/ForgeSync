@@ -31,6 +31,7 @@ type fakeDB struct {
 	repos     []store.RepositoryRecord
 	scans     []store.NodeScan
 	conflicts []store.Conflict
+	syncs     []store.ReplicaSync
 }
 
 func (f *fakeDB) Repositories(context.Context) ([]store.RepositoryRecord, error) {
@@ -94,6 +95,24 @@ func (f *fakeDB) AcknowledgeConflict(_ context.Context, id int64, actor, note st
 		}
 	}
 	return store.ErrNotFound
+}
+func (f *fakeDB) ReplicaSyncs(_ context.Context, id string) ([]store.ReplicaSync, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.ReplicaSync
+	for _, x := range f.syncs {
+		if x.RepositoryID == id {
+			out = append(out, x)
+		}
+	}
+	return out, nil
+}
+func (f *fakeDB) ReplicationCounts(context.Context) (map[string]int, error) {
+	counts := map[string]int{}
+	for _, x := range f.syncs {
+		counts[x.State]++
+	}
+	return counts, nil
 }
 func (f *fakeDB) OpenConflicts(context.Context) (int, error) {
 	n := 0

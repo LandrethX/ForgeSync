@@ -165,6 +165,7 @@ type fakeStore struct {
 	found   []store.FoundConflict
 	checked []string
 	audit   []string
+	calls   []syncCall
 }
 
 func (f *fakeStore) Repositories(context.Context) ([]store.RepositoryRecord, error) {
@@ -177,10 +178,20 @@ func (f *fakeStore) NodeScans(context.Context) ([]store.NodeScan, error) {
 	}
 	return out, nil
 }
-func (f *fakeStore) SyncConflicts(_ context.Context, found []store.FoundConflict, checked []string, _ time.Time) ([]store.ConflictChange, error) {
+func (f *fakeStore) SyncConflicts(_ context.Context, found []store.FoundConflict, checked, kinds []string, _ time.Time) ([]store.ConflictChange, error) {
+	f.calls = append(f.calls, syncCall{found, checked, kinds})
+	if len(f.calls) > 1 {
+		return nil, nil
+	}
 	f.found, f.checked = found, checked
 	return []store.ConflictChange{{ID: 7, FullName: "alice/demo", Kind: KindDiverged, Change: "opened"}}, nil
 }
+
+type syncCall struct {
+	found          []store.FoundConflict
+	checked, kinds []string
+}
+
 func (f *fakeStore) Audit(_ context.Context, actor, action, target string, _ map[string]any) error {
 	f.audit = append(f.audit, actor+" "+action+" "+target)
 	return nil
@@ -202,5 +213,35 @@ func TestRun(t *testing.T) {
 	}
 	if len(st.audit) != 1 || st.audit[0] != "forgesync conflict.opened alice/demo" {
 		t.Errorf("audit = %v", st.audit)
+	}
+}
+
+func TestRunLeavesPrimariedRepositoriesToReplication(t *testing.T) {
+	trunk := head("dk", "C")
+	trunk.DefaultBranch = "trunk"
+	st := &fakeStore{recs: []store.RepositoryRecord{
+		rec(head("se", "B"), head("dk", "C")), // has primary "se", diverged
+		{ID: "repo-3", FullName: "carol/site", PrimaryNode: "se", FirstSeenAt: t0, Replicas: []store.Replica{head("se", "A"), trunk}},
+		{ID: "repo-2", FullName: "bob/tools", FirstSeenAt: t0, Replicas: []store.Replica{head("se", "B"), head("dk", "C")}},
+	}}
+	d := NewDetector([]string{"se", "dk"}, map[string]Comparer{
+		"se": fakeNode{g: graph{"A": "", "B": "A"}}, "dk": fakeNode{g: graph{"A": "", "C": "A"}},
+	}, st, slog.New(slog.DiscardHandler))
+	d.ReplicationOwnsPrimaries = true
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.calls) != 2 {
+		t.Fatalf("calls = %+v", st.calls)
+	}
+	own, prim := st.calls[0], st.calls[1]
+	// Without a primary: the detector owns everything.
+	if len(own.found) != 1 || own.found[0].RepositoryID != "repo-2" || len(own.checked) != 1 || own.checked[0] != "repo-2" {
+		t.Errorf("own scope = %+v", own)
+	}
+	// With a primary: only branch mismatches, and only that kind is cleared.
+	if len(prim.found) != 1 || prim.found[0].Kind != KindBranchMismatch || prim.found[0].RepositoryID != "repo-3" ||
+		len(prim.kinds) != 1 || prim.kinds[0] != KindBranchMismatch || len(prim.checked) != 2 {
+		t.Errorf("primaried scope = %+v", prim)
 	}
 }

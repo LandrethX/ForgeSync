@@ -41,3 +41,8 @@ nodes:
     site: DK
     url: http://forgejo-dk.test:3002
     token_file: .tokens/dk.token
+replication:
+  # Copies branches and tags from each repository's primary to the other
+  # nodes, for repositories with a primary set. Needs git 2.32+ on the Mac.
+  enabled: true
+  work_dir: .work/git

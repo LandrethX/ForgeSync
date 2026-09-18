@@ -87,6 +87,18 @@ export interface NodeView {
   replica?: Replica;
 }
 
+export type ReplicaState = "synced" | "conflict" | "error" | "waiting" | "missing";
+
+export interface ReplicaSync {
+  node: string;
+  state: ReplicaState;
+  detail?: string;
+  last_attempt_at: string;
+  last_success_at?: string;
+  out_of_sync_since?: string;
+  refs_updated: number;
+}
+
 export interface Repository {
   id: string;
   full_name: string;
@@ -94,6 +106,7 @@ export interface Repository {
   first_seen_at: string;
   status: RepoStatus;
   nodes: NodeView[];
+  replication?: { enabled: boolean; replicas: ReplicaSync[] };
 }
 
 export interface RepositoryList {
@@ -118,7 +131,13 @@ export interface InventoryStatus {
   nodes: NodeScan[];
 }
 
-export type ConflictKind = "git_diverged" | "default_branch_mismatch";
+export type ConflictKind =
+  | "git_diverged"
+  | "default_branch_mismatch"
+  | "git_replica_ahead"
+  | "git_primary_rewrote"
+  | "git_replica_changed"
+  | "git_replica_extra_ref";
 
 export interface Relation {
   a: string;
@@ -136,6 +155,7 @@ export interface Conflict {
   state: "open" | "cleared";
   details: {
     branch?: string;
+    tag?: string;
     heads?: Record<string, string>;
     branches?: Record<string, string>;
     relations?: Relation[];
@@ -163,6 +183,7 @@ export interface Overview {
   database: { ok: boolean; error?: string };
   nodes: Record<string, number>;
   open_conflicts: number;
+  replication: { enabled: boolean; counts: Partial<Record<ReplicaState, number>> };
 }
 
 export type Role = "viewer" | "operator" | "administrator";
@@ -267,6 +288,8 @@ export const api = {
       node,
     }),
   inventory: () => request<InventoryStatus>("GET", "/inventory"),
+  replicateNow: (id: string) =>
+    request<{ queued: boolean; running: boolean }>("POST", `/repositories/${encodeURIComponent(id)}/replicate`),
   scanNow: () => request<{ queued: boolean; running: boolean }>("POST", "/inventory/scan"),
   conflicts: (opts: { state: "open" | "cleared" | "all"; repository?: string; limit: number; offset: number }) => {
     const p = new URLSearchParams({ state: opts.state, limit: String(opts.limit), offset: String(opts.offset) });

@@ -109,3 +109,14 @@ The `hooksink` service records the webhooks it receives, for the Phase 0 tests (
 Forgejo sends webhooks to `http://hooksink:8099/hook/<tag>`, and the tests read them back from
 `http://localhost:8099/events?after=<seq>`. The sink checks each delivery's HMAC signature
 against `HOOK_SECRET`.
+
+## Replication
+
+`forgesync.yaml` has replication on. It copies branches and tags from a repository's primary
+node to the others, for repositories whose primary is set on the Repositories page or with
+`forgesync repo set-primary`. It uses `git` on the Mac (2.32 or later; Xcode's is fine),
+with a cache in `.work/git`.
+
+It only replicates into repositories that already exist on the other node. Create the
+repository there first; automatic creation waits on the Phase 0 identity results. Commits
+made directly on a replica are never overwritten: they show up as conflicts.

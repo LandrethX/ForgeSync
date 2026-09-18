@@ -19,7 +19,9 @@
       "redirectUris": [
         "http://forgejo-se.test:3001/*",
         "http://forgejo-dk.test:3002/*",
-        "http://forgejo-de.test:3003/*"
+        "http://forgejo-de.test:3003/*",
+        "http://forgejo-uk.test:3004/*",
+        "http://forgejo-us.test:3005/*"
       ],
       "webOrigins": [
         "+"

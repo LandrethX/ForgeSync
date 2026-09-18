@@ -1,6 +1,7 @@
-# Controller config for the `forgesync` container in compose.yaml (setup.sh
-# starts it). For running the controller from source on the host instead,
-# see forgesync.yaml.
+# Controller config for the `forgesync` container in compose.yaml. setup.sh
+# appends the `nodes:` list for the nodes it started and writes the result to
+# .work/forgesync.docker.yaml, which is what the container reads. For running
+# the controller from source on the host instead, see forgesync.yaml.
 #
 # The browser reaches the UI as http://forgesync.test:8090; add that name to
 # /etc/hosts next to the others (see README.md).
@@ -37,12 +38,3 @@ inventory:
 replication:
   enabled: true
   work_dir: /var/lib/forgesync/git
-nodes:
-  - name: se
-    site: SE
-    url: http://forgejo-se.test:3001
-    token_file: /etc/forgesync/tokens/se.token
-  - name: dk
-    site: DK
-    url: http://forgejo-dk.test:3002
-    token_file: /etc/forgesync/tokens/dk.token

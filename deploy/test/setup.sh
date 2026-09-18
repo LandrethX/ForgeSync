@@ -10,6 +10,7 @@
 #
 # Usage: ./setup.sh           # nodes SE and DK
 #        ./setup.sh --three   # also node DE
+#        ./setup.sh --all     # SE, DK, DE, UK and US
 #
 # To reach the environment from other machines (e.g. on a server), run it as
 # PUBLIC_BIND=0.0.0.0 ./setup.sh and add the hostnames on those machines too.
@@ -22,13 +23,17 @@ set -a; . ./.env; set +a
 
 NODES="se dk"
 PROFILE_ARGS=""
-if [ "${1:-}" = "--three" ]; then
-  NODES="se dk de"
-  PROFILE_ARGS="--profile three"
-fi
+case "${1:-}" in
+  --three) NODES="se dk de"; PROFILE_ARGS="--profile three" ;;
+  --all) NODES="se dk de uk us"; PROFILE_ARGS="--profile all" ;;
+  "") ;;
+  *) echo "usage: $0 [--three|--all]" >&2; exit 2 ;;
+esac
 
 compose() { docker compose $PROFILE_ARGS "$@"; }
-port_of() { case "$1" in se) echo 3001;; dk) echo 3002;; de) echo 3003;; esac; }
+port_of() { case "$1" in se) echo 3001;; dk) echo 3002;; de) echo 3003;; uk) echo 3004;; us) echo 3005;; esac; }
+ssh_of()  { case "$1" in se) echo 2221;; dk) echo 2222;; de) echo 2223;; uk) echo 2224;; us) echo 2225;; esac; }
+site_of() { echo "$1" | tr a-z A-Z; }
 ok()   { printf '  \033[32mok\033[0m    %s\n' "$*"; }
 fail() { printf '  \033[31mFAIL\033[0m  %s\n' "$*"; FAILED=1; }
 FAILED=0
@@ -45,7 +50,7 @@ done
 if [ -n "$missing" ]; then
   echo "Missing hostnames:$missing"
   echo "Add them with:"
-  echo "  echo '127.0.0.1 sceneid.test forgesync.test forgejo-se.test forgejo-dk.test forgejo-de.test' | sudo tee -a /etc/hosts"
+  echo "  echo '127.0.0.1 sceneid.test forgesync.test forgejo-se.test forgejo-dk.test forgejo-de.test forgejo-uk.test forgejo-us.test' | sudo tee -a /etc/hosts"
   exit 1
 fi
 ok "hostnames resolve to 127.0.0.1"
@@ -111,7 +116,17 @@ echo "==> Building and starting the ForgeSync controller (first build takes a fe
 FORGESYNC_VERSION=$(git -C ../.. describe --tags --always --dirty 2>/dev/null || echo dev)
 FORGESYNC_COMMIT=$(git -C ../.. rev-parse --short HEAD 2>/dev/null || echo unknown)
 export FORGESYNC_VERSION FORGESYNC_COMMIT
-docker compose $PROFILE_ARGS --profile controller up -d --build --wait forgesync
+# The controller watches exactly the nodes started here.
+mkdir -p .work
+{
+  cat forgesync.docker.yaml
+  echo "nodes:"
+  for n in $NODES; do
+    printf '  - name: %s\n    site: %s\n    url: http://forgejo-%s.test:%s\n    token_file: /etc/forgesync/tokens/%s.token\n' \
+      "$n" "$(site_of "$n")" "$n" "$(port_of "$n")" "$n"
+  done
+} > .work/forgesync.docker.yaml
+docker compose $PROFILE_ARGS --profile controller up -d --build --force-recreate --wait forgesync
 ok "controller running ($FORGESYNC_VERSION)"
 
 echo "==> Smoke tests"
@@ -157,7 +172,7 @@ fi
 cat <<EOF
 Ready.
   SceneID admin console : http://sceneid.test:8080/admin   ($SCENEID_ADMIN_USER / $SCENEID_ADMIN_PASSWORD)
-$(for n in $NODES; do echo "  Forgejo $(echo "$n" | tr a-z A-Z)            : http://forgejo-$n.test:$(port_of "$n")   (ssh port 222$(port_of "$n" | cut -c4))"; done)
+$(for n in $NODES; do echo "  Forgejo $(site_of "$n")            : http://forgejo-$n.test:$(port_of "$n")   (ssh port $(ssh_of "$n"))"; done)
   SceneID test users    : alice / alice-pw (ForgeSync administrator), bob / bob-pw (operator),
                           carol / carol-pw (viewer), erin / erin-pw (no ForgeSync role)
   Local admins per node : siteadmin / $FORGEJO_SITEADMIN_PASSWORD, forgesync (API tokens in .tokens/)

@@ -8,7 +8,9 @@ developing ForgeSync, running on Docker Desktop for macOS.
 | `sceneid` | http://sceneid.test:8080 | Keycloak, standing in for SceneID (OIDC) |
 | `forgejo-se` | http://forgejo-se.test:3001 (SSH port 2221) | Forgejo node SE |
 | `forgejo-dk` | http://forgejo-dk.test:3002 (SSH port 2222) | Forgejo node DK |
-| `forgejo-de` | http://forgejo-de.test:3003 (SSH port 2223) | Forgejo node DE (optional, `--three`) |
+| `forgejo-de` | http://forgejo-de.test:3003 (SSH port 2223) | Forgejo node DE (optional: `--three` or `--all`) |
+| `forgejo-uk` | http://forgejo-uk.test:3004 (SSH port 2224) | Forgejo node UK (optional: `--all`) |
+| `forgejo-us` | http://forgejo-us.test:3005 (SSH port 2225) | Forgejo node US (optional: `--all`) |
 | `forgesync-db` | localhost:5432 | PostgreSQL for ForgeSync's own state (user/db `forgesync`) |
 | `hooksink` | http://localhost:8099 | Records webhook deliveries for the Phase 0 tests |
 | `forgesync` | http://forgesync.test:8090 | The ForgeSync controller and admin UI, built from this repository |
@@ -22,7 +24,7 @@ run natively on Apple Silicon.
 - Add the hostnames once:
 
   ```sh
-  echo '127.0.0.1 sceneid.test forgesync.test forgejo-se.test forgejo-dk.test forgejo-de.test' | sudo tee -a /etc/hosts
+  echo '127.0.0.1 sceneid.test forgesync.test forgejo-se.test forgejo-dk.test forgejo-de.test forgejo-uk.test forgejo-us.test' | sudo tee -a /etc/hosts
   ```
 
   Every service is reached by the same URL from the Mac and from inside other containers.
@@ -34,8 +36,8 @@ run natively on Apple Silicon.
 The same setup runs on a Linux server with Docker. On the server:
 
 ```sh
-echo '127.0.0.1 sceneid.test forgesync.test forgejo-se.test forgejo-dk.test forgejo-de.test' | sudo tee -a /etc/hosts
-PUBLIC_BIND=0.0.0.0 ./setup.sh
+echo '127.0.0.1 sceneid.test forgesync.test forgejo-se.test forgejo-dk.test forgejo-de.test forgejo-uk.test forgejo-us.test' | sudo tee -a /etc/hosts
+PUBLIC_BIND=0.0.0.0 ./setup.sh --all
 ```
 
 `PUBLIC_BIND=0.0.0.0` publishes SceneID (8080), Forgejo (3001–3003, SSH 2221–2223) and the
@@ -43,7 +45,7 @@ ForgeSync UI (8090) on the server's network interfaces. The database and webhook
 localhost. On each machine whose browser should use it, point the names at the server:
 
 ```sh
-echo '<server-ip> sceneid.test forgesync.test forgejo-se.test forgejo-dk.test forgejo-de.test' | sudo tee -a /etc/hosts
+echo '<server-ip> sceneid.test forgesync.test forgejo-se.test forgejo-dk.test forgejo-de.test forgejo-uk.test forgejo-us.test' | sudo tee -a /etc/hosts
 ```
 
 The names must be the same everywhere, because SceneID's issuer URL and the redirect URLs are
@@ -56,6 +58,7 @@ a network you trust.
 ```sh
 ./setup.sh            # start SE + DK, configure them, run smoke tests
 ./setup.sh --three    # same, including DE
+./setup.sh --all      # SE, DK, DE, UK and US
 docker compose logs -f forgejo-se
 docker compose --profile three down -v   # stop everything and delete all data
                                          # (then rm -rf .tokens before the next setup)
@@ -101,10 +104,12 @@ made in the admin console.
 ## The ForgeSync controller
 
 `setup.sh` builds the controller image from this repository and starts it as the `forgesync`
-service, with `forgesync.docker.yaml` as its config. After changing the code, rebuild and restart it:
+service. Its config is `forgesync.docker.yaml` plus a `nodes:` list for the nodes that setup
+started, written to `.work/forgesync.docker.yaml`. Rerun `setup.sh` with the same option
+after changing the set of nodes. After changing the code, rebuild and restart it:
 
 ```sh
-docker compose --profile controller up -d --build forgesync
+PUBLIC_BIND=0.0.0.0 docker compose --profile controller up -d --build forgesync   # PUBLIC_BIND only on a server
 docker compose --profile controller logs -f forgesync
 ```
 

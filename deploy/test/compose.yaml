@@ -6,7 +6,8 @@
 # browser and from inside other containers, which OIDC and mirroring need.
 # The Mac needs /etc/hosts entries; see README.md.
 #
-# Nodes SE and DK start by default. DE starts with: docker compose --profile three up -d
+# Nodes SE and DK start by default. DE also starts with --profile three; DE, UK
+# and US with --profile all (setup.sh --three / --all).
 #
 # Ports the browser needs (SceneID, Forgejo, the ForgeSync UI) are published on
 # 127.0.0.1 by default. To reach them from other machines, e.g. when the test
@@ -53,6 +54,9 @@ services:
   sceneid:
     # Keycloak stands in for SceneID (OIDC provider).
     image: quay.io/keycloak/keycloak:${KEYCLOAK_VERSION}
+    # Keycloak sizes its Java heap from the memory it sees; cap it so the
+    # whole environment fits on a small server.
+    mem_limit: 1g
     command: ["start-dev", "--import-realm", "--http-port=8080", "--hostname=http://sceneid.test:8080", "--health-enabled=true"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${SCENEID_ADMIN_USER}
@@ -114,7 +118,7 @@ services:
       forgejo-dk:
         condition: service_healthy
     volumes:
-      - ./forgesync.docker.yaml:/etc/forgesync/forgesync.yaml:ro
+      - ./.work/forgesync.docker.yaml:/etc/forgesync/forgesync.yaml:ro
       - ./.tokens:/etc/forgesync/tokens:ro
       - forgesync-git:/var/lib/forgesync
     ports:
@@ -188,7 +192,7 @@ services:
 
   forgejo-de:
     <<: *forgejo
-    profiles: [three]
+    profiles: [three, all]
     environment:
       <<: *forgejo-env
       GITEA__server__DOMAIN: forgejo-de.test
@@ -206,9 +210,51 @@ services:
         aliases: [forgejo-de.test]
     healthcheck: *forgejo-health
 
+  forgejo-uk:
+    <<: *forgejo
+    profiles: [all]
+    environment:
+      <<: *forgejo-env
+      GITEA__server__DOMAIN: forgejo-uk.test
+      GITEA__server__HTTP_PORT: "3004"
+      GITEA__server__ROOT_URL: http://forgejo-uk.test:3004/
+      GITEA__server__SSH_DOMAIN: forgejo-uk.test
+      GITEA__server__SSH_PORT: "2224"
+    volumes:
+      - forgejo-uk:/data
+    ports:
+      - "${PUBLIC_BIND:-127.0.0.1}:3004:3004"
+      - "${PUBLIC_BIND:-127.0.0.1}:2224:22"
+    networks:
+      default:
+        aliases: [forgejo-uk.test]
+    healthcheck: *forgejo-health
+
+  forgejo-us:
+    <<: *forgejo
+    profiles: [all]
+    environment:
+      <<: *forgejo-env
+      GITEA__server__DOMAIN: forgejo-us.test
+      GITEA__server__HTTP_PORT: "3005"
+      GITEA__server__ROOT_URL: http://forgejo-us.test:3005/
+      GITEA__server__SSH_DOMAIN: forgejo-us.test
+      GITEA__server__SSH_PORT: "2225"
+    volumes:
+      - forgejo-us:/data
+    ports:
+      - "${PUBLIC_BIND:-127.0.0.1}:3005:3005"
+      - "${PUBLIC_BIND:-127.0.0.1}:2225:22"
+    networks:
+      default:
+        aliases: [forgejo-us.test]
+    healthcheck: *forgejo-health
+
 volumes:
   forgesync-db:
   forgesync-git:
   forgejo-se:
   forgejo-dk:
   forgejo-de:
+  forgejo-uk:
+  forgejo-us:

@@ -93,7 +93,7 @@ func (in *Installer) Ensure(ctx context.Context, t Target) {
 		if !strings.HasPrefix(url, ours) && url != strings.TrimSuffix(ours, "?") {
 			continue // someone else's hook
 		}
-		if keep == 0 && url == want && h.Active && sameEvents(h.Events, Events) {
+		if keep == 0 && url == want && h.Active && hasEvents(h.Events, Events) {
 			keep = h.ID
 			continue
 		}
@@ -119,12 +119,12 @@ func (in *Installer) Ensure(ctx context.Context, t Target) {
 	in.Tracker.update(t.Name, func(s *Status) { s.Installed, s.HookID, s.Error, s.CheckedAt = true, keep, "", &at })
 }
 
-func sameEvents(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for _, x := range b {
-		if !slices.Contains(a, x) {
+// hasEvents reports whether a hook gets every event ForgeSync needs.
+// Forgejo lists some events expanded ("issues" also comes back as
+// issue_assign, issue_label and issue_milestone), so extra ones are fine.
+func hasEvents(got, need []string) bool {
+	for _, x := range need {
+		if !slices.Contains(got, x) {
 			return false
 		}
 	}

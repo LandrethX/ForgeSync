@@ -177,12 +177,25 @@ func TestInstaller(t *testing.T) {
 		t.Errorf("audit = %v", audited)
 	}
 
-	// A matching hook is kept as is.
+	// A matching hook is kept as is, also when Forgejo lists more events
+	// than asked for (it expands "issues").
+	api.mu.Lock()
+	api.hooks[1].Events = append(api.hooks[1].Events, "issue_assign", "issue_label", "issue_milestone")
+	api.mu.Unlock()
 	api.calls = nil
 	in.EnsureAll(context.Background())
 	if len(api.calls) != 0 {
 		t.Errorf("second check changed things: %v", api.calls)
 	}
+	// A hook missing one of the events is replaced.
+	api.mu.Lock()
+	api.hooks[1].Events = []string{"push"}
+	api.mu.Unlock()
+	in.EnsureAll(context.Background())
+	if strings.Join(api.calls, ",") != "delete,create" {
+		t.Errorf("hook with too few events: %v", api.calls)
+	}
+	api.calls = nil
 	// A different secret means a different URL: the hook is replaced.
 	in.Secret = strings.Repeat("z", 32)
 	in.EnsureAll(context.Background())

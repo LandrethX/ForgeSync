@@ -1,0 +1,27 @@
+# Controller config for the local test environment. Run from the repo root:
+#   go run ./cmd/forgesyncd -config deploy/test/forgesync.yaml
+# Relative paths are resolved against this file's directory. The tokens are
+# created by setup.sh.
+log:
+  level: debug
+  format: text
+http:
+  listen: 127.0.0.1:8090
+  admin_token_file: .tokens/admin.token
+database:
+  # Test-only credentials (see .env). Real deployments use url_file or
+  # FORGESYNC_DATABASE_URL instead of an inline URL.
+  url: postgres://forgesync:forgesync-test-pw@localhost:5432/forgesync?sslmode=disable
+health:
+  interval: 15s
+  timeout: 5s
+  failure_threshold: 3
+nodes:
+  - name: se
+    site: SE
+    url: http://forgejo-se.test:3001
+    token_file: .tokens/se.token
+  - name: dk
+    site: DK
+    url: http://forgejo-dk.test:3002
+    token_file: .tokens/dk.token

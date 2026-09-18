@@ -92,6 +92,12 @@ for n in $NODES; do
   fi
 done
 
+if [ ! -s .tokens/admin.token ]; then
+  openssl rand -hex 32 > .tokens/admin.token
+  chmod 600 .tokens/admin.token
+  ok "generated ForgeSync admin API token -> .tokens/admin.token"
+fi
+
 echo "==> Smoke tests"
 disco="http://sceneid.test:8080/realms/sceneid/.well-known/openid-configuration"
 if curl -fsS "$disco" | grep -q '"issuer":"http://sceneid.test:8080/realms/sceneid"'; then
@@ -130,4 +136,6 @@ Ready.
 $(for n in $NODES; do echo "  Forgejo $(echo "$n" | tr a-z A-Z)            : http://forgejo-$n.test:$(port_of "$n")   (ssh port 222$(port_of "$n" | cut -c4))"; done)
   SceneID test users    : alice / alice-pw, bob / bob-pw, carol / carol-pw
   Local admins per node : siteadmin / $FORGEJO_SITEADMIN_PASSWORD, forgesync (API tokens in .tokens/)
+  ForgeSync database    : localhost:5432 (forgesync / $FORGESYNC_DB_PASSWORD)
+  Run the controller    : go run ./cmd/forgesyncd -config deploy/test/forgesync.yaml   (from the repo root)
 EOF

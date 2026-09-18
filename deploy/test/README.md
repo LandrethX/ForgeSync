@@ -9,6 +9,7 @@ developing ForgeSync, running on Docker Desktop for macOS.
 | `forgejo-se` | http://forgejo-se.test:3001 (SSH port 2221) | Forgejo node SE |
 | `forgejo-dk` | http://forgejo-dk.test:3002 (SSH port 2222) | Forgejo node DK |
 | `forgejo-de` | http://forgejo-de.test:3003 (SSH port 2223) | Forgejo node DE (optional, `--three`) |
+| `forgesync-db` | localhost:5432 | PostgreSQL for ForgeSync's own state (user/db `forgesync`) |
 | `hooksink` | http://localhost:8099 | Records webhook deliveries for the Phase 0 tests |
 
 Versions are pinned in `.env`: Forgejo 16 (current LTS) and Keycloak 26.7.4. Both images
@@ -72,6 +73,14 @@ edits: `docker compose up -d --force-recreate sceneid`. This also discards any u
 made in the admin console.
 
 ## ForgeSync on the Mac
+
+Run the controller on the Mac from the repo root. It uses `forgesync.yaml`, the tokens
+`setup.sh` created in `.tokens/`, and the `forgesync-db` database:
+
+```sh
+make run                                                   # or: go run ./cmd/forgesyncd -config deploy/test/forgesync.yaml
+go run ./cmd/forgesync --token-file deploy/test/.tokens/admin.token node list
+```
 
 Containers reach a ForgeSync process running on the Mac through `http://host.docker.internal:<port>`.
 Use that address as the webhook target.

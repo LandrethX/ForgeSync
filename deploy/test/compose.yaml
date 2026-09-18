@@ -67,6 +67,24 @@ services:
       retries: 60
       start_period: 20s
 
+  forgesync-db:
+    # ForgeSync's own state database (not Forgejo's). The controller runs on
+    # the Mac and connects to localhost:5432.
+    image: postgres:${POSTGRES_VERSION}
+    environment:
+      POSTGRES_USER: forgesync
+      POSTGRES_PASSWORD: ${FORGESYNC_DB_PASSWORD}
+      POSTGRES_DB: forgesync
+    volumes:
+      - forgesync-db:/var/lib/postgresql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forgesync -d forgesync"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   hooksink:
     # Records webhook deliveries for the Phase 0 probes (phase0/).
     image: python:3.13-alpine
@@ -146,6 +164,7 @@ services:
     healthcheck: *forgejo-health
 
 volumes:
+  forgesync-db:
   forgejo-se:
   forgejo-dk:
   forgejo-de:

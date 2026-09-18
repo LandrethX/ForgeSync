@@ -128,6 +128,12 @@ func (f *fakeAPI) Comment(_ context.Context, _, _ string, n int64, body string) 
 	f.comments = append(f.comments, fmt.Sprintf("#%d %s", n, body))
 	return nil
 }
+func (f *fakeAPI) has(full string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.repos[full]
+	return ok
+}
 func (f *fakeAPI) moveRepo(from, to string) {
 	r := f.repos[from]
 	delete(f.repos, from)

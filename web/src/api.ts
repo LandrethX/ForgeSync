@@ -77,6 +77,8 @@ export interface Replica {
   head_error?: string;
   forgejo_updated_at?: string;
   last_seen_at?: string;
+  /** The copy's name on this node; differs while a rename on the primary isn't applied here yet. */
+  full_name?: string;
   checked_at: string;
 }
 

@@ -70,9 +70,12 @@ export function RepositoryDetail({ id }: { id: string }) {
                       </th>
                       <td>
                         <PresenceLabel presence={v.presence} />
+                        {rp?.full_name && rp.full_name.toLowerCase() !== r.full_name.toLowerCase() && (
+                          <div className="small">Still named {rp.full_name} here; renamed on the next replication</div>
+                        )}
                         {v.presence === "present" && url && (
                           <div className="small">
-                            <a href={`${url}/${r.full_name}`} target="_blank" rel="noreferrer noopener">
+                            <a href={`${url}/${rp?.full_name || r.full_name}`} target="_blank" rel="noreferrer noopener">
                               Open in Forgejo
                             </a>
                           </div>

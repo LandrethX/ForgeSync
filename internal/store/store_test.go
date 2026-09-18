@@ -710,3 +710,126 @@ func TestArchives(t *testing.T) {
 		t.Errorf("archives outlived the repository: %+v", got)
 	}
 }
+
+func TestDetectRenames(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	nodes := []string{"se", "dk", "de"}
+	var recs []NodeRecord
+	for _, n := range nodes {
+		recs = append(recs, NodeRecord{Name: n, URL: "http://" + n})
+	}
+	if err := s.SyncNodes(ctx, recs); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
+	round := 0
+	scan := func(node string, repos ...ScannedRepo) {
+		t.Helper()
+		at := t0.Add(time.Duration(round) * time.Minute)
+		if err := s.RecordNodeScan(ctx, node, at, at.Add(time.Second), repos); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// alice/demo is on all three nodes; se is its primary (Forgejo id 42 there).
+	scan("se", ScannedRepo{FullName: "alice/demo", ForgejoID: 42})
+	scan("dk", ScannedRepo{FullName: "alice/demo", ForgejoID: 7})
+	scan("de", ScannedRepo{FullName: "alice/demo", ForgejoID: 9})
+	all, _ := s.Repositories(ctx)
+	id := all[0].ID
+	if _, err := s.SetPrimary(ctx, id, "se"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveReplicaSync(ctx, ReplicaSync{RepositoryID: id, Node: "dk", State: "synced", LastAttemptAt: t0},
+		map[string]string{"refs/heads/main": "abc"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The owner renames it on se to alice/app; dk and de still have alice/demo.
+	round++
+	scan("se", ScannedRepo{FullName: "alice/app", ForgejoID: 42})
+	scan("dk", ScannedRepo{FullName: "alice/demo", ForgejoID: 7})
+	scan("de", ScannedRepo{FullName: "alice/demo", ForgejoID: 9})
+	renames, ok, err := s.DetectRenames(ctx, nodes)
+	if err != nil || !ok || len(renames) != 1 || renames[0].From != "alice/demo" || renames[0].To != "alice/app" || renames[0].RepositoryID != id {
+		t.Fatalf("renames = %+v, ok %v, err %v", renames, ok, err)
+	}
+	rec, err := s.Repository(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]string{}
+	for _, r := range rec.Replicas {
+		if r.Present {
+			names[r.Node] = r.FullName
+		}
+	}
+	if rec.FullName != "alice/app" || rec.PrimaryNode != "se" || rec.PrimarySource != "manual" ||
+		names["se"] != "alice/app" || names["dk"] != "alice/demo" || names["de"] != "alice/demo" {
+		t.Fatalf("after the rename: %+v / %v", rec, names)
+	}
+	if all, _ := s.Repositories(ctx); len(all) != 1 {
+		t.Errorf("repositories = %d, want the one renamed", len(all))
+	}
+	if refs, _ := s.ReplicatedRefs(ctx, id, "dk"); refs["refs/heads/main"] != "abc" {
+		t.Errorf("replication state lost: %v", refs)
+	}
+
+	// Next round: dk was renamed; de still has the old name and keeps
+	// mapping to the repository through the alias.
+	round++
+	scan("se", ScannedRepo{FullName: "alice/app", ForgejoID: 42})
+	scan("dk", ScannedRepo{FullName: "alice/app", ForgejoID: 7})
+	scan("de", ScannedRepo{FullName: "alice/demo", ForgejoID: 9})
+	if renames, _, _ := s.DetectRenames(ctx, nodes); len(renames) != 0 {
+		t.Errorf("detected again: %+v", renames)
+	}
+	all, _ = s.Repositories(ctx)
+	if len(all) != 1 {
+		t.Fatalf("repositories = %+v", all)
+	}
+	for _, r := range all[0].Replicas {
+		if (r.Node == "de" && r.FullName != "alice/demo") || (r.Node == "dk" && r.FullName != "alice/app") || !r.Present {
+			t.Errorf("replica %+v", r)
+		}
+	}
+
+	// A new alice/demo on the primary is a new repository, not the alias.
+	round++
+	scan("se", ScannedRepo{FullName: "alice/app", ForgejoID: 42}, ScannedRepo{FullName: "alice/demo", ForgejoID: 43})
+	scan("dk", ScannedRepo{FullName: "alice/app", ForgejoID: 7})
+	scan("de", ScannedRepo{FullName: "alice/app", ForgejoID: 9})
+	s.DetectRenames(ctx, nodes)
+	all, _ = s.Repositories(ctx)
+	if len(all) != 2 || all[0].FullName != "alice/app" || all[1].FullName != "alice/demo" || all[1].ID == id {
+		t.Errorf("repositories = %+v", all)
+	}
+	// Every copy is renamed now, so the alias is gone.
+	var aliases int
+	s.pool.QueryRow(ctx, `SELECT count(*) FROM repository_aliases`).Scan(&aliases)
+	if aliases != 0 {
+		t.Errorf("%d aliases left", aliases)
+	}
+}
+
+func TestRenamedTo(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s.SyncNodes(ctx, []NodeRecord{{Name: "se", URL: "http://se"}})
+	t0 := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
+	s.RecordNodeScan(ctx, "se", t0, t0, []ScannedRepo{{FullName: "alice/demo", ForgejoID: 42}})
+	s.RecordNodeScan(ctx, "se", t0.Add(time.Minute), t0.Add(time.Minute), []ScannedRepo{{FullName: "alice/app", ForgejoID: 42}})
+	all, _ := s.Repositories(ctx)
+	if to, err := s.RenamedTo(ctx, all[1].ID, "se"); err != nil || all[1].FullName != "alice/demo" || to != "alice/app" {
+		t.Errorf("RenamedTo(%s) = %q, %v", all[1].FullName, to, err)
+	}
+	if to, _ := s.RenamedTo(ctx, all[0].ID, "se"); to != "" {
+		t.Errorf("RenamedTo(alice/app) = %q", to)
+	}
+}

@@ -26,8 +26,15 @@ type memStore struct {
 	handoffs []store.Handoff
 	archives []store.Archive
 	deleted  bool // DeleteRepository was called
+	// renamedTo is what RenamedTo answers.
+	renamedTo string
 }
 
+func (m *memStore) RenamedTo(context.Context, string, string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.renamedTo, nil
+}
 func (m *memStore) MarkRepositoryDeleted(_ context.Context, _ string, at time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

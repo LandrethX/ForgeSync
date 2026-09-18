@@ -51,6 +51,7 @@ type Store interface {
 	DeleteRepository(ctx context.Context, id string) error
 	Archives(ctx context.Context, repositoryID string) ([]store.Archive, error)
 	SaveArchive(ctx context.Context, a store.Archive) (int64, error)
+	RenamedTo(ctx context.Context, repositoryID, node string) (string, error)
 	NoteCreatedAccount(ctx context.Context, node, login string) error
 	SaveReplicaSync(ctx context.Context, st store.ReplicaSync, refs map[string]string) error
 	SyncConflicts(ctx context.Context, found []store.FoundConflict, checked, kinds []string, at time.Time) ([]store.ConflictChange, error)
@@ -252,7 +253,20 @@ func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again
 	pRemote := e.remote(primary, rec.FullName)
 	pRefs, err := e.git.LsRemote(ctx, pRemote)
 	if errors.Is(err, ErrRepoNotFound) {
-		switch had, gone := primaryHad(rec, primary.Name); {
+		had, gone := primaryHad(rec, primary.Name)
+		if had && gone && rec.DeletedAt == nil {
+			// Renamed or transferred, not deleted, if the primary has it
+			// under another name; the next scan round applies that.
+			to, err := e.store.RenamedTo(ctx, rec.ID, primary.Name)
+			if err != nil {
+				return false, err
+			}
+			if to != "" {
+				allReplicas(StateWaiting, "renamed on the primary "+primary.Name+" to "+to+"; applied after the next scan")
+				return false, nil
+			}
+		}
+		switch {
 		case had && gone:
 			_, err := e.deletedOnPrimary(ctx, rec, primary, replicas, healthy, record)
 			return false, err
@@ -323,6 +337,21 @@ func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again
 			record(name, StateWaiting, name+" isn't healthy", 0, nil)
 			conclusive = false
 			continue
+		}
+		// A rename on the primary is applied to this copy first, so a new
+		// copy isn't created next to it.
+		if old := pendingRename(rec, name); old != "" {
+			var why blocked
+			switch err := e.renameOn(ctx, rec, primary, e.nodes[name], old); {
+			case errors.As(err, &why):
+				record(name, StateMissing, why.Error(), 0, nil)
+				conclusive = false
+				continue
+			case err != nil:
+				record(name, StateError, "renaming the copy on "+name+" failed: "+err.Error(), 0, nil)
+				conclusive = false
+				continue
+			}
 		}
 		state, detail, updated, refs, issues, err := e.replicate(ctx, dir, rec, pRefs, primary, e.nodes[name])
 		if err == nil && len(issues) > 0 && e.opts.AutoFix {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -37,31 +38,50 @@ func (s *Store) RecordNodeScan(ctx context.Context, node string, started, finish
 	}
 	defer tx.Rollback(ctx)
 
+	names := map[string]bool{}
 	for _, r := range repos {
-		var id string
-		// first_seen_at is when the finding scan started, so a node scanned in
-		// the same round counts as checked and a repository on only one node
-		// shows as missing right away. The trade-off: one created mid-round
-		// can show as missing on the other node until the next scan.
+		names[strings.ToLower(r.FullName)] = true
+	}
+	for _, r := range repos {
+		var id, current string
+		// A copy under a renamed repository's old name, on a node other than
+		// its primary, belongs to that repository (until ForgeSync renames
+		// it). Not if this node also has the new name: then it's another
+		// repository that happens to have the old name.
 		err := tx.QueryRow(ctx, `
-			INSERT INTO repositories (full_name, first_seen_at) VALUES ($1, $2)
-			ON CONFLICT ((lower(full_name))) DO UPDATE SET full_name = repositories.full_name
-			RETURNING id`, r.FullName, started).Scan(&id)
-		if err != nil {
-			return fmt.Errorf("register repository %s: %w", r.FullName, err)
+			SELECT r.id, r.full_name FROM repository_aliases a JOIN repositories r ON r.id = a.repository_id
+			WHERE a.name = lower($1) AND coalesce(r.primary_node, '') <> $2`, r.FullName, node).Scan(&id, &current)
+		if err == nil && names[strings.ToLower(current)] {
+			id = ""
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("look up aliases of %s: %w", r.FullName, err)
+		}
+		if id == "" {
+			// first_seen_at is when the finding scan started, so a node scanned in
+			// the same round counts as checked and a repository on only one node
+			// shows as missing right away. The trade-off: one created mid-round
+			// can show as missing on the other node until the next scan.
+			err = tx.QueryRow(ctx, `
+				INSERT INTO repositories (full_name, first_seen_at) VALUES ($1, $2)
+				ON CONFLICT ((lower(full_name))) DO UPDATE SET full_name = repositories.full_name
+				RETURNING id`, r.FullName, started).Scan(&id)
+			if err != nil {
+				return fmt.Errorf("register repository %s: %w", r.FullName, err)
+			}
 		}
 		_, err = tx.Exec(ctx, `
 			INSERT INTO repository_replicas (repository_id, node, present, forgejo_id, private, fork, mirror, archived,
-				empty, default_branch, head_sha, head_error, forgejo_updated_at, forgejo_created_at, last_seen_at, checked_at)
-			VALUES ($1, $2, true, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
+				empty, default_branch, head_sha, head_error, forgejo_updated_at, forgejo_created_at, last_seen_at, checked_at, full_name)
+			VALUES ($1, $2, true, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14, $15)
 			ON CONFLICT (repository_id, node) DO UPDATE SET
 				present = true, forgejo_id = EXCLUDED.forgejo_id, private = EXCLUDED.private, fork = EXCLUDED.fork,
 				mirror = EXCLUDED.mirror, archived = EXCLUDED.archived, empty = EXCLUDED.empty,
 				default_branch = EXCLUDED.default_branch, head_sha = EXCLUDED.head_sha, head_error = EXCLUDED.head_error,
-				forgejo_updated_at = EXCLUDED.forgejo_updated_at, forgejo_created_at = EXCLUDED.forgejo_created_at, last_seen_at = EXCLUDED.last_seen_at,
+				forgejo_updated_at = EXCLUDED.forgejo_updated_at, forgejo_created_at = EXCLUDED.forgejo_created_at, full_name = EXCLUDED.full_name, last_seen_at = EXCLUDED.last_seen_at,
 				checked_at = EXCLUDED.checked_at`,
 			id, node, r.ForgejoID, r.Private, r.Fork, r.Mirror, r.Archived, r.Empty,
-			r.DefaultBranch, r.HeadSHA, r.HeadError, nullTime(r.Updated), nullTime(r.Created), finished)
+			r.DefaultBranch, r.HeadSHA, r.HeadError, nullTime(r.Updated), nullTime(r.Created), finished, r.FullName)
 		if err != nil {
 			return fmt.Errorf("record %s on %s: %w", r.FullName, node, err)
 		}
@@ -135,8 +155,11 @@ type Replica struct {
 	HeadError      string     `json:"head_error,omitempty"`
 	ForgejoUpdated *time.Time `json:"forgejo_updated_at,omitempty"`
 	ForgejoCreated *time.Time `json:"forgejo_created_at,omitempty"`
-	LastSeenAt     *time.Time `json:"last_seen_at,omitempty"`
-	CheckedAt      time.Time  `json:"checked_at"`
+	// FullName is the copy's name on this node. It differs from the
+	// repository's while a rename on the primary isn't applied here yet.
+	FullName   string     `json:"full_name"`
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	CheckedAt  time.Time  `json:"checked_at"`
 }
 
 // RepositoryRecord is a repository and what each node has of it.
@@ -179,7 +202,7 @@ func (s *Store) repositories(ctx context.Context, id string) ([]RepositoryRecord
 		SELECT r.id::text, r.full_name, coalesce(r.primary_node, ''), r.primary_source, r.first_seen_at, r.deleted_at,
 			rr.node, rr.present, rr.forgejo_id, rr.private, rr.fork, rr.mirror, rr.archived, rr.empty,
 			rr.default_branch, rr.head_sha, rr.head_error, rr.forgejo_updated_at, rr.forgejo_created_at,
-			rr.last_seen_at, rr.checked_at
+			rr.last_seen_at, rr.checked_at, rr.full_name
 		FROM repositories r
 		LEFT JOIN repository_replicas rr ON rr.repository_id = r.id
 		WHERE $1 = '' OR r.id = $1::uuid
@@ -197,9 +220,10 @@ func (s *Store) repositories(ctx context.Context, id string) ([]RepositoryRecord
 		var forgejoID *int64
 		var branch, sha, headErr *string
 		var checked *time.Time
+		var fullName *string
 		if err := rows.Scan(&rec.ID, &rec.FullName, &rec.PrimaryNode, &rec.PrimarySource, &rec.FirstSeenAt, &rec.DeletedAt,
 			&node, &present, &forgejoID, &private, &fork, &mirror, &archived, &empty,
-			&branch, &sha, &headErr, &rp.ForgejoUpdated, &rp.ForgejoCreated, &rp.LastSeenAt, &checked); err != nil {
+			&branch, &sha, &headErr, &rp.ForgejoUpdated, &rp.ForgejoCreated, &rp.LastSeenAt, &checked, &fullName); err != nil {
 			return nil, err
 		}
 		if len(out) == 0 || out[len(out)-1].ID != rec.ID {
@@ -209,6 +233,7 @@ func (s *Store) repositories(ctx context.Context, id string) ([]RepositoryRecord
 			rp.Node, rp.Present, rp.ForgejoID = *node, *present, *forgejoID
 			rp.Private, rp.Fork, rp.Mirror, rp.Archived, rp.Empty = *private, *fork, *mirror, *archived, *empty
 			rp.DefaultBranch, rp.HeadSHA, rp.HeadError, rp.CheckedAt = *branch, *sha, *headErr, *checked
+			rp.FullName = *fullName
 			last := &out[len(out)-1]
 			last.Replicas = append(last.Replicas, rp)
 		}

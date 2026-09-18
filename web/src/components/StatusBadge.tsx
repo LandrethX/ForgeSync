@@ -1,4 +1,4 @@
-import type { NodeState } from "../api";
+import type { NodeState, Presence, RepoStatus } from "../api";
 
 export type Tone = "good" | "warning" | "serious" | "critical" | "neutral";
 
@@ -78,6 +78,44 @@ export function StatusBadge({ state }: { state: NodeState }) {
     <span className={`status-badge tone-${info.tone}`} title={info.description}>
       <StatusIcon tone={info.tone} />
       <span>{info.label}</span>
+    </span>
+  );
+}
+
+export const REPO_STATUS: Record<RepoStatus, StateInfo> = {
+  same: { tone: "good", label: "Same everywhere", description: "Every node has it, with the same default branch at the same commit." },
+  differs: { tone: "warning", label: "Differs", description: "Every node has it, but the default branch or its commit differs." },
+  missing: { tone: "serious", label: "Missing on a node", description: "At least one node doesn't have it." },
+  unknown: {
+    tone: "neutral",
+    label: "Not known yet",
+    description: "A node hasn't been scanned since it appeared, or a branch couldn't be read.",
+  },
+};
+
+export function RepoStatusBadge({ status }: { status: RepoStatus }) {
+  const info = REPO_STATUS[status] ?? REPO_STATUS.unknown;
+  return (
+    <span className={`status-badge tone-${info.tone}`} title={info.description}>
+      <StatusIcon tone={info.tone} />
+      <span>{info.label}</span>
+    </span>
+  );
+}
+
+const PRESENCE: Record<Presence, { tone: Tone; label: string }> = {
+  present: { tone: "good", label: "Present" },
+  absent: { tone: "critical", label: "Not on this node" },
+  unknown: { tone: "neutral", label: "Not scanned yet" },
+};
+
+/** Icon and label for whether a node has a repository. */
+export function PresenceLabel({ presence, detail }: { presence: Presence; detail?: string }) {
+  const info = PRESENCE[presence] ?? PRESENCE.unknown;
+  return (
+    <span className="presence">
+      <StatusIcon tone={info.tone} />
+      <span>{detail ?? info.label}</span>
     </span>
   );
 }

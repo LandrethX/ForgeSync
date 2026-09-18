@@ -685,3 +685,102 @@ td.details {
     border: 1px solid CanvasText;
   }
 }
+
+/* ---------------------------------------------------------------- repositories */
+
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.segmented button {
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--text-2);
+  padding: 0.4rem 0.75rem;
+}
+
+.segmented button:last-child {
+  border-right: 0;
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.segmented .count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  margin-left: 0.2rem;
+}
+
+.presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.scan-summary {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.5rem;
+  font-size: 0.85rem;
+  color: var(--text-2);
+}
+
+.scan-error {
+  color: var(--text-muted);
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.25rem 1.25rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.panel h2 {
+  margin-top: 0.75rem;
+}
+
+.panel .toolbar {
+  margin-bottom: 0;
+}
+
+select {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+}
+
+.small {
+  font-size: 0.8rem;
+}
+
+.error-inline {
+  color: var(--text);
+  border-left: 3px solid var(--critical);
+  padding-left: 0.5rem;
+}

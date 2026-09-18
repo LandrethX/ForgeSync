@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,6 +76,12 @@ func IsAuthError(err error) bool {
 // do sends a request to path (relative to the instance root) and decodes a
 // JSON response into out when out is non-nil.
 func (c *Client) do(ctx context.Context, method, path string, auth bool, in, out any) error {
+	return c.doWith(ctx, method, path, auth, in, out, nil)
+}
+
+// doWith is do, additionally passing the response headers of a successful
+// response to onHeader.
+func (c *Client) doWith(ctx context.Context, method, path string, auth bool, in, out any, onHeader func(http.Header)) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -117,6 +124,9 @@ func (c *Client) do(ctx context.Context, method, path string, auth bool, in, out
 			apiErr.Message = m.Message
 		}
 		return apiErr
+	}
+	if onHeader != nil {
+		onHeader(resp.Header)
 	}
 	if out == nil || len(raw) == 0 {
 		return nil
@@ -166,4 +176,59 @@ func (c *Client) CurrentUser(ctx context.Context) (User, error) {
 	var u User
 	err := c.do(ctx, http.MethodGet, "/api/v1/user", true, nil, &u)
 	return u, err
+}
+
+// Repository is a Forgejo repository as listed by /repos/search.
+type Repository struct {
+	ID            int64     `json:"id"`
+	FullName      string    `json:"full_name"`
+	Owner         User      `json:"owner"`
+	Name          string    `json:"name"`
+	Private       bool      `json:"private"`
+	Fork          bool      `json:"fork"`
+	Mirror        bool      `json:"mirror"`
+	Archived      bool      `json:"archived"`
+	Empty         bool      `json:"empty"`
+	DefaultBranch string    `json:"default_branch"`
+	Size          int       `json:"size"`
+	Updated       time.Time `json:"updated_at"`
+}
+
+// ListRepos returns one page of all repositories the token can see (for a
+// site admin: every repository) and the total count across pages.
+func (c *Client) ListRepos(ctx context.Context, page, limit int) ([]Repository, int, error) {
+	var res struct {
+		OK   bool         `json:"ok"`
+		Data []Repository `json:"data"`
+	}
+	path := fmt.Sprintf("/api/v1/repos/search?page=%d&limit=%d&sort=id&order=asc", page, limit)
+	total, err := c.doCounted(ctx, path, &res)
+	return res.Data, total, err
+}
+
+// BranchHead returns the commit a branch points to.
+func (c *Client) BranchHead(ctx context.Context, owner, repo, branch string) (string, error) {
+	var b struct {
+		Commit struct {
+			ID string `json:"id"`
+		} `json:"commit"`
+	}
+	// Forgejo matches the branch with a wildcard route, so slashes in branch
+	// names stay slashes; each segment is escaped on its own.
+	segs := strings.Split(branch, "/")
+	for i, s := range segs {
+		segs[i] = url.PathEscape(s)
+	}
+	path := "/api/v1/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/branches/" + strings.Join(segs, "/")
+	err := c.do(ctx, http.MethodGet, path, true, nil, &b)
+	return b.Commit.ID, err
+}
+
+// doCounted is an authenticated GET that also returns X-Total-Count.
+func (c *Client) doCounted(ctx context.Context, path string, out any) (int, error) {
+	var total int
+	err := c.doWith(ctx, http.MethodGet, path, true, nil, out, func(h http.Header) {
+		total, _ = strconv.Atoi(h.Get("X-Total-Count"))
+	})
+	return total, err
 }

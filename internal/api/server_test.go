@@ -21,7 +21,38 @@ type fakeDB struct {
 	pingErr error
 	mu      sync.Mutex
 	audit   []store.AuditEntry
+	repos   []store.RepositoryRecord
+	scans   []store.NodeScan
 }
+
+func (f *fakeDB) Repositories(context.Context) ([]store.RepositoryRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]store.RepositoryRecord(nil), f.repos...), nil
+}
+func (f *fakeDB) Repository(_ context.Context, id string) (store.RepositoryRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.repos {
+		if r.ID == id {
+			return r, nil
+		}
+	}
+	return store.RepositoryRecord{}, store.ErrNotFound
+}
+func (f *fakeDB) SetPrimary(_ context.Context, id, node string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.repos {
+		if f.repos[i].ID == id {
+			prev := f.repos[i].PrimaryNode
+			f.repos[i].PrimaryNode = node
+			return prev, nil
+		}
+	}
+	return "", store.ErrNotFound
+}
+func (f *fakeDB) NodeScans(context.Context) ([]store.NodeScan, error) { return f.scans, nil }
 
 func (f *fakeDB) Ping(context.Context) error { return f.pingErr }
 func (f *fakeDB) Transitions(_ context.Context, node string, limit int) ([]store.Transition, error) {
@@ -98,6 +129,7 @@ func newFixture(token string) *fixture {
 			{Name: "se", URL: "http://forgejo-se.test:3001", Site: "SE"},
 		},
 		Health:        f.health,
+		Inventory:     &fakeInventory{},
 		DB:            f.db,
 		Log:           slog.New(slog.DiscardHandler),
 		StartedAt:     time.Now(),

@@ -89,3 +89,37 @@ func TestAPIErrors(t *testing.T) {
 		t.Error("IsAuthError = true for a 500")
 	}
 }
+
+func TestListReposAndBranchHead(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/repos/search":
+			q := r.URL.Query()
+			if q.Get("page") != "2" || q.Get("limit") != "50" || q.Get("sort") != "id" {
+				t.Errorf("query = %s", r.URL.RawQuery)
+			}
+			w.Header().Set("X-Total-Count", "51")
+			w.Write([]byte(`{"ok":true,"data":[{"id":51,"full_name":"alice/demo","owner":{"login":"alice"},"name":"demo","private":true,"default_branch":"main","updated_at":"2026-09-18T09:00:00Z"}]}`))
+		case "/api/v1/repos/alice/my repo/branches/feature/x":
+			if r.URL.EscapedPath() != "/api/v1/repos/alice/my%20repo/branches/feature/x" {
+				t.Errorf("escaped path = %q", r.URL.EscapedPath())
+			}
+			w.Write([]byte(`{"name":"feature/x","commit":{"id":"abc123"}}`))
+		default:
+			t.Errorf("unexpected path %q (raw %q)", r.URL.Path, r.URL.RawPath)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c, _ := New(srv.URL, "tok", nil)
+
+	repos, total, err := c.ListRepos(context.Background(), 2, 50)
+	if err != nil || total != 51 || len(repos) != 1 || repos[0].FullName != "alice/demo" || !repos[0].Private || repos[0].Owner.Login != "alice" {
+		t.Fatalf("repos = %+v, total %d, err %v", repos, total, err)
+	}
+	// Slashes in branch names stay path separators; other characters are escaped.
+	sha, err := c.BranchHead(context.Background(), "alice", "my repo", "feature/x")
+	if err != nil || sha != "abc123" {
+		t.Fatalf("head = %q, err %v", sha, err)
+	}
+}

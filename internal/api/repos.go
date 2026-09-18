@@ -1,0 +1,199 @@
+package api
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	"scenegit.org/forgesync/internal/inventory"
+	"scenegit.org/forgesync/internal/store"
+)
+
+// Inventory is the repository scanner.
+type Inventory interface {
+	Trigger() bool
+	Running() bool
+	Interval() time.Duration
+}
+
+// Repository is what the repository endpoints return.
+type Repository struct {
+	store.RepositoryRecord
+	Status inventory.Status     `json:"status"`
+	Nodes  []inventory.NodeView `json:"nodes"`
+}
+
+type repositoryList struct {
+	Total  int                      `json:"total"`
+	Counts map[inventory.Status]int `json:"counts"` // across all repositories, ignoring filters
+	Items  []Repository             `json:"items"`
+}
+
+func (s *Server) nodeNames() []string {
+	names := make([]string, len(s.Nodes))
+	for i, n := range s.Nodes {
+		names[i] = n.Name
+	}
+	return names
+}
+
+func (s *Server) scansByNode(r *http.Request) (map[string]store.NodeScan, error) {
+	scans, err := s.DB.NodeScans(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]store.NodeScan, len(scans))
+	for _, sc := range scans {
+		m[sc.Node] = sc
+	}
+	return m, nil
+}
+
+// listRepositories: ?q= (name contains), ?status=, ?limit=, ?offset=.
+func (s *Server) listRepositories(w http.ResponseWriter, r *http.Request) {
+	limit, err := queryInt(r, "limit", 100, 1, 500)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+	offset, err := queryInt(r, "offset", 0, 0, 1<<30)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+	status := inventory.Status(r.URL.Query().Get("status"))
+	switch status {
+	case "", inventory.Same, inventory.Differs, inventory.Missing, inventory.Unknown:
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "status must be same, differs, missing or unknown"})
+		return
+	}
+	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+
+	recs, err := s.DB.Repositories(r.Context())
+	if err != nil {
+		s.serverError(w, "list repositories", err)
+		return
+	}
+	scans, err := s.scansByNode(r)
+	if err != nil {
+		s.serverError(w, "list scans", err)
+		return
+	}
+	// The inventory is small enough to compare in memory; move filtering into
+	// SQL if installations grow to tens of thousands of repositories.
+	res := repositoryList{Counts: map[inventory.Status]int{}, Items: []Repository{}}
+	names := s.nodeNames()
+	for _, rec := range recs {
+		st, views := inventory.Compare(rec, names, scans)
+		res.Counts[st]++
+		if (status != "" && st != status) || (q != "" && !strings.Contains(strings.ToLower(rec.FullName), q)) {
+			continue
+		}
+		res.Total++
+		if res.Total > offset && len(res.Items) < limit {
+			res.Items = append(res.Items, Repository{RepositoryRecord: rec, Status: st, Nodes: views})
+		}
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) getRepository(w http.ResponseWriter, r *http.Request) {
+	rec, err := s.DB.Repository(r.Context(), chi.URLParam(r, "id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "no such repository"})
+		return
+	}
+	if err != nil {
+		s.serverError(w, "get repository", err)
+		return
+	}
+	scans, err := s.scansByNode(r)
+	if err != nil {
+		s.serverError(w, "list scans", err)
+		return
+	}
+	st, views := inventory.Compare(rec, s.nodeNames(), scans)
+	writeJSON(w, http.StatusOK, Repository{RepositoryRecord: rec, Status: st, Nodes: views})
+}
+
+// setPrimary: PUT {"node": "se"} or {"node": ""} to clear. Administrators only.
+// For now this only records the designation; nothing acts on it until
+// replication exists.
+func (s *Server) setPrimary(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Node *string `json:"node"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil || body.Node == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": `expected JSON {"node": "<name>"} or {"node": ""}`})
+		return
+	}
+	node := *body.Node
+	if node != "" && !contains(s.nodeNames(), node) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "no node named " + node})
+		return
+	}
+	id := chi.URLParam(r, "id")
+	rec, err := s.DB.Repository(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "no such repository"})
+		return
+	}
+	if err != nil {
+		s.serverError(w, "get repository", err)
+		return
+	}
+	prev, err := s.DB.SetPrimary(r.Context(), id, node)
+	if err != nil {
+		s.serverError(w, "set primary", err)
+		return
+	}
+	if prev != node {
+		s.audit(r.Context(), identity(r).Actor(), "repo.set_primary", rec.FullName,
+			map[string]any{"repository_id": id, "from": prev, "to": node})
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"primary_node": node, "previous": prev})
+}
+
+type inventoryStatus struct {
+	Running         bool             `json:"running"`
+	IntervalSeconds int              `json:"interval_seconds"`
+	Nodes           []store.NodeScan `json:"nodes"`
+}
+
+func (s *Server) inventoryStatus(w http.ResponseWriter, r *http.Request) {
+	scans, err := s.DB.NodeScans(r.Context())
+	if err != nil {
+		s.serverError(w, "list scans", err)
+		return
+	}
+	sort.Slice(scans, func(i, j int) bool { return scans[i].Node < scans[j].Node })
+	writeJSON(w, http.StatusOK, inventoryStatus{
+		Running:         s.Inventory.Running(),
+		IntervalSeconds: int(s.Inventory.Interval().Seconds()),
+		Nodes:           scans,
+	})
+}
+
+// scanNow asks for an inventory scan. Operators and up.
+func (s *Server) scanNow(w http.ResponseWriter, r *http.Request) {
+	started := s.Inventory.Trigger()
+	if started {
+		s.audit(r.Context(), identity(r).Actor(), "inventory.scan_requested", "", nil)
+	}
+	writeJSON(w, http.StatusAccepted, map[string]bool{"queued": started, "running": s.Inventory.Running()})
+}
+
+func contains(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}

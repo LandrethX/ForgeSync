@@ -53,6 +53,9 @@ nodes:
 	if cfg.Health.Interval != 30*time.Second || cfg.Health.Timeout != 5*time.Second || cfg.Health.FailureThreshold != 3 {
 		t.Errorf("health = %+v", cfg.Health)
 	}
+	if cfg.Inventory.Interval != 5*time.Minute || cfg.Inventory.BranchConcurrency != 4 {
+		t.Errorf("inventory = %+v", cfg.Inventory)
+	}
 	if !*cfg.HTTP.SecureCookies {
 		t.Error("secure_cookies should default to true")
 	}

@@ -2,13 +2,16 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -74,7 +77,106 @@ func NewRootCommand(out io.Writer) *cobra.Command {
 		},
 	})
 	root.AddCommand(node)
+	root.AddCommand(repoCommand(o))
 	return root
+}
+
+type repoList struct {
+	Total  int              `json:"total"`
+	Counts map[string]int   `json:"counts"`
+	Items  []api.Repository `json:"items"`
+}
+
+func repoCommand(o *options) *cobra.Command {
+	repo := &cobra.Command{Use: "repo", Short: "Repositories across nodes"}
+
+	var status, query string
+	var limit int
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List repositories and whether each node has the same default branch commit",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			v := url.Values{"limit": {strconv.Itoa(limit)}}
+			if status != "" {
+				v.Set("status", status)
+			}
+			if query != "" {
+				v.Set("q", query)
+			}
+			var res repoList
+			if err := o.call(cmd.Context(), http.MethodGet, "/api/v1/repositories?"+v.Encode(), nil, &res); err != nil {
+				return err
+			}
+			if o.output == "json" {
+				enc := json.NewEncoder(cmd.OutOrStdout())
+				enc.SetIndent("", "  ")
+				return enc.Encode(res)
+			}
+			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			fmt.Fprintln(tw, "REPOSITORY\tSTATUS\tPRIMARY\tNODES")
+			for _, r := range res.Items {
+				var nodes []string
+				for _, n := range r.Nodes {
+					nodes = append(nodes, n.Node+":"+string(n.Presence))
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.FullName, r.Status, dash(r.PrimaryNode), strings.Join(nodes, " "))
+			}
+			if err := tw.Flush(); err != nil {
+				return err
+			}
+			if res.Total > len(res.Items) {
+				fmt.Fprintf(cmd.OutOrStdout(), "(%d of %d shown; use --limit)\n", len(res.Items), res.Total)
+			}
+			return nil
+		},
+	}
+	list.Flags().StringVar(&status, "status", "", "only this status: same, differs, missing or unknown")
+	list.Flags().StringVarP(&query, "query", "q", "", "only names containing this text")
+	list.Flags().IntVar(&limit, "limit", 500, "maximum number of repositories to show")
+
+	setPrimary := &cobra.Command{
+		Use:   "set-primary OWNER/NAME NODE",
+		Short: "Record which node is a repository's primary (use - to clear)",
+		Long: "Record which node is a repository's primary. Needs an administrator (the admin token is one).\n" +
+			"ForgeSync doesn't replicate yet, so this only records the designation.",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := o.findRepository(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			node := args[1]
+			if node == "-" {
+				node = ""
+			}
+			var res struct {
+				Primary  string `json:"primary_node"`
+				Previous string `json:"previous"`
+			}
+			if err := o.call(cmd.Context(), http.MethodPut, "/api/v1/repositories/"+id+"/primary",
+				map[string]string{"node": node}, &res); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: primary %s (was %s)\n", args[0], dash(res.Primary), dash(res.Previous))
+			return nil
+		},
+	}
+	repo.AddCommand(list, setPrimary)
+	return repo
+}
+
+// findRepository looks up a repository's id by its exact owner/name.
+func (o *options) findRepository(ctx context.Context, fullName string) (string, error) {
+	var res repoList
+	if err := o.call(ctx, http.MethodGet, "/api/v1/repositories?limit=500&q="+url.QueryEscape(fullName), nil, &res); err != nil {
+		return "", err
+	}
+	for _, r := range res.Items {
+		if strings.EqualFold(r.FullName, fullName) {
+			return r.ID, nil
+		}
+	}
+	return "", fmt.Errorf("no repository named %s (has the inventory scan found it yet?)", fullName)
 }
 
 func printNodes(w io.Writer, nodes []api.Node, now time.Time) error {
@@ -91,6 +193,10 @@ func printNodes(w io.Writer, nodes []api.Node, now time.Time) error {
 }
 
 func (o *options) get(ctx context.Context, path string, out any) error {
+	return o.call(ctx, http.MethodGet, path, nil, out)
+}
+
+func (o *options) call(ctx context.Context, method, path string, in, out any) error {
 	token := o.token
 	if token == "" && o.tokenFile != "" {
 		b, err := os.ReadFile(o.tokenFile)
@@ -105,11 +211,22 @@ func (o *options) get(ctx context.Context, path string, out any) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(o.server, "/")+path, nil)
+	var body io.Reader
+	if in != nil {
+		b, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(o.server, "/")+path, body)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {

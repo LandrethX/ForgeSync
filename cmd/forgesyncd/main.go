@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"scenegit.org/forgesync/internal/config"
 	"scenegit.org/forgesync/internal/forgejo"
 	"scenegit.org/forgesync/internal/health"
+	"scenegit.org/forgesync/internal/inventory"
 	"scenegit.org/forgesync/internal/store"
 	"scenegit.org/forgesync/internal/webui"
 )
@@ -69,6 +71,7 @@ func run(configPath string) error {
 	var records []store.NodeRecord
 	var infos []api.NodeInfo
 	var targets []health.Target
+	var scanTargets []inventory.Target
 	for _, n := range cfg.Nodes {
 		client, err := forgejo.New(n.URL, n.Token, nil)
 		if err != nil {
@@ -77,6 +80,7 @@ func run(configPath string) error {
 		records = append(records, store.NodeRecord{Name: n.Name, URL: n.URL, Site: n.Site})
 		infos = append(infos, api.NodeInfo{Name: n.Name, URL: n.URL, Site: n.Site})
 		targets = append(targets, health.Target{Name: n.Name, ServiceUser: n.ServiceUser, Client: client})
+		scanTargets = append(scanTargets, inventory.Target{Name: n.Name, Client: client})
 	}
 	if err := db.SyncNodes(ctx, records); err != nil {
 		return err
@@ -87,9 +91,17 @@ func run(configPath string) error {
 		Timeout:          cfg.Health.Timeout,
 		FailureThreshold: cfg.Health.FailureThreshold,
 	}, db, log)
+	scanner := inventory.NewScanner(scanTargets, inventory.Options{
+		Interval:          cfg.Inventory.Interval,
+		BranchConcurrency: cfg.Inventory.BranchConcurrency,
+	}, db, log)
 	monitorDone := make(chan struct{})
 	go func() {
-		monitor.Run(ctx)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); monitor.Run(ctx) }()
+		go func() { defer wg.Done(); scanner.Run(ctx) }()
+		wg.Wait()
 		close(monitorDone)
 	}()
 
@@ -120,13 +132,14 @@ func run(configPath string) error {
 			AdminToken:       cfg.HTTP.AdminToken,
 			OIDC:             oidcFlow,
 			AllowTokenSignIn: cfg.OIDC.AllowTokenSignIn,
-			Nodes:         infos,
-			Health:        monitor,
-			DB:            db,
-			Log:           log,
-			StartedAt:     startedAt,
-			SecureCookies: *cfg.HTTP.SecureCookies,
-			Frontend:      webui.Handler(),
+			Nodes:            infos,
+			Health:           monitor,
+			Inventory:        scanner,
+			DB:               db,
+			Log:              log,
+			StartedAt:        startedAt,
+			SecureCookies:    *cfg.HTTP.SecureCookies,
+			Frontend:         webui.Handler(),
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,

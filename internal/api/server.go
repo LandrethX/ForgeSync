@@ -29,11 +29,14 @@ import (
 	"scenegit.org/forgesync/internal/store"
 )
 
-
 // DB is the database access the API needs.
 type DB interface {
 	Ping(ctx context.Context) error
 	Transitions(ctx context.Context, node string, limit int) ([]store.Transition, error)
+	Repositories(ctx context.Context) ([]store.RepositoryRecord, error)
+	Repository(ctx context.Context, id string) (store.RepositoryRecord, error)
+	SetPrimary(ctx context.Context, id, node string) (string, error)
+	NodeScans(ctx context.Context) ([]store.NodeScan, error)
 	AuditEntries(ctx context.Context, limit int, beforeID int64) ([]store.AuditEntry, error)
 	Audit(ctx context.Context, actor, action, target string, details map[string]any) error
 }
@@ -58,18 +61,19 @@ type Node struct {
 }
 
 type Server struct {
-	AdminToken    string // bearer token for the CLI; also web sign-in when OIDC is off
-	OIDC          OIDCFlow
+	AdminToken string // bearer token for the CLI; also web sign-in when OIDC is off
+	OIDC       OIDCFlow
 	// AllowTokenSignIn keeps admin-token sign-in in the web UI while OIDC is on.
 	AllowTokenSignIn bool
-	Nodes         []NodeInfo
-	Health        HealthSource
-	DB            DB
-	Log           *slog.Logger
-	StartedAt     time.Time
-	Sessions      *Sessions
-	SecureCookies bool
-	Frontend      http.Handler // nil serves nothing outside the API
+	Nodes            []NodeInfo
+	Health           HealthSource
+	Inventory        Inventory
+	DB               DB
+	Log              *slog.Logger
+	StartedAt        time.Time
+	Sessions         *Sessions
+	SecureCookies    bool
+	Frontend         http.Handler // nil serves nothing outside the API
 
 	limiter *loginLimiter
 }
@@ -110,7 +114,12 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/nodes/{name}/transitions", s.nodeTransitions)
 				r.Get("/transitions", s.nodeTransitions)
 				r.Get("/events", s.events)
+				r.Get("/repositories", s.listRepositories)
+				r.Get("/repositories/{id}", s.getRepository)
+				r.Get("/inventory", s.inventoryStatus)
 			})
+			r.With(requireRole(auth.Operator)).Post("/inventory/scan", s.scanNow)
+			r.With(requireRole(auth.Administrator)).Put("/repositories/{id}/primary", s.setPrimary)
 			// The audit log shows who signed in from where: operators and up.
 			r.With(requireRole(auth.Operator)).Get("/audit", s.listAudit)
 		})

@@ -24,12 +24,20 @@ import (
 const EnvDatabaseURL = "FORGESYNC_DATABASE_URL"
 
 type Config struct {
-	Log      Log      `yaml:"log"`
-	HTTP     HTTP     `yaml:"http"`
-	OIDC     OIDC     `yaml:"oidc"`
-	Database Database `yaml:"database"`
-	Health   Health   `yaml:"health"`
-	Nodes    []Node   `yaml:"nodes"`
+	Log       Log       `yaml:"log"`
+	HTTP      HTTP      `yaml:"http"`
+	OIDC      OIDC      `yaml:"oidc"`
+	Database  Database  `yaml:"database"`
+	Health    Health    `yaml:"health"`
+	Inventory Inventory `yaml:"inventory"`
+	Nodes     []Node    `yaml:"nodes"`
+}
+
+// Inventory controls the periodic repository scan of every node.
+type Inventory struct {
+	Interval time.Duration `yaml:"interval"`
+	// BranchConcurrency limits parallel branch lookups per node.
+	BranchConcurrency int `yaml:"branch_concurrency"`
 }
 
 // OIDC configures SceneID sign-in for the web UI. It's off when Issuer is
@@ -152,6 +160,12 @@ func (c *Config) applyDefaults() {
 	if c.Health.FailureThreshold == 0 {
 		c.Health.FailureThreshold = 3
 	}
+	if c.Inventory.Interval == 0 {
+		c.Inventory.Interval = 5 * time.Minute
+	}
+	if c.Inventory.BranchConcurrency == 0 {
+		c.Inventory.BranchConcurrency = 4
+	}
 	for i := range c.Nodes {
 		if c.Nodes[i].ServiceUser == "" {
 			c.Nodes[i].ServiceUser = "forgesync"
@@ -232,6 +246,12 @@ func (c *Config) validate() error {
 	}
 	if c.OIDC.Enabled() {
 		errs = append(errs, c.OIDC.validate()...)
+	}
+	if c.Inventory.Interval < 10*time.Second {
+		errs = append(errs, errors.New("inventory.interval must be at least 10s"))
+	}
+	if c.Inventory.BranchConcurrency < 1 || c.Inventory.BranchConcurrency > 32 {
+		errs = append(errs, errors.New("inventory.branch_concurrency must be 1 to 32"))
 	}
 	if len(c.Nodes) == 0 {
 		errs = append(errs, errors.New("nodes: at least one node is required"))

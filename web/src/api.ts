@@ -34,6 +34,64 @@ export interface AuditEntry {
   details: Record<string, unknown>;
 }
 
+export type RepoStatus = "same" | "differs" | "missing" | "unknown";
+export type Presence = "present" | "absent" | "unknown";
+
+export interface Replica {
+  node: string;
+  present: boolean;
+  forgejo_id: number;
+  private: boolean;
+  fork: boolean;
+  mirror: boolean;
+  archived: boolean;
+  empty: boolean;
+  default_branch: string;
+  head_sha: string;
+  head_error?: string;
+  forgejo_updated_at?: string;
+  last_seen_at?: string;
+  checked_at: string;
+}
+
+export interface NodeView {
+  node: string;
+  presence: Presence;
+  stale: boolean;
+  replica?: Replica;
+}
+
+export interface Repository {
+  id: string;
+  full_name: string;
+  primary_node: string;
+  first_seen_at: string;
+  status: RepoStatus;
+  nodes: NodeView[];
+}
+
+export interface RepositoryList {
+  total: number;
+  counts: Partial<Record<RepoStatus, number>>;
+  items: Repository[];
+}
+
+export interface NodeScan {
+  node: string;
+  started_at: string;
+  finished_at: string;
+  ok: boolean;
+  error?: string;
+  repositories: number;
+  last_success_at?: string;
+}
+
+export interface InventoryStatus {
+  running: boolean;
+  interval_seconds: number;
+  nodes: NodeScan[];
+}
+
 export interface Overview {
   version: string;
   commit: string;
@@ -133,6 +191,19 @@ export const api = {
       "GET",
       node ? `/nodes/${encodeURIComponent(node)}/transitions?limit=${limit}` : `/transitions?limit=${limit}`,
     ),
+  repositories: (opts: { q?: string; status?: RepoStatus; limit: number; offset: number }) => {
+    const p = new URLSearchParams({ limit: String(opts.limit), offset: String(opts.offset) });
+    if (opts.q) p.set("q", opts.q);
+    if (opts.status) p.set("status", opts.status);
+    return request<RepositoryList>("GET", `/repositories?${p}`);
+  },
+  repository: (id: string) => request<Repository>("GET", `/repositories/${encodeURIComponent(id)}`),
+  setPrimary: (id: string, node: string) =>
+    request<{ primary_node: string; previous: string }>("PUT", `/repositories/${encodeURIComponent(id)}/primary`, {
+      node,
+    }),
+  inventory: () => request<InventoryStatus>("GET", "/inventory"),
+  scanNow: () => request<{ queued: boolean; running: boolean }>("POST", "/inventory/scan"),
   audit: (limit: number, before?: number) =>
     request<AuditEntry[]>("GET", `/audit?limit=${limit}${before ? `&before=${before}` : ""}`),
 };

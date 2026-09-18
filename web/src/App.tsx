@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, hasRole, SIGNED_OUT_EVENT, type Session } from "./api";
 import { Layout, PageHeader } from "./components/Layout";
-import { NodeStreamContext, useNodeStream } from "./hooks";
+import { NodeStreamContext, SessionContext, useNodeStream } from "./hooks";
 import { Audit } from "./pages/Audit";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
 import { NodeDetail } from "./pages/NodeDetail";
 import { Nodes } from "./pages/Nodes";
+import { Repositories } from "./pages/Repositories";
+import { RepositoryDetail } from "./pages/RepositoryDetail";
 import { Link, match, usePath } from "./router";
 
 type Auth = "checking" | "signed-out" | "signed-in" | "unavailable";
@@ -70,11 +72,13 @@ export function App() {
 function SignedIn({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
   const stream = useNodeStream();
   return (
-    <NodeStreamContext.Provider value={stream}>
-      <Layout connection={stream.connection} session={session} onSignOut={onSignOut}>
-        <Routes session={session} />
-      </Layout>
-    </NodeStreamContext.Provider>
+    <SessionContext.Provider value={session}>
+      <NodeStreamContext.Provider value={stream}>
+        <Layout connection={stream.connection} session={session} onSignOut={onSignOut}>
+          <Routes session={session} />
+        </Layout>
+      </NodeStreamContext.Provider>
+    </SessionContext.Provider>
   );
 }
 
@@ -89,6 +93,9 @@ function Routes({ session }: { session: Session }) {
   if (match("/nodes", path)) return <Nodes />;
   const node = match("/nodes/:name", path);
   if (node?.name) return <NodeDetail name={node.name} />;
+  if (match("/repositories", path)) return <Repositories />;
+  const repo = match("/repositories/:id", path);
+  if (repo?.id) return <RepositoryDetail id={repo.id} />;
   if (match("/audit", path)) {
     return hasRole(session, "operator") ? (
       <Audit />

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { api, ApiError, SIGNED_OUT_EVENT, type Node } from "./api";
+import { api, ApiError, SIGNED_OUT_EVENT, type Node, type Session } from "./api";
 
 /** Current time, re-rendering every `intervalMs` so relative times stay fresh. */
 export function useNow(intervalMs = 1000): number {
@@ -100,4 +100,21 @@ export function useNodeStream(): NodeStream {
   }, []);
 
   return { nodes, connection };
+}
+
+export const SessionContext = createContext<Session | undefined>(undefined);
+
+/** The signed-in user; only use inside the signed-in part of the app. */
+export function useSession(): Session | undefined {
+  return useContext(SessionContext);
+}
+
+/** `value`, but only after it has stopped changing for `ms`. */
+export function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const id = window.setTimeout(() => setV(value), ms);
+    return () => window.clearTimeout(id);
+  }, [value, ms]);
+  return v;
 }

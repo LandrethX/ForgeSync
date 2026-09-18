@@ -163,6 +163,14 @@ export type ConflictKind =
   | "git_replica_changed"
   | "git_replica_extra_ref";
 
+export interface Handoff {
+  pr_number: number;
+  pr_url: string;
+  branch: string;
+  nodes: string[];
+  state: string;
+}
+
 export interface Relation {
   a: string;
   b: string;
@@ -184,6 +192,8 @@ export interface Conflict {
     branches?: Record<string, string>;
     relations?: Relation[];
     primary?: string;
+    /** Pull requests on the primary where the owner decides (diverged branches). */
+    handoffs?: Handoff[];
   };
   detected_at: string;
   last_seen_at: string;

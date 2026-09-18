@@ -17,6 +17,13 @@ type NodeAPI interface {
 	UsersByLoginName(ctx context.Context, sourceID int64, loginName string) ([]forgejo.User, error)
 	AdminCreateUser(ctx context.Context, opt forgejo.CreateUserOption) (forgejo.User, error)
 	AdminCreateRepo(ctx context.Context, owner string, opt forgejo.CreateRepoOption) (forgejo.Repository, error)
+
+	// For resolving conflicts (handoff.go).
+	SetDefaultBranch(ctx context.Context, owner, repo, branch string) error
+	CreatePullRequest(ctx context.Context, owner, repo string, opt forgejo.CreatePullRequestOption) (forgejo.PullRequest, error)
+	GetPullRequest(ctx context.Context, owner, repo string, number int64) (forgejo.PullRequest, bool, error)
+	Comment(ctx context.Context, owner, repo string, number int64, body string) error
+	OrgOwners(ctx context.Context, org string) ([]string, error)
 }
 
 // blocked is a reason a missing repository can't be created on a replica

@@ -46,6 +46,16 @@ type Replication struct {
 	// CreateMissing creates a repository on a node that doesn't have it (and
 	// its owner, if a SceneID user). Default true.
 	CreateMissing *bool `yaml:"create_missing"`
+	// AutoFix applies the conflict fixes that lose nothing (a replica's new
+	// commits or refs go to the primary; default branches follow the
+	// primary). Default true.
+	AutoFix *bool `yaml:"auto_fix"`
+	// HandOffConflicts opens a pull request on the primary for each diverged
+	// branch, for the repository's owner to decide. Default true.
+	HandOffConflicts *bool `yaml:"hand_off_conflicts"`
+	// BackupDays is how long a replica's version is kept after the owner
+	// chose the primary's. Default 30.
+	BackupDays int `yaml:"backup_days"`
 }
 
 // Inventory controls the periodic repository scan of every node.
@@ -184,9 +194,14 @@ func (c *Config) applyDefaults() {
 	if c.Replication.Concurrency == 0 {
 		c.Replication.Concurrency = 2
 	}
-	if c.Replication.CreateMissing == nil {
-		yes := true
-		c.Replication.CreateMissing = &yes
+	for _, b := range []**bool{&c.Replication.CreateMissing, &c.Replication.AutoFix, &c.Replication.HandOffConflicts} {
+		if *b == nil {
+			yes := true
+			*b = &yes
+		}
+	}
+	if c.Replication.BackupDays == 0 {
+		c.Replication.BackupDays = 30
 	}
 	if c.Replication.Git == "" {
 		c.Replication.Git = "git"
@@ -290,6 +305,9 @@ func (c *Config) validate() error {
 	}
 	if c.Replication.Concurrency < 1 || c.Replication.Concurrency > 16 {
 		errs = append(errs, errors.New("replication.concurrency must be 1 to 16"))
+	}
+	if c.Replication.BackupDays < 1 {
+		errs = append(errs, errors.New("replication.backup_days must be at least 1"))
 	}
 	if c.Inventory.BranchConcurrency < 1 || c.Inventory.BranchConcurrency > 32 {
 		errs = append(errs, errors.New("inventory.branch_concurrency must be 1 to 32"))

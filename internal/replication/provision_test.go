@@ -2,6 +2,7 @@ package replication
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,12 +20,20 @@ import (
 // fakeAPI is a node's REST API in front of a gitNode: creating a repository
 // makes a real bare repository the engine can push to.
 type fakeAPI struct {
-	mu    sync.Mutex
-	git   *gitNode
-	users map[string]forgejo.User
-	orgs  map[string]bool
-	repos map[string]forgejo.Repository
-	calls []string
+	mu        sync.Mutex
+	git       *gitNode
+	users     map[string]forgejo.User
+	orgs      map[string]bool
+	orgOwners map[string][]string
+	repos     map[string]forgejo.Repository
+	pulls     []fakePull
+	comments  []string
+	calls     []string
+}
+
+type fakePull struct {
+	forgejo.CreatePullRequestOption
+	forgejo.PullRequest
 }
 
 func newFakeAPI(g *gitNode) *fakeAPI {
@@ -84,6 +93,43 @@ func (f *fakeAPI) AdminCreateRepo(_ context.Context, owner string, opt forgejo.C
 	f.git.create(r.FullName)
 	f.calls = append(f.calls, "create repo "+r.FullName)
 	return r, nil
+}
+
+func (f *fakeAPI) SetDefaultBranch(_ context.Context, owner, repo, branch string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.repos[owner+"/"+repo]
+	r.DefaultBranch = branch
+	f.repos[owner+"/"+repo] = r
+	f.calls = append(f.calls, "default branch "+owner+"/"+repo+" "+branch)
+	return nil
+}
+func (f *fakeAPI) CreatePullRequest(_ context.Context, owner, repo string, opt forgejo.CreatePullRequestOption) (forgejo.PullRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := int64(len(f.pulls) + 1)
+	pr := forgejo.PullRequest{Number: n, State: "open", HTMLURL: fmt.Sprintf("http://se/%s/%s/pulls/%d", owner, repo, n)}
+	f.pulls = append(f.pulls, fakePull{opt, pr})
+	return pr, nil
+}
+func (f *fakeAPI) GetPullRequest(_ context.Context, _, _ string, n int64) (forgejo.PullRequest, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if n < 1 || int(n) > len(f.pulls) {
+		return forgejo.PullRequest{}, false, nil
+	}
+	return f.pulls[n-1].PullRequest, true, nil
+}
+func (f *fakeAPI) Comment(_ context.Context, _, _ string, n int64, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.comments = append(f.comments, fmt.Sprintf("#%d %s", n, body))
+	return nil
+}
+func (f *fakeAPI) OrgOwners(_ context.Context, org string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.orgOwners[org], nil
 }
 
 const sub = "9115d51e-7245-44e0-ba34-f4c857ad98a3"

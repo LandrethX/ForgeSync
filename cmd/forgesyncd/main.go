@@ -111,13 +111,17 @@ func run(configPath string) error {
 		engine = replication.NewEngine(gitNodes, git, db, monitor, replication.Options{
 			Concurrency:   cfg.Replication.Concurrency,
 			CreateMissing: *cfg.Replication.CreateMissing,
+			AutoFix:       *cfg.Replication.AutoFix,
+			HandOff:       *cfg.Replication.HandOffConflicts,
+			BackupFor:     time.Duration(cfg.Replication.BackupDays) * 24 * time.Hour,
 			// Rescan so the inventory shows the result. Forgejo updates some
 			// repository fields (e.g. "empty" after the first push) just after
 			// a push, so give it a moment first. The scanner exists by then.
 			AfterTriggered: func() { time.AfterFunc(5*time.Second, func() { scanner.Trigger() }) },
 		}, log)
 		log.Info("replication enabled", "git", v, "work_dir", cfg.Replication.WorkDir,
-			"create_missing", *cfg.Replication.CreateMissing)
+			"create_missing", *cfg.Replication.CreateMissing, "auto_fix", *cfg.Replication.AutoFix,
+			"hand_off_conflicts", *cfg.Replication.HandOffConflicts, "backup_days", cfg.Replication.BackupDays)
 	}
 	detector := conflicts.NewDetector(nodeNames, comparers, db, log)
 	detector.ReplicationOwnsPrimaries = engine != nil

@@ -123,6 +123,17 @@ func (g *Git) IsAncestor(ctx context.Context, dir, a, b string) (is, ok bool) {
 	return false, false
 }
 
+// MergeBase returns the best common ancestor of a and b, or "" if they
+// share no history.
+func (g *Git) MergeBase(ctx context.Context, dir, a, b string) (string, error) {
+	out, _, err := g.run(ctx, dir, nil, "merge-base", a, b)
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 && strings.TrimSpace(out) == "" {
+		return "", nil
+	}
+	return strings.TrimSpace(out), err
+}
+
 // PushResult is the outcome of one ref update.
 type PushResult struct {
 	OK     bool

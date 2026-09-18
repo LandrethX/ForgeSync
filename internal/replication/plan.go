@@ -22,6 +22,10 @@ const (
 	Create      ActionKind = "create"       // ref missing on the replica
 	FastForward ActionKind = "fast_forward" // replica is behind the primary
 	Delete      ActionKind = "delete"       // deleted on the primary; replica unchanged since we wrote it
+	// Reset moves a replica's branch to the primary's value, dropping its own
+	// commits. Only after the owner chose the primary's version, with those
+	// commits kept on a backup branch (see handoff.go); Plan never returns it.
+	Reset ActionKind = "reset"
 )
 
 // Action is one ref update to push. Expected is the value the replica must

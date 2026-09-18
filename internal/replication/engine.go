@@ -43,6 +43,9 @@ type Store interface {
 	Repository(ctx context.Context, id string) (store.RepositoryRecord, error)
 	ReplicatedRefs(ctx context.Context, repositoryID, node string) (map[string]string, error)
 	ForgetReplicatedRefs(ctx context.Context, repositoryID, node string) error
+	Handoffs(ctx context.Context, repositoryID string, activeOnly bool) ([]store.Handoff, error)
+	SaveHandoff(ctx context.Context, h store.Handoff) (int64, error)
+	UpdateHandoff(ctx context.Context, h store.Handoff) error
 	NoteCreatedAccount(ctx context.Context, node, login string) error
 	SaveReplicaSync(ctx context.Context, st store.ReplicaSync, refs map[string]string) error
 	SyncConflicts(ctx context.Context, found []store.FoundConflict, checked, kinds []string, at time.Time) ([]store.ConflictChange, error)
@@ -59,6 +62,16 @@ type Options struct {
 	// CreateMissing creates a repository (and its SceneID owner) on a
 	// replica that doesn't have it, instead of leaving it missing.
 	CreateMissing bool
+	// AutoFix applies the fixes that lose nothing: a replica's new commits
+	// or refs are taken over by the primary, and a replica's default branch
+	// is set to the primary's.
+	AutoFix bool
+	// HandOff hands diverged branches to the repository's owner as a pull
+	// request on the primary (see handoff.go).
+	HandOff bool
+	// BackupFor is how long a replica's branch is kept after the owner
+	// chose the primary's version. Default 30 days.
+	BackupFor time.Duration
 	// AfterTriggered, if set, runs after a replication started by Trigger,
 	// e.g. to rescan so the inventory reflects the new state right away.
 	AfterTriggered func()
@@ -82,6 +95,9 @@ type Engine struct {
 func NewEngine(nodes []Node, git *Git, st Store, h HealthSource, opts Options, log *slog.Logger) *Engine {
 	if opts.Concurrency < 1 {
 		opts.Concurrency = 2
+	}
+	if opts.BackupFor == 0 {
+		opts.BackupFor = 30 * 24 * time.Hour
 	}
 	e := &Engine{nodes: map[string]Node{}, git: git, store: st, health: h, opts: opts, log: log, now: time.Now, running: map[string]bool{}}
 	for _, n := range nodes {
@@ -161,9 +177,24 @@ func (e *Engine) RunRepo(ctx context.Context, rec store.RepositoryRecord) error 
 		e.mu.Unlock()
 	}()
 
+	// A fix can move the primary (e.g. taking a replica's new commits); a
+	// second pass then carries that to the other replicas right away.
+	for pass := 0; pass < 2; pass++ {
+		again, err := e.runOnce(ctx, rec)
+		if err != nil || !again {
+			return err
+		}
+	}
+	return nil
+}
+
+// runOnce replicates one repository from its primary to every other node,
+// applies owners' decisions and safe fixes, and hands diverged branches to the
+// owner. again reports that the primary changed, so another pass is useful.
+func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again bool, err error) {
 	primary, ok := e.nodes[rec.PrimaryNode]
 	if !ok {
-		return fmt.Errorf("primary %q isn't a configured node", rec.PrimaryNode)
+		return false, fmt.Errorf("primary %q isn't a configured node", rec.PrimaryNode)
 	}
 	replicas := make([]string, 0, len(e.order))
 	for _, n := range e.order {
@@ -187,12 +218,12 @@ func (e *Engine) RunRepo(ctx context.Context, rec store.RepositoryRecord) error 
 
 	if !healthy[primary.Name] {
 		allReplicas(StateWaiting, "primary "+primary.Name+" isn't healthy")
-		return nil
+		return false, nil
 	}
 	dir, err := e.git.Cache(ctx, rec.ID)
 	if err != nil {
 		allReplicas(StateError, err.Error())
-		return err
+		return false, err
 	}
 	pRemote := e.remote(primary, rec.FullName)
 	pRefs, err := e.git.LsRemote(ctx, pRemote)
@@ -203,10 +234,10 @@ func (e *Engine) RunRepo(ctx context.Context, rec store.RepositoryRecord) error 
 		switch serr := e.seedPrimary(ctx, dir, rec, primary, healthy); {
 		case errors.As(serr, &why):
 			allReplicas(StateMissing, "the primary "+primary.Name+" doesn't have the repository yet: "+why.Error())
-			return nil
+			return false, nil
 		case serr != nil:
 			allReplicas(StateError, "copying the repository to the primary "+primary.Name+" failed: "+serr.Error())
-			return serr
+			return false, serr
 		}
 		pRefs, err = e.git.LsRemote(ctx, pRemote)
 	}
@@ -219,7 +250,18 @@ func (e *Engine) RunRepo(ctx context.Context, rec store.RepositoryRecord) error 
 			detail = "the repository doesn't exist on the primary " + primary.Name
 		}
 		allReplicas(StateError, detail)
-		return err
+		return false, err
+	}
+	// Hand-off branches live on the primary only.
+	pRefs, handoffRefs := splitHandoffRefs(pRefs)
+
+	var handoffs []store.Handoff
+	if e.opts.HandOff {
+		if handoffs, err = e.store.Handoffs(ctx, rec.ID, true); err != nil {
+			return false, err
+		}
+		// Owners' decisions first, so this run already compares the result.
+		handoffs = e.applyDecisions(ctx, dir, rec, primary, pRefs, handoffRefs, handoffs, healthy)
 	}
 
 	// Conflicts found on each replica, merged per kind and ref.
@@ -229,6 +271,7 @@ func (e *Engine) RunRepo(ctx context.Context, rec store.RepositoryRecord) error 
 	}
 	merged := map[key]map[string]string{}
 	conclusive := true
+	var diverged []divergence
 
 	for _, name := range replicas {
 		if !healthy[name] {
@@ -237,6 +280,16 @@ func (e *Engine) RunRepo(ctx context.Context, rec store.RepositoryRecord) error 
 			continue
 		}
 		state, detail, updated, refs, issues, err := e.replicate(ctx, dir, rec, pRefs, primary, e.nodes[name])
+		if err == nil && len(issues) > 0 && e.opts.AutoFix {
+			var fixed int
+			issues, fixed = e.autoFix(ctx, dir, rec, primary, name, pRefs, issues)
+			if fixed > 0 {
+				again = true
+				if len(issues) == 0 && state == StateConflict {
+					state, detail = StateSynced, fmt.Sprintf("%d ref(s) taken over by the primary; they replicate from there", fixed)
+				}
+			}
+		}
 		record(name, state, detail, updated, refs)
 		if err != nil || state == StateMissing {
 			conclusive = false
@@ -251,7 +304,14 @@ func (e *Engine) RunRepo(ctx context.Context, rec store.RepositoryRecord) error 
 				}
 			}
 			merged[k][name] = is.Replica
+			if handOffKind(is) {
+				diverged = append(diverged, divergence{node: name, issue: is})
+			}
 		}
+	}
+	if e.opts.HandOff && !again {
+		// Hand off only once the primary has settled in this run.
+		handoffs = e.handOff(ctx, dir, rec, primary, pRefs, handoffRefs, handoffs, diverged)
 	}
 
 	var found []store.FoundConflict
@@ -261,6 +321,9 @@ func (e *Engine) RunRepo(ctx context.Context, rec store.RepositoryRecord) error 
 			details["branch"] = name
 		} else if name, ok := strings.CutPrefix(k.ref, "refs/tags/"); ok {
 			details["tag"] = name
+		}
+		if hs := handoffsFor(handoffs, k.ref, heads); len(hs) > 0 {
+			details["handoffs"] = hs
 		}
 		found = append(found, store.FoundConflict{RepositoryID: rec.ID, Kind: string(k.kind), Ref: k.ref, Details: details})
 	}
@@ -272,7 +335,7 @@ func (e *Engine) RunRepo(ctx context.Context, rec store.RepositoryRecord) error 
 	}
 	changes, err := e.store.SyncConflicts(ctx, found, checked, ConflictKinds, e.now().UTC())
 	if err != nil {
-		return err
+		return again, err
 	}
 	for _, c := range changes {
 		e.log.Info("conflict "+c.Change, "repository", c.FullName, "kind", c.Kind, "ref", c.Ref)
@@ -281,7 +344,10 @@ func (e *Engine) RunRepo(ctx context.Context, rec store.RepositoryRecord) error 
 			e.log.Error("writing audit log failed", "error", err)
 		}
 	}
-	return nil
+	if e.opts.AutoFix && !again {
+		e.fixDefaultBranches(ctx, rec, primary, healthy)
+	}
+	return again, nil
 }
 
 // replicate brings one replica up to date. It returns the state to record,
@@ -309,6 +375,7 @@ func (e *Engine) replicate(ctx context.Context, dir string, rec store.Repository
 		}
 		rRefs, err = e.git.LsRemote(ctx, remote)
 	}
+	rRefs, _ = splitHandoffRefs(rRefs) // not ForgeSync's to replicate
 	if err == nil && len(rRefs) > 0 {
 		// The replica's objects are needed to tell behind from ahead.
 		err = e.git.Fetch(ctx, dir, "nodes/"+node.Name, remote)

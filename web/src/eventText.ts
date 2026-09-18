@@ -18,6 +18,8 @@ export function categoryLabel(key: string): string {
 }
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
+const num = (v: unknown) => (typeof v === "number" ? String(v) : "?");
+const refName = (v: unknown) => str(v).replace(/^refs\/(heads|tags)\//, "") || "a ref";
 
 /** A readable sentence for an event; falls back to the raw action. */
 export function describe(e: HistoryEvent): string {
@@ -54,6 +56,22 @@ export function describe(e: HistoryEvent): string {
       return "Asked for replication";
     case "inventory.scan_requested":
       return "Asked for a repository scan";
+    case "conflict.auto_fixed":
+      return d.fix === "default_branch"
+        ? `Default branch on ${str(d.node)} set to ${str(d.to)}, as on the primary`
+        : `Took ${refName(d.ref)} from ${str(d.node)} over to the primary ${str(d.primary)}`;
+    case "conflict.handed_off":
+      return `Handed ${refName(d.ref)} to the owner: pull request #${num(d.pr_number)} on the primary`;
+    case "conflict.owner_merged":
+      return `Owner merged pull request #${num(d.pr_number)}: the other sites' commits on ${refName(d.ref)} are kept`;
+    case "conflict.owner_kept_primary":
+      return `Owner closed pull request #${num(d.pr_number)}: the primary's ${refName(d.ref)} is kept, with a backup on ${str(d.backup)}`;
+    case "conflict.replica_reset":
+      return `${refName(d.ref)} on ${str(d.node)} reset to the primary's version, as the owner chose`;
+    case "conflict.backup_deleted":
+      return `Backup branch ${str(d.branch)} deleted after its retention period`;
+    case "conflict.handoff_gone":
+      return `Pull request #${num(d.pr_number)} for ${refName(d.ref)} disappeared; it's handed off again if still needed`;
     case "conflict.opened":
       return `Conflict detected: ${kindText(str(d.kind))}`;
     case "conflict.cleared":

@@ -92,7 +92,28 @@ export function ConflictDetail({ id }: { id: number }) {
         )}
       </section>
 
-      {c.state === "open" && (
+      {c.state === "open" && c.details.handoffs && c.details.handoffs.length > 0 && (
+        <section className="panel" aria-labelledby="owner-heading">
+          <h2 id="owner-heading">Waiting for the owner</h2>
+          <p>
+            ForgeSync handed this to the repository's owner as a pull request on {primary}. Merging it keeps the other
+            sites' commits; closing it without merging keeps {primary}'s version, and ForgeSync then resets those sites
+            (their commits stay on the pull request's branch for a while as a backup).
+          </p>
+          <ul>
+            {c.details.handoffs.map((h) => (
+              <li key={h.pr_number}>
+                <a href={h.pr_url} target="_blank" rel="noreferrer noopener">
+                  Pull request #{h.pr_number}
+                </a>{" "}
+                for {h.nodes.join(", ")} (branch <span className="mono">{h.branch}</span>)
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {c.state === "open" && !(c.details.handoffs && c.details.handoffs.length > 0) && (
         <section className="panel" aria-labelledby="fix-heading">
           <h2 id="fix-heading">How to fix it</h2>
           <p>{conflictFix(c)}</p>

@@ -60,15 +60,15 @@ export function conflictFix(c: Conflict): string {
   const onPrimary = primary ? `on the primary (${primary})` : "on the side you trust";
   switch (c.kind) {
     case "git_replica_ahead":
-      return `If the replica's commits should be kept, push them to ${primary || "the primary"}; replication then catches the replica up. If they should go, reset the branch on the replica to the primary's commit.`;
+      return `ForgeSync normally takes a replica's new commits over to ${primary || "the primary"} by itself. It couldn't here, most likely because the primary changed at the same time; the next run tries again.`;
     case "git_primary_rewrote":
       return "If the rewrite was intended, reset the branch or tag on each replica to the primary's value; replication won't do this itself. Otherwise restore the old value on the primary.";
     case "git_replica_changed":
       return `Decide which value is right. Set it ${onPrimary} and make the replica match, or delete the ref on the replica so replication recreates it from the primary.`;
     case "git_replica_extra_ref":
-      return `If the ref should exist, push it to ${primary || "the primary"} so it replicates from there. Otherwise delete it on the replica.`;
+      return `ForgeSync normally creates a ref like this on ${primary || "the primary"} by itself, so it replicates from there. It couldn't here, most likely because the same name appeared on the primary in the meantime; the next run tries again. If the ref shouldn't exist, delete it on the replica.`;
     case "default_branch_mismatch":
-      return "Pick one default branch and set it in the repository settings on every node that differs.";
+      return "ForgeSync sets each replica's default branch to the primary's once that branch exists there. If this stays, set it in the repository settings on the nodes that differ.";
     default:
       return `ForgeSync never overwrites diverged history. Someone who knows the repository has to reconcile it ${onPrimary}: either merge the replica's commits in (a merge keeps them, so replication can then fast-forward the replica), or bring their changes over some other way (rebase, cherry-pick) and then reset the branch on the replica to the primary's commit, since those create new commits and the replica's originals stay diverged.`;
   }

@@ -16,13 +16,14 @@ import (
 )
 
 type memStore struct {
-	mu      sync.Mutex
-	rec     store.RepositoryRecord
-	syncs   map[string]store.ReplicaSync
-	refs    map[string]map[string]string
-	found   []store.FoundConflict
-	checked []string
-	audit   []string
+	mu       sync.Mutex
+	rec      store.RepositoryRecord
+	syncs    map[string]store.ReplicaSync
+	refs     map[string]map[string]string
+	found    []store.FoundConflict
+	checked  []string
+	audit    []string
+	handoffs []store.Handoff
 }
 
 func newMemStore(rec store.RepositoryRecord) *memStore {
@@ -51,6 +52,31 @@ func (m *memStore) ForgetReplicatedRefs(_ context.Context, _, node string) error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.refs, node)
+	return nil
+}
+func (m *memStore) Handoffs(_ context.Context, _ string, active bool) ([]store.Handoff, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []store.Handoff
+	for _, h := range m.handoffs {
+		if !active || h.State == "open" || h.State == "kept_primary" {
+			h.Nodes = append([]string(nil), h.Nodes...)
+			out = append(out, h)
+		}
+	}
+	return out, nil
+}
+func (m *memStore) SaveHandoff(_ context.Context, h store.Handoff) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	h.ID = int64(len(m.handoffs) + 1)
+	m.handoffs = append(m.handoffs, h)
+	return h.ID, nil
+}
+func (m *memStore) UpdateHandoff(_ context.Context, h store.Handoff) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.handoffs[h.ID-1] = h
 	return nil
 }
 func (m *memStore) NoteCreatedAccount(_ context.Context, node, login string) error {

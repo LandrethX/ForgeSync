@@ -101,7 +101,7 @@ describe("replication conflict text", () => {
     const ahead: Conflict = { ...diverged, kind: "git_replica_ahead", details: { branch: "main", primary: "se", heads: { se: "a", dk: "b" } } };
     expect(conflictTitle(ahead)).toBe("Replica has its own commits: main");
     expect(conflictExplanation(ahead)).toContain("pushed commits to a replica that se doesn't have");
-    expect(conflictFix(ahead)).toContain("push them to se");
+    expect(conflictFix(ahead)).toContain("over to se by itself");
     const tag: Conflict = { ...diverged, kind: "git_primary_rewrote", ref: "refs/tags/v1", details: { tag: "v1", primary: "se" } };
     expect(conflictTitle(tag)).toBe("History rewritten on the primary: tag v1");
   });

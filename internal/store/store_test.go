@@ -608,3 +608,52 @@ func TestRecordNodeUsersConcurrently(t *testing.T) {
 		t.Fatalf("%d users, first has %d accounts", len(all), len(all[0].Accounts))
 	}
 }
+
+func TestHandoffs(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncNodes(ctx, []NodeRecord{{Name: "se", URL: "http://se"}, {Name: "dk", URL: "http://dk"}}); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	if err := s.RecordNodeScan(ctx, "se", t0, t0, []ScannedRepo{{FullName: "alice/demo"}}); err != nil {
+		t.Fatal(err)
+	}
+	recs, _ := s.Repositories(ctx)
+	repo := recs[0].ID
+	h := Handoff{RepositoryID: repo, Ref: "refs/heads/main", SHA: "c1", PrimaryNode: "se", Nodes: []string{"dk"},
+		Branch: "refs/heads/forgesync/conflict/dk/main", PRNumber: 7, PRURL: "http://se/pulls/7", OpenedAt: t0}
+	id, err := s.SaveHandoff(ctx, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveHandoff(ctx, h); err == nil {
+		t.Error("a second open hand-off for the same head was accepted")
+	}
+	got, err := s.Handoffs(ctx, repo, true)
+	if err != nil || len(got) != 1 || got[0].ID != id || got[0].State != "open" || got[0].Nodes[0] != "dk" {
+		t.Fatalf("handoffs = %+v, %v", got, err)
+	}
+	until := t0.Add(30 * 24 * time.Hour)
+	h = got[0]
+	h.State, h.DecidedAt, h.BackupUntil, h.Nodes = "kept_primary", &t0, &until, []string{}
+	if err := s.UpdateHandoff(ctx, h); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Handoffs(ctx, repo, true); len(got) != 1 || !got[0].BackupUntil.Equal(until) {
+		t.Fatalf("after deciding: %+v", got)
+	}
+	h.State = "expired"
+	s.UpdateHandoff(ctx, h)
+	if got, _ := s.Handoffs(ctx, repo, true); len(got) != 0 {
+		t.Errorf("expired still active: %+v", got)
+	}
+	// Once decided, the same head can be handed off again.
+	if _, err := s.SaveHandoff(ctx, Handoff{RepositoryID: repo, Ref: "refs/heads/main", SHA: "c1", PrimaryNode: "se",
+		Nodes: []string{"dk"}, Branch: "refs/heads/forgesync/conflict/dk/main-2", PRNumber: 8, OpenedAt: t0}); err != nil {
+		t.Errorf("re-handing off: %v", err)
+	}
+}

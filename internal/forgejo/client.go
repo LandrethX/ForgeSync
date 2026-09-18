@@ -359,3 +359,81 @@ func (c *Client) ListUsers(ctx context.Context, sourceID int64, page, limit int)
 	total, err := c.doCounted(ctx, path, &us)
 	return us, total, err
 }
+
+// PullRequest is the part of a Forgejo pull request ForgeSync reads.
+type PullRequest struct {
+	Number  int64  `json:"number"`
+	HTMLURL string `json:"html_url"`
+	State   string `json:"state"` // open or closed
+	Merged  bool   `json:"merged"`
+}
+
+// CreatePullRequestOption is the body of POST /repos/{owner}/{repo}/pulls
+// (modules/structs/pull.go).
+type CreatePullRequestOption struct {
+	Head      string   `json:"head"`
+	Base      string   `json:"base"`
+	Title     string   `json:"title"`
+	Body      string   `json:"body"`
+	Assignees []string `json:"assignees,omitempty"`
+}
+
+func repoPath(owner, repo string) string {
+	return "/api/v1/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo)
+}
+
+// CreatePullRequest opens a pull request.
+func (c *Client) CreatePullRequest(ctx context.Context, owner, repo string, opt CreatePullRequestOption) (PullRequest, error) {
+	var pr PullRequest
+	err := c.do(ctx, http.MethodPost, repoPath(owner, repo)+"/pulls", true, opt, &pr)
+	return pr, err
+}
+
+// GetPullRequest returns a pull request; found is false if it's gone.
+func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, number int64) (pr PullRequest, found bool, err error) {
+	err = c.do(ctx, http.MethodGet, fmt.Sprintf("%s/pulls/%d", repoPath(owner, repo), number), true, nil, &pr)
+	if isNotFound(err) {
+		return PullRequest{}, false, nil
+	}
+	return pr, err == nil, err
+}
+
+// Comment adds a comment to an issue or pull request.
+func (c *Client) Comment(ctx context.Context, owner, repo string, number int64, body string) error {
+	return c.do(ctx, http.MethodPost, fmt.Sprintf("%s/issues/%d/comments", repoPath(owner, repo), number), true,
+		map[string]string{"body": body}, nil)
+}
+
+// SetDefaultBranch changes a repository's default branch.
+func (c *Client) SetDefaultBranch(ctx context.Context, owner, repo, branch string) error {
+	return c.do(ctx, http.MethodPatch, repoPath(owner, repo), true, map[string]string{"default_branch": branch}, nil)
+}
+
+// OrgOwners returns the members of an organization's owner teams.
+func (c *Client) OrgOwners(ctx context.Context, org string) ([]string, error) {
+	var teams []struct {
+		ID         int64  `json:"id"`
+		Permission string `json:"permission"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v1/orgs/"+url.PathEscape(org)+"/teams?limit=50", true, nil, &teams); err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range teams {
+		if t.Permission != "owner" {
+			continue
+		}
+		var members []User
+		if err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/v1/teams/%d/members?limit=50", t.ID), true, nil, &members); err != nil {
+			return nil, err
+		}
+		for _, m := range members {
+			if !seen[m.Login] {
+				seen[m.Login] = true
+				out = append(out, m.Login)
+			}
+		}
+	}
+	return out, nil
+}

@@ -43,9 +43,32 @@ export interface Overview {
   nodes: Record<string, number>;
 }
 
+export type Role = "viewer" | "operator" | "administrator";
+
 export interface Session {
   subject: string;
+  username: string;
+  name: string;
+  email?: string;
+  role: Role;
+  source: "sceneid" | "token" | "web-token";
   expires_at: string;
+}
+
+export interface AuthConfig {
+  sceneid: boolean;
+  token_sign_in: boolean;
+}
+
+const ROLE_RANK: Record<Role, number> = { viewer: 1, operator: 2, administrator: 3 };
+
+export function hasRole(session: Session | undefined, min: Role): boolean {
+  return session !== undefined && ROLE_RANK[session.role] >= ROLE_RANK[min];
+}
+
+/** Where the SceneID sign-in starts; the browser navigates there. */
+export function sceneIdLoginURL(returnTo: string): string {
+  return `/api/v1/auth/login?return_to=${encodeURIComponent(returnTo)}`;
 }
 
 export class ApiError extends Error {
@@ -88,7 +111,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       typeof data === "object" && data !== null && "message" in data && typeof data.message === "string"
         ? data.message
         : res.statusText;
-    if (res.status === 401 && path !== "/session") {
+    if (res.status === 401 && path !== "/session" && !path.startsWith("/auth/")) {
       window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
     }
     const retry = Number(res.headers.get("Retry-After"));
@@ -98,9 +121,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export const api = {
+  authConfig: () => request<AuthConfig>("GET", "/auth/config"),
   session: () => request<Session>("GET", "/session"),
   signIn: (token: string) => request<Session>("POST", "/session", { token }),
-  signOut: () => request<void>("DELETE", "/session"),
+  signOut: () => request<{ logout_url: string }>("DELETE", "/session"),
   overview: () => request<Overview>("GET", "/overview"),
   nodes: () => request<Node[]>("GET", "/nodes"),
   node: (name: string) => request<Node>("GET", `/nodes/${encodeURIComponent(name)}`),

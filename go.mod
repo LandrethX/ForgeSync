@@ -3,9 +3,12 @@ module scenegit.org/forgesync
 go 1.27.1
 
 require (
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/go-chi/chi/v5 v5.3.2
+	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/spf13/cobra v1.10.2
+	golang.org/x/oauth2 v0.37.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

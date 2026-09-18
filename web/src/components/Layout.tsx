@@ -1,12 +1,15 @@
 import type { ReactNode } from "react";
+import { hasRole, type Role, type Session } from "../api";
 import type { Connection } from "../hooks";
 import { Link, usePath } from "../router";
 
-const NAV = [
-  { to: "/", label: "Dashboard" },
-  { to: "/nodes", label: "Nodes" },
-  { to: "/audit", label: "Audit log" },
+const NAV: { to: string; label: string; role: Role }[] = [
+  { to: "/", label: "Dashboard", role: "viewer" },
+  { to: "/nodes", label: "Nodes", role: "viewer" },
+  { to: "/audit", label: "Audit log", role: "operator" },
 ];
+
+const ROLE_LABEL: Record<Role, string> = { viewer: "Viewer", operator: "Operator", administrator: "Administrator" };
 
 function isActive(to: string, path: string): boolean {
   return to === "/" ? path === "/" : path === to || path.startsWith(`${to}/`);
@@ -21,10 +24,12 @@ const CONNECTION_TEXT: Record<Connection, string> = {
 export function Layout({
   children,
   connection,
+  session,
   onSignOut,
 }: {
   children: ReactNode;
   connection: Connection;
+  session: Session;
   onSignOut: () => void;
 }) {
   const path = usePath();
@@ -43,6 +48,10 @@ export function Layout({
             <span className="connection-dot" aria-hidden="true" />
             {CONNECTION_TEXT[connection]}
           </span>
+          <span className="who" title={session.email || undefined}>
+            <span className="who-name">{session.source === "sceneid" ? session.name || session.username : "Admin token"}</span>
+            <span className="who-role">{ROLE_LABEL[session.role]}</span>
+          </span>
           <button type="button" className="button-quiet" onClick={onSignOut}>
             Sign out
           </button>
@@ -50,7 +59,7 @@ export function Layout({
       </header>
       <nav className="sidenav" aria-label="Main">
         <ul>
-          {NAV.map((item) => (
+          {NAV.filter((item) => hasRole(session, item.role)).map((item) => (
             <li key={item.to}>
               <Link to={item.to} aria-current={isActive(item.to, path) ? "page" : undefined}>
                 {item.label}

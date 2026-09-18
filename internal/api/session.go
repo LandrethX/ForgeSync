@@ -5,15 +5,13 @@ import (
 	"encoding/base64"
 	"sync"
 	"time"
+
+	"scenegit.org/forgesync/internal/auth"
 )
 
 // Sessions holds browser sessions in memory. A restart signs everyone out,
 // which is acceptable for a single controller; an HA pair will need shared
-// sessions (or SceneID tokens) instead.
-//
-// Signing in with the admin token is a stopgap until SceneID/OIDC login: the
-// browser exchanges the token once for an HttpOnly cookie and never stores
-// the token itself.
+// sessions instead.
 type Sessions struct {
 	TTL  time.Duration // absolute lifetime
 	Idle time.Duration // expires after this long without requests
@@ -24,8 +22,8 @@ type Sessions struct {
 }
 
 type session struct {
-	subject  string
-	created  time.Time
+	identity auth.Identity
+	idToken  string // SceneID ID token, used as id_token_hint when signing out
 	lastSeen time.Time
 	expires  time.Time
 }
@@ -35,12 +33,12 @@ func NewSessions(ttl, idle time.Duration) *Sessions {
 }
 
 // Create starts a session and returns its id and absolute expiry.
-func (s *Sessions) Create(subject string) (string, time.Time) {
+func (s *Sessions) Create(id auth.Identity, idToken string) (string, time.Time) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		panic(err) // crypto/rand never fails on supported platforms
 	}
-	id := base64.RawURLEncoding.EncodeToString(b)
+	key := base64.RawURLEncoding.EncodeToString(b)
 	now := s.now()
 
 	s.mu.Lock()
@@ -50,39 +48,38 @@ func (s *Sessions) Create(subject string) (string, time.Time) {
 			delete(s.m, k)
 		}
 	}
-	sess := &session{subject: subject, created: now, lastSeen: now, expires: now.Add(s.TTL)}
-	s.m[id] = sess
-	return id, sess.expires
+	sess := &session{identity: id, idToken: idToken, lastSeen: now, expires: now.Add(s.TTL)}
+	s.m[key] = sess
+	return key, sess.expires
 }
 
-// Get returns the session's subject and absolute expiry, and counts the call
-// as activity for the idle timeout.
-func (s *Sessions) Get(id string) (subject string, expires time.Time, ok bool) {
+// Get returns the session and counts the call as activity for the idle timeout.
+func (s *Sessions) Get(key string) (id auth.Identity, idToken string, expires time.Time, ok bool) {
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sess, found := s.m[id]
+	sess, found := s.m[key]
 	if !found || !s.valid(sess, now) {
-		delete(s.m, id)
-		return "", time.Time{}, false
+		delete(s.m, key)
+		return auth.Identity{}, "", time.Time{}, false
 	}
 	sess.lastSeen = now
-	return sess.subject, sess.expires, true
+	return sess.identity, sess.idToken, sess.expires, true
 }
 
 // Valid reports whether the session exists and hasn't expired, without
 // counting as activity (used by the event stream, so an open dashboard
 // doesn't keep an idle session alive).
-func (s *Sessions) Valid(id string) bool {
+func (s *Sessions) Valid(key string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sess, ok := s.m[id]
+	sess, ok := s.m[key]
 	return ok && s.valid(sess, s.now())
 }
 
-func (s *Sessions) Delete(id string) {
+func (s *Sessions) Delete(key string) {
 	s.mu.Lock()
-	delete(s.m, id)
+	delete(s.m, key)
 	s.mu.Unlock()
 }
 

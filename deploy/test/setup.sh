@@ -92,6 +92,9 @@ for n in $NODES; do
   fi
 done
 
+printf '%s' "$SCENEID_FORGESYNC_ADMIN_CLIENT_SECRET" > .tokens/sceneid-admin-client.secret
+chmod 600 .tokens/sceneid-admin-client.secret
+
 if [ ! -s .tokens/admin.token ]; then
   openssl rand -hex 32 > .tokens/admin.token
   chmod 600 .tokens/admin.token
@@ -134,8 +137,9 @@ cat <<EOF
 Ready.
   SceneID admin console : http://sceneid.test:8080/admin   ($SCENEID_ADMIN_USER / $SCENEID_ADMIN_PASSWORD)
 $(for n in $NODES; do echo "  Forgejo $(echo "$n" | tr a-z A-Z)            : http://forgejo-$n.test:$(port_of "$n")   (ssh port 222$(port_of "$n" | cut -c4))"; done)
-  SceneID test users    : alice / alice-pw, bob / bob-pw, carol / carol-pw
+  SceneID test users    : alice / alice-pw (ForgeSync administrator), bob / bob-pw (operator),
+                          carol / carol-pw (viewer), erin / erin-pw (no ForgeSync role)
   Local admins per node : siteadmin / $FORGEJO_SITEADMIN_PASSWORD, forgesync (API tokens in .tokens/)
   ForgeSync database    : localhost:5432 (forgesync / $FORGESYNC_DB_PASSWORD)
-  Run the controller    : go run ./cmd/forgesyncd -config deploy/test/forgesync.yaml   (from the repo root)
+  Run the controller    : make web && make run   (from the repo root), then open http://127.0.0.1:8090
 EOF

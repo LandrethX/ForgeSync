@@ -173,8 +173,8 @@ func TestBearerToken(t *testing.T) {
 			t.Errorf("bearer %q = %d, want %d", tc.bearer, rec.Code, tc.want)
 		}
 	}
-	if rec := newFixture("").do(req{path: "/api/v1/nodes", bearer: "x"}); rec.Code != 503 {
-		t.Errorf("admin API without a configured token = %d, want 503", rec.Code)
+	if rec := newFixture("").do(req{path: "/api/v1/nodes"}); rec.Code != 503 {
+		t.Errorf("admin API with neither token nor SceneID = %d, want 503", rec.Code)
 	}
 }
 
@@ -195,18 +195,18 @@ func TestSessionSignInAndOut(t *testing.T) {
 	if rec := f.do(req{path: "/api/v1/nodes", cookie: c}); rec.Code != 200 {
 		t.Errorf("GET with session = %d", rec.Code)
 	}
-	if rec := f.do(req{path: "/api/v1/session", cookie: c}); rec.Code != 200 || !strings.Contains(rec.Body.String(), "web:admin") {
+	if rec := f.do(req{path: "/api/v1/session", cookie: c}); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"role":"administrator"`) {
 		t.Errorf("GET /session = %d %s", rec.Code, rec.Body)
 	}
 
-	if rec := f.do(req{method: "DELETE", path: "/api/v1/session", cookie: c}); rec.Code != 204 {
+	if rec := f.do(req{method: "DELETE", path: "/api/v1/session", cookie: c}); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"logout_url":""`) {
 		t.Errorf("sign out = %d", rec.Code)
 	}
 	if rec := f.do(req{path: "/api/v1/nodes", cookie: c}); rec.Code != 401 {
 		t.Errorf("GET after sign out = %d, want 401", rec.Code)
 	}
 
-	want := []string{"web session.sign_in_failed", "web:admin session.sign_in", "web:admin session.sign_out"}
+	want := []string{"web-token session.sign_in_failed", "web-token session.sign_in", "web-token session.sign_out"}
 	if got := f.db.actions(); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("audit = %v, want %v", got, want)
 	}
@@ -217,7 +217,7 @@ func TestSessionCookieNeedsCSRFHeaderForWrites(t *testing.T) {
 	c := f.signIn(t, "s3cret")
 	// No write endpoints exist yet, so test the middleware directly.
 	h := f.srv.authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(actor(r)))
+		w.Write([]byte(identity(r).Actor()))
 	}))
 	call := func(method string, csrf bool, bearer string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, "/x", nil)
@@ -236,7 +236,7 @@ func TestSessionCookieNeedsCSRFHeaderForWrites(t *testing.T) {
 	if rec := call("POST", false, ""); rec.Code != 403 {
 		t.Errorf("cookie POST without CSRF header = %d, want 403", rec.Code)
 	}
-	if rec := call("POST", true, ""); rec.Code != 200 || rec.Body.String() != "web:admin" {
+	if rec := call("POST", true, ""); rec.Code != 200 || rec.Body.String() != "web-token" {
 		t.Errorf("cookie POST with CSRF header = %d %q", rec.Code, rec.Body)
 	}
 	if rec := call("POST", false, "s3cret"); rec.Code != 200 || rec.Body.String() != "token" {
@@ -348,7 +348,7 @@ func TestSessionsExpire(t *testing.T) {
 	now := time.Date(2026, 9, 18, 9, 0, 0, 0, time.UTC)
 	s := NewSessions(8*time.Hour, 30*time.Minute)
 	s.now = func() time.Time { return now }
-	id, _ := s.Create("web:admin")
+	id, _ := s.Create(webTokenIdentity, "")
 
 	now = now.Add(20 * time.Minute)
 	if !s.Valid(id) {
@@ -360,10 +360,10 @@ func TestSessionsExpire(t *testing.T) {
 		t.Fatal("idle session still valid")
 	}
 
-	id, _ = s.Create("web:admin")
+	id, _ = s.Create(webTokenIdentity, "")
 	for i := 0; i < 20; i++ { // active every 25 minutes...
 		now = now.Add(25 * time.Minute)
-		if _, _, ok := s.Get(id); !ok {
+		if _, _, _, ok := s.Get(id); !ok {
 			if i*25 < 8*60-25 {
 				t.Fatalf("active session expired after %d minutes", (i+1)*25)
 			}

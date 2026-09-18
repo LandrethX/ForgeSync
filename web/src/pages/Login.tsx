@@ -1,8 +1,91 @@
-import { useState, type FormEvent } from "react";
-import { api, ApiError } from "../api";
+import { useEffect, useState, type FormEvent } from "react";
+import { api, ApiError, sceneIdLoginURL, type AuthConfig, type Session } from "../api";
 import { formatDuration } from "../format";
 
-export function Login({ onSignedIn }: { onSignedIn: () => void }) {
+// Explanations for /?signin_error=... set by the SceneID callback.
+const SIGN_IN_ERRORS: Record<string, string> = {
+  no_role: "Your SceneID account doesn't have a ForgeSync role. Ask an administrator to give you one in SceneID.",
+  expired: "The sign-in took too long, or was started in another browser. Try again.",
+  cancelled: "Sign-in was cancelled at SceneID.",
+  unavailable: "Can't reach SceneID right now. Try again in a moment.",
+  failed: "Sign-in failed. Try again, or ask an administrator to check the controller log.",
+};
+
+/** Reads and removes ?signin_error from the address bar, so a reload doesn't repeat it. */
+function takeSignInError(): string | undefined {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("signin_error");
+  if (!code) return undefined;
+  params.delete("signin_error");
+  const rest = params.toString();
+  window.history.replaceState(null, "", window.location.pathname + (rest ? `?${rest}` : ""));
+  return SIGN_IN_ERRORS[code] ?? SIGN_IN_ERRORS.failed;
+}
+
+export function Login({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
+  const [config, setConfig] = useState<AuthConfig>();
+  const [configError, setConfigError] = useState<string>();
+  const [sceneIdError] = useState(takeSignInError);
+
+  useEffect(() => {
+    api
+      .authConfig()
+      .then(setConfig)
+      .catch((e: unknown) => setConfigError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  const returnTo = window.location.pathname + window.location.search;
+
+  return (
+    <div className="login">
+      <div className="login-card">
+        <div className="brand login-brand">
+          <img src="/favicon.svg" alt="" width={28} height={28} />
+          ForgeSync
+        </div>
+        <h1>Sign in</h1>
+        {sceneIdError && (
+          <p className="error-note" role="alert">
+            {sceneIdError}
+          </p>
+        )}
+        {configError && (
+          <p className="error-note" role="alert">
+            {configError}
+          </p>
+        )}
+        {config?.sceneid && (
+          <>
+            <p className="muted">Sign in with your SceneID account. Your ForgeSync role comes from SceneID.</p>
+            <a className="button-primary button-link" href={sceneIdLoginURL(returnTo)}>
+              Sign in with SceneID
+            </a>
+          </>
+        )}
+        {config?.token_sign_in &&
+          (config.sceneid ? (
+            <details className="break-glass">
+              <summary>Use the admin token instead</summary>
+              <p className="muted">For emergencies when SceneID is unavailable. Every use is recorded in the audit log.</p>
+              <TokenForm onSignedIn={onSignedIn} />
+            </details>
+          ) : (
+            <>
+              <p className="muted">
+                Use the controller's admin token (the file named by <code>http.admin_token_file</code>).
+              </p>
+              <TokenForm onSignedIn={onSignedIn} />
+            </>
+          ))}
+        {config && !config.sceneid && !config.token_sign_in && (
+          <p className="muted">Web sign-in isn't configured on this controller.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TokenForm({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
   const [token, setToken] = useState("");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -12,9 +95,9 @@ export function Login({ onSignedIn }: { onSignedIn: () => void }) {
     setBusy(true);
     setError(undefined);
     try {
-      await api.signIn(token.trim());
+      const session = await api.signIn(token.trim());
       setToken("");
-      onSignedIn();
+      onSignedIn(session);
     } catch (err) {
       setError(messageFor(err));
     } finally {
@@ -23,38 +106,27 @@ export function Login({ onSignedIn }: { onSignedIn: () => void }) {
   }
 
   return (
-    <div className="login">
-      <form className="login-card" onSubmit={submit} noValidate>
-        <div className="brand login-brand">
-          <img src="/favicon.svg" alt="" width={28} height={28} />
-          ForgeSync
-        </div>
-        <h1>Sign in</h1>
-        <p className="muted">
-          Use the controller's admin token (the file named by <code>http.admin_token_file</code>). SceneID sign-in
-          will replace this.
+    <form className="token-form" onSubmit={submit} noValidate>
+      <label htmlFor="token">Admin token</label>
+      <input
+        id="token"
+        type="password"
+        autoComplete="current-password"
+        value={token}
+        onChange={(e) => setToken(e.target.value)}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? "login-error" : undefined}
+        required
+      />
+      {error && (
+        <p id="login-error" className="error-note" role="alert">
+          {error}
         </p>
-        <label htmlFor="token">Admin token</label>
-        <input
-          id="token"
-          type="password"
-          autoComplete="current-password"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          aria-invalid={error ? true : undefined}
-          aria-describedby={error ? "login-error" : undefined}
-          required
-        />
-        {error && (
-          <p id="login-error" className="error-note" role="alert">
-            {error}
-          </p>
-        )}
-        <button type="submit" className="button-primary" disabled={busy || token.trim() === ""}>
-          {busy ? "Signing in…" : "Sign in"}
-        </button>
-      </form>
-    </div>
+      )}
+      <button type="submit" className="button-quiet" disabled={busy || token.trim() === ""}>
+        {busy ? "Signing in…" : "Sign in with token"}
+      </button>
+    </form>
   );
 }
 
@@ -65,7 +137,6 @@ function messageFor(err: unknown): string {
       const wait = err.retryAfterSeconds ? ` Try again in ${formatDuration(err.retryAfterSeconds * 1000)}.` : "";
       return `Too many failed attempts.${wait}`;
     }
-    if (err.status === 503) return "The admin API is turned off on this controller (no admin token configured).";
     return err.message;
   }
   return "Sign-in failed.";

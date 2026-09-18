@@ -67,6 +67,9 @@ They let webhooks and mirrors reach local addresses. Don't copy them to producti
 - Client `forgejo` for all nodes, with secret `forgejo-test-secret`.
 - Client `forgesync`: a service account allowed to view and manage users (`view-users`,
   `manage-users`), for the deprovisioning tests.
+- Client `forgesync-admin`: SceneID sign-in for the ForgeSync admin UI. Realm roles
+  `forgesync-admin`, `forgesync-operator` and `forgesync-viewer` go into a `roles` ID token
+  claim.
 
 Keycloak keeps no volume, so recreating the container resets SceneID to the JSON file. To apply
 edits: `docker compose up -d --force-recreate sceneid`. This also discards any users or changes
@@ -82,7 +85,18 @@ make web && make run                                       # builds the UI, then
 go run ./cmd/forgesync --token-file deploy/test/.tokens/admin.token node list
 ```
 
-The admin UI is at http://127.0.0.1:8090. Sign in with the contents of `.tokens/admin.token`.
+The admin UI is at http://127.0.0.1:8090. Sign in with SceneID as one of the test users:
+
+| User | ForgeSync role |
+|---|---|
+| `alice` / `alice-pw` | Administrator |
+| `bob` / `bob-pw` | Operator |
+| `carol` / `carol-pw` | Viewer (no audit log) |
+| `erin` / `erin-pw` | none, so sign-in is refused |
+
+"Use the admin token instead" (the contents of `.tokens/admin.token`) is kept as a break-glass
+option in this config. If your `sceneid` container was created before the `forgesync-admin`
+client was added to the realm, recreate it: `docker compose up -d --force-recreate sceneid`.
 To work on the UI with hot reload, run `make web-dev` alongside `make run` and open
 http://127.0.0.1:5173.
 

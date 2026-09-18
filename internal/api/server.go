@@ -2,7 +2,8 @@
 //
 //	/healthz   liveness, always 200 while the process runs
 //	/readyz    readiness, 200 only when the database answers
-//	/api/v1/*  admin API: bearer token (CLI) or session cookie (web UI)
+//	/api/v1/*  admin API: bearer token (CLI) or session cookie (web UI, signed
+//	           in with SceneID, or the admin token when SceneID is off)
 //	/*         the embedded web UI
 //
 // The controller-to-controller (/internal/v1) and agent (/agent/v1) APIs from
@@ -11,32 +12,23 @@ package api
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"scenegit.org/forgesync/internal/auth"
 	"scenegit.org/forgesync/internal/buildinfo"
 	"scenegit.org/forgesync/internal/health"
 	"scenegit.org/forgesync/internal/store"
 )
 
-const (
-	sessionCookie = "forgesync_session"
-	// csrfHeader must accompany state-changing requests authenticated by the
-	// session cookie. Other sites can't set it without a CORS preflight, which
-	// this server never allows.
-	csrfHeader = "X-ForgeSync-CSRF"
-)
 
 // DB is the database access the API needs.
 type DB interface {
@@ -66,7 +58,10 @@ type Node struct {
 }
 
 type Server struct {
-	AdminToken    string // empty disables /api/v1
+	AdminToken    string // bearer token for the CLI; also web sign-in when OIDC is off
+	OIDC          OIDCFlow
+	// AllowTokenSignIn keeps admin-token sign-in in the web UI while OIDC is on.
+	AllowTokenSignIn bool
 	Nodes         []NodeInfo
 	Health        HealthSource
 	DB            DB
@@ -95,22 +90,29 @@ func (s *Server) Handler() http.Handler {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(noStore)
+		r.Get("/auth/config", s.authConfig)
+		r.Get("/auth/login", s.oidcLogin)
+		r.Get("/auth/callback", s.oidcCallback)
 		r.Post("/session", s.createSession)
 		r.Get("/session", s.getSession)
 		r.Delete("/session", s.deleteSession)
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.authenticate)
-			r.Get("/version", func(w http.ResponseWriter, _ *http.Request) {
-				writeJSON(w, http.StatusOK, map[string]string{"version": buildinfo.Version, "commit": buildinfo.Commit})
+			r.Group(func(r chi.Router) {
+				r.Use(requireRole(auth.Viewer))
+				r.Get("/version", func(w http.ResponseWriter, _ *http.Request) {
+					writeJSON(w, http.StatusOK, map[string]string{"version": buildinfo.Version, "commit": buildinfo.Commit})
+				})
+				r.Get("/overview", s.overview)
+				r.Get("/nodes", s.listNodes)
+				r.Get("/nodes/{name}", s.getNode)
+				r.Get("/nodes/{name}/transitions", s.nodeTransitions)
+				r.Get("/transitions", s.nodeTransitions)
+				r.Get("/events", s.events)
 			})
-			r.Get("/overview", s.overview)
-			r.Get("/nodes", s.listNodes)
-			r.Get("/nodes/{name}", s.getNode)
-			r.Get("/nodes/{name}/transitions", s.nodeTransitions)
-			r.Get("/transitions", s.nodeTransitions)
-			r.Get("/audit", s.listAudit)
-			r.Get("/events", s.events)
+			// The audit log shows who signed in from where: operators and up.
+			r.With(requireRole(auth.Operator)).Get("/audit", s.listAudit)
 		})
 		r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "not found"})
@@ -121,142 +123,6 @@ func (s *Server) Handler() http.Handler {
 		r.NotFound(s.Frontend.ServeHTTP)
 	}
 	return r
-}
-
-// ---------------------------------------------------------------- auth
-
-type ctxKey struct{}
-
-// actor returns who made the request, for the audit log.
-func actor(r *http.Request) string {
-	a, _ := r.Context().Value(ctxKey{}).(string)
-	return a
-}
-
-func (s *Server) authenticate(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.AdminToken == "" {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "admin API disabled: http.admin_token_file is not set"})
-			return
-		}
-		var who string
-		if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
-			if !s.tokenValid(token) {
-				unauthorized(w)
-				return
-			}
-			who = "token"
-		} else if c, err := r.Cookie(sessionCookie); err == nil {
-			subject, _, ok := s.Sessions.Get(c.Value)
-			if !ok {
-				unauthorized(w)
-				return
-			}
-			if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Header.Get(csrfHeader) == "" {
-				writeJSON(w, http.StatusForbidden, map[string]string{"message": "missing " + csrfHeader + " header"})
-				return
-			}
-			who = subject
-		} else {
-			unauthorized(w)
-			return
-		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, who)))
-	})
-}
-
-func (s *Server) tokenValid(token string) bool {
-	return s.AdminToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.AdminToken)) == 1
-}
-
-func unauthorized(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", `Bearer realm="forgesync"`)
-	writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "not signed in"})
-}
-
-func clientAddr(r *http.Request) string {
-	// RemoteAddr only: forwarded headers are client-controlled unless a
-	// trusted proxy is configured, which this server doesn't support yet.
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
-func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
-	if s.AdminToken == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "admin API disabled: http.admin_token_file is not set"})
-		return
-	}
-	if r.Header.Get(csrfHeader) == "" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"message": "missing " + csrfHeader + " header"})
-		return
-	}
-	addr := clientAddr(r)
-	if blocked, retry := s.limiter.Blocked(addr); blocked {
-		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"message": "too many failed sign-ins; try again later"})
-		return
-	}
-	var body struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "expected JSON {\"token\": ...}"})
-		return
-	}
-	if !s.tokenValid(body.Token) {
-		s.limiter.Fail(addr)
-		s.audit(r.Context(), "web", "session.sign_in_failed", addr, nil)
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "invalid admin token"})
-		return
-	}
-	s.limiter.Reset(addr)
-	id, expires := s.Sessions.Create("web:admin")
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
-		Value:    id,
-		Path:     "/",
-		Expires:  expires,
-		HttpOnly: true,
-		Secure:   s.SecureCookies,
-		SameSite: http.SameSiteStrictMode,
-	})
-	s.audit(r.Context(), "web:admin", "session.sign_in", addr, nil)
-	writeJSON(w, http.StatusOK, map[string]any{"subject": "web:admin", "expires_at": expires.UTC()})
-}
-
-func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie(sessionCookie)
-	if err != nil {
-		unauthorized(w)
-		return
-	}
-	subject, expires, ok := s.Sessions.Get(c.Value)
-	if !ok {
-		unauthorized(w)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"subject": subject, "expires_at": expires.UTC()})
-}
-
-func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(sessionCookie); err == nil {
-		if subject, _, ok := s.Sessions.Get(c.Value); ok {
-			s.audit(r.Context(), subject, "session.sign_out", clientAddr(r), nil)
-		}
-		s.Sessions.Delete(c.Value)
-	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: s.SecureCookies, SameSite: http.SameSiteStrictMode})
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) audit(ctx context.Context, actor, action, target string, details map[string]any) {
-	if err := s.DB.Audit(ctx, actor, action, target, details); err != nil {
-		s.Log.Error("writing audit log failed", "action", action, "error", err)
-	}
 }
 
 // ---------------------------------------------------------------- data
@@ -423,18 +289,6 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-}
-
-// stillSignedIn re-checks a cookie session during a long-lived stream.
-func (s *Server) stillSignedIn(r *http.Request) bool {
-	if actor(r) == "token" {
-		return true
-	}
-	c, err := r.Cookie(sessionCookie)
-	if err != nil {
-		return false
-	}
-	return s.Sessions.Valid(c.Value)
 }
 
 // ---------------------------------------------------------------- helpers

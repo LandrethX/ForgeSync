@@ -26,10 +26,44 @@ const EnvDatabaseURL = "FORGESYNC_DATABASE_URL"
 type Config struct {
 	Log      Log      `yaml:"log"`
 	HTTP     HTTP     `yaml:"http"`
+	OIDC     OIDC     `yaml:"oidc"`
 	Database Database `yaml:"database"`
 	Health   Health   `yaml:"health"`
 	Nodes    []Node   `yaml:"nodes"`
 }
+
+// OIDC configures SceneID sign-in for the web UI. It's off when Issuer is
+// empty; the web UI then uses the admin token instead.
+type OIDC struct {
+	Issuer           string `yaml:"issuer"`
+	ClientID         string `yaml:"client_id"`
+	ClientSecretFile string `yaml:"client_secret_file"`
+	ClientSecret     string `yaml:"-"`
+	// RedirectURL must be this controller's /api/v1/auth/callback as the
+	// browser reaches it, and registered with SceneID.
+	RedirectURL string `yaml:"redirect_url"`
+	// PostLogoutRedirectURL, when set (and registered with SceneID), makes
+	// signing out end the SceneID session too.
+	PostLogoutRedirectURL string   `yaml:"post_logout_redirect_url"`
+	Scopes                []string `yaml:"scopes"`
+	// RolesClaim is the ID token claim with the user's roles or groups; dots
+	// walk into nested objects (e.g. realm_access.roles).
+	RolesClaim string    `yaml:"roles_claim"`
+	Roles      RoleNames `yaml:"roles"`
+	// AllowTokenSignIn keeps admin-token sign-in in the web UI as a
+	// break-glass option while OIDC is on. Every use is audited.
+	AllowTokenSignIn bool `yaml:"allow_token_sign_in"`
+}
+
+// RoleNames lists the SceneID role/group values that grant each ForgeSync role.
+type RoleNames struct {
+	Administrator []string `yaml:"administrator"`
+	Operator      []string `yaml:"operator"`
+	Viewer        []string `yaml:"viewer"`
+}
+
+// Enabled reports whether SceneID sign-in is configured.
+func (o OIDC) Enabled() bool { return o.Issuer != "" }
 
 type Log struct {
 	Level  string `yaml:"level"`  // debug, info, warn, error
@@ -132,6 +166,11 @@ func (c *Config) resolveSecrets(dir string) error {
 			return fmt.Errorf("http.admin_token_file: %w", err)
 		}
 	}
+	if c.OIDC.ClientSecretFile != "" {
+		if c.OIDC.ClientSecret, err = readSecret(dir, c.OIDC.ClientSecretFile); err != nil {
+			return fmt.Errorf("oidc.client_secret_file: %w", err)
+		}
+	}
 	switch {
 	case os.Getenv(EnvDatabaseURL) != "":
 		c.Database.URL = os.Getenv(EnvDatabaseURL)
@@ -191,6 +230,9 @@ func (c *Config) validate() error {
 	if c.Health.FailureThreshold < 1 {
 		errs = append(errs, errors.New("health.failure_threshold must be at least 1"))
 	}
+	if c.OIDC.Enabled() {
+		errs = append(errs, c.OIDC.validate()...)
+	}
 	if len(c.Nodes) == 0 {
 		errs = append(errs, errors.New("nodes: at least one node is required"))
 	}
@@ -209,4 +251,32 @@ func (c *Config) validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (o OIDC) validate() []error {
+	var errs []error
+	if u, err := url.Parse(o.Issuer); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		errs = append(errs, fmt.Errorf("oidc.issuer %q must be an absolute http(s) URL", o.Issuer))
+	}
+	if o.ClientID == "" {
+		errs = append(errs, errors.New("oidc.client_id is required"))
+	}
+	if o.ClientSecret == "" {
+		errs = append(errs, errors.New("oidc.client_secret_file is required"))
+	}
+	if u, err := url.Parse(o.RedirectURL); err != nil || u.Host == "" || !strings.HasSuffix(u.Path, "/api/v1/auth/callback") {
+		errs = append(errs, fmt.Errorf("oidc.redirect_url %q must be an absolute URL ending in /api/v1/auth/callback", o.RedirectURL))
+	}
+	if o.PostLogoutRedirectURL != "" {
+		if u, err := url.Parse(o.PostLogoutRedirectURL); err != nil || u.Host == "" {
+			errs = append(errs, fmt.Errorf("oidc.post_logout_redirect_url %q must be an absolute URL", o.PostLogoutRedirectURL))
+		}
+	}
+	if o.RolesClaim == "" {
+		errs = append(errs, errors.New("oidc.roles_claim is required"))
+	}
+	if len(o.Roles.Administrator)+len(o.Roles.Operator)+len(o.Roles.Viewer) == 0 {
+		errs = append(errs, errors.New("oidc.roles: map at least one SceneID value to a ForgeSync role, or nobody can sign in"))
+	}
+	return errs
 }

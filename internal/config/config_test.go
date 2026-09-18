@@ -115,6 +115,21 @@ database: {url: postgres://x}
 health: {interval: 5s, timeout: 5s}
 nodes: [{name: se, url: "http://se", token_file: se.token}]
 `, "health.timeout"},
+		"oidc without roles": {`
+database: {url: postgres://x}
+oidc: {issuer: "https://id.example", client_id: fs, client_secret_file: se.token, redirect_url: "https://fs.example/api/v1/auth/callback", roles_claim: roles}
+nodes: [{name: se, url: "http://se", token_file: se.token}]
+`, "nobody can sign in"},
+		"oidc wrong redirect path": {`
+database: {url: postgres://x}
+oidc: {issuer: "https://id.example", client_id: fs, client_secret_file: se.token, redirect_url: "https://fs.example/callback", roles_claim: roles, roles: {viewer: [x]}}
+nodes: [{name: se, url: "http://se", token_file: se.token}]
+`, "/api/v1/auth/callback"},
+		"oidc without secret": {`
+database: {url: postgres://x}
+oidc: {issuer: "https://id.example", client_id: fs, redirect_url: "https://fs.example/api/v1/auth/callback", roles_claim: roles, roles: {viewer: [x]}}
+nodes: [{name: se, url: "http://se", token_file: se.token}]
+`, "client_secret_file is required"},
 		"bad node name": {`
 database: {url: postgres://x}
 nodes: [{name: SE, url: "http://se", token_file: se.token}]
@@ -132,5 +147,32 @@ nodes: [{name: SE, url: "http://se", token_file: se.token}]
 				t.Fatalf("error = %v, want it to mention %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestLoadOIDC(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "se.token", "tok")
+	writeFile(t, dir, "oidc.secret", "client-secret\n")
+	path := writeFile(t, dir, "c.yaml", `
+database: {url: postgres://x}
+oidc:
+  issuer: http://sceneid.test:8080/realms/sceneid
+  client_id: forgesync-admin
+  client_secret_file: oidc.secret
+  redirect_url: http://127.0.0.1:8090/api/v1/auth/callback
+  roles_claim: realm_access.roles
+  roles:
+    administrator: [forgesync-admin]
+    viewer: [forgesync-viewer, staff]
+nodes: [{name: se, url: "http://se", token_file: se.token}]
+`)
+	t.Setenv(EnvDatabaseURL, "")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.OIDC.Enabled() || cfg.OIDC.ClientSecret != "client-secret" || len(cfg.OIDC.Roles.Viewer) != 2 || cfg.OIDC.AllowTokenSignIn {
+		t.Errorf("oidc = %+v", cfg.OIDC)
 	}
 }

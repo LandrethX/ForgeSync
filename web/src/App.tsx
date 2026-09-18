@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, SIGNED_OUT_EVENT } from "./api";
+import { api, ApiError, hasRole, SIGNED_OUT_EVENT, type Session } from "./api";
 import { Layout, PageHeader } from "./components/Layout";
 import { NodeStreamContext, useNodeStream } from "./hooks";
 import { Audit } from "./pages/Audit";
@@ -13,13 +13,33 @@ type Auth = "checking" | "signed-out" | "signed-in" | "unavailable";
 
 export function App() {
   const [auth, setAuth] = useState<Auth>("checking");
+  const [session, setSession] = useState<Session>();
 
   const check = useCallback(() => {
     api
       .session()
-      .then(() => setAuth("signed-in"))
+      .then((s) => {
+        setSession(s);
+        setAuth("signed-in");
+      })
       .catch((e: unknown) => setAuth(e instanceof ApiError && e.status === 401 ? "signed-out" : "unavailable"));
   }, []);
+
+  const signedIn = (s: Session) => {
+    setSession(s);
+    setAuth("signed-in");
+  };
+
+  const signOut = () => {
+    api
+      .signOut()
+      .then((r) => {
+        // SceneID sessions also end at SceneID, which then sends the browser back here.
+        if (r?.logout_url) window.location.assign(r.logout_url);
+        else setAuth("signed-out");
+      })
+      .catch(() => setAuth("signed-out"));
+  };
 
   useEffect(() => {
     check();
@@ -41,24 +61,24 @@ export function App() {
         </div>
       );
     case "signed-out":
-      return <Login onSignedIn={() => setAuth("signed-in")} />;
+      return <Login onSignedIn={signedIn} />;
     case "signed-in":
-      return <SignedIn onSignOut={() => api.signOut().finally(() => setAuth("signed-out"))} />;
+      return session ? <SignedIn session={session} onSignOut={signOut} /> : null;
   }
 }
 
-function SignedIn({ onSignOut }: { onSignOut: () => void }) {
+function SignedIn({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
   const stream = useNodeStream();
   return (
     <NodeStreamContext.Provider value={stream}>
-      <Layout connection={stream.connection} onSignOut={onSignOut}>
-        <Routes />
+      <Layout connection={stream.connection} session={session} onSignOut={onSignOut}>
+        <Routes session={session} />
       </Layout>
     </NodeStreamContext.Provider>
   );
 }
 
-function Routes() {
+function Routes({ session }: { session: Session }) {
   const path = usePath();
   useEffect(() => {
     document.getElementById("main")?.focus({ preventScroll: true });
@@ -69,7 +89,16 @@ function Routes() {
   if (match("/nodes", path)) return <Nodes />;
   const node = match("/nodes/:name", path);
   if (node?.name) return <NodeDetail name={node.name} />;
-  if (match("/audit", path)) return <Audit />;
+  if (match("/audit", path)) {
+    return hasRole(session, "operator") ? (
+      <Audit />
+    ) : (
+      <>
+        <PageHeader title="Audit log" />
+        <p>The audit log needs the operator role. Ask an administrator if you need it.</p>
+      </>
+    );
+  }
   return (
     <>
       <PageHeader title="Page not found" />

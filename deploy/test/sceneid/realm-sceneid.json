@@ -21,7 +21,9 @@
         "http://forgejo-dk.test:3002/*",
         "http://forgejo-de.test:3003/*"
       ],
-      "webOrigins": ["+"],
+      "webOrigins": [
+        "+"
+      ],
       "protocolMappers": [
         {
           "name": "nickname",
@@ -49,6 +51,43 @@
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true
+    },
+    {
+      "clientId": "forgesync-admin",
+      "name": "ForgeSync admin UI",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "forgesync-admin-test-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://127.0.0.1:8090/api/v1/auth/callback",
+        "http://127.0.0.1:5173/api/v1/auth/callback"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "http://127.0.0.1:8090/##http://127.0.0.1:5173/",
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "claim.name": "roles",
+            "multivalued": "true",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
     }
   ],
   "users": [
@@ -57,7 +96,10 @@
       "enabled": true,
       "serviceAccountClientId": "forgesync",
       "clientRoles": {
-        "realm-management": ["view-users", "manage-users"]
+        "realm-management": [
+          "view-users",
+          "manage-users"
+        ]
       }
     },
     {
@@ -67,7 +109,16 @@
       "emailVerified": true,
       "firstName": "Alice",
       "lastName": "Andersson",
-      "credentials": [{ "type": "password", "value": "alice-pw", "temporary": false }]
+      "credentials": [
+        {
+          "type": "password",
+          "value": "alice-pw",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "forgesync-admin"
+      ]
     },
     {
       "username": "bob",
@@ -76,7 +127,16 @@
       "emailVerified": true,
       "firstName": "Bob",
       "lastName": "Berg",
-      "credentials": [{ "type": "password", "value": "bob-pw", "temporary": false }]
+      "credentials": [
+        {
+          "type": "password",
+          "value": "bob-pw",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "forgesync-operator"
+      ]
     },
     {
       "username": "carol",
@@ -85,7 +145,47 @@
       "emailVerified": true,
       "firstName": "Carol",
       "lastName": "Christensen",
-      "credentials": [{ "type": "password", "value": "carol-pw", "temporary": false }]
+      "credentials": [
+        {
+          "type": "password",
+          "value": "carol-pw",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "forgesync-viewer"
+      ]
+    },
+    {
+      "username": "erin",
+      "enabled": true,
+      "email": "erin@sceneid.test",
+      "emailVerified": true,
+      "firstName": "Erin",
+      "lastName": "Eriksson",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "erin-pw",
+          "temporary": false
+        }
+      ]
     }
-  ]
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "forgesync-admin",
+        "description": "ForgeSync administrator"
+      },
+      {
+        "name": "forgesync-operator",
+        "description": "ForgeSync operator"
+      },
+      {
+        "name": "forgesync-viewer",
+        "description": "ForgeSync viewer"
+      }
+    ]
+  }
 }

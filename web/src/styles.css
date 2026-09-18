@@ -153,6 +153,23 @@ code,
   gap: 1rem;
 }
 
+.who {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.2;
+}
+
+.who-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.who-role {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
 .connection {
   display: inline-flex;
   align-items: center;
@@ -621,8 +638,43 @@ td.details {
   font-size: 0.9rem;
 }
 
-.login-card .button-primary {
-  margin-top: 0.5rem;
+.button-link {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  padding: 0.55rem 0.9rem;
+  border-radius: 6px;
+}
+
+.token-form {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.token-form button {
+  margin-top: 0.25rem;
+}
+
+.break-glass {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+
+.break-glass summary {
+  cursor: pointer;
+  color: var(--text-2);
+  font-size: 0.9rem;
+}
+
+.break-glass[open] summary {
+  margin-bottom: 0.5rem;
+}
+
+@media (max-width: 720px) {
+  .who {
+    display: none;
+  }
 }
 
 @media (forced-colors: active) {

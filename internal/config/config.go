@@ -42,6 +42,9 @@ type HTTP struct {
 	// admin API is disabled; /healthz and /readyz stay available.
 	AdminTokenFile string `yaml:"admin_token_file"`
 	AdminToken     string `yaml:"-"`
+	// SecureCookies marks the web UI's session cookie Secure (HTTPS only).
+	// Defaults to true; set false only for local development over plain http.
+	SecureCookies *bool `yaml:"secure_cookies"`
 }
 
 type Database struct {
@@ -101,6 +104,10 @@ func (c *Config) applyDefaults() {
 	}
 	if c.HTTP.Listen == "" {
 		c.HTTP.Listen = "127.0.0.1:8090"
+	}
+	if c.HTTP.SecureCookies == nil {
+		secure := true
+		c.HTTP.SecureCookies = &secure
 	}
 	if c.Health.Interval == 0 {
 		c.Health.Interval = 15 * time.Second

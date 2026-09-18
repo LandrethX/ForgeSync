@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -94,28 +95,63 @@ func (s *Store) RecordNodeStatus(ctx context.Context, st health.Status, prev hea
 
 // Transition is one change of a node's health state.
 type Transition struct {
-	Node  string
-	From  health.State
-	To    health.State
-	Error string
+	ID    int64        `json:"id"`
+	Node  string       `json:"node"`
+	From  health.State `json:"from"`
+	To    health.State `json:"to"`
+	At    time.Time    `json:"at"`
+	Error string       `json:"error,omitempty"`
 }
 
-// Transitions returns a node's state changes, oldest first.
-func (s *Store) Transitions(ctx context.Context, node string) ([]Transition, error) {
+// Transitions returns up to limit state changes, newest first. An empty node
+// means all nodes.
+func (s *Store) Transitions(ctx context.Context, node string, limit int) ([]Transition, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT node, from_state, to_state, error FROM node_state_transitions
-		WHERE node = $1 ORDER BY id`, node)
+		SELECT id, node, from_state, to_state, at, error FROM node_state_transitions
+		WHERE $1 = '' OR node = $1
+		ORDER BY id DESC LIMIT $2`, node, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Transition
+	out := []Transition{}
 	for rows.Next() {
 		var t Transition
-		if err := rows.Scan(&t.Node, &t.From, &t.To, &t.Error); err != nil {
+		if err := rows.Scan(&t.ID, &t.Node, &t.From, &t.To, &t.At, &t.Error); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// AuditEntry is one row of the audit log.
+type AuditEntry struct {
+	ID      int64          `json:"id"`
+	At      time.Time      `json:"at"`
+	Actor   string         `json:"actor"`
+	Action  string         `json:"action"`
+	Target  string         `json:"target"`
+	Details map[string]any `json:"details"`
+}
+
+// AuditEntries returns up to limit entries older than beforeID (0 = newest), newest first.
+func (s *Store) AuditEntries(ctx context.Context, limit int, beforeID int64) ([]AuditEntry, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, at, actor, action, target, details FROM audit_log
+		WHERE $2 = 0 OR id < $2
+		ORDER BY id DESC LIMIT $1`, limit, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AuditEntry{}
+	for rows.Next() {
+		var e AuditEntry
+		if err := rows.Scan(&e.ID, &e.At, &e.Actor, &e.Action, &e.Target, &e.Details); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
 	}
 	return out, rows.Err()
 }

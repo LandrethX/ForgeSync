@@ -47,6 +47,9 @@ type Monitor struct {
 
 	mu     sync.RWMutex
 	status map[string]Status
+
+	subsMu sync.Mutex
+	subs   map[chan struct{}]struct{}
 }
 
 func NewMonitor(targets []Target, opts Options, rec Recorder, log *slog.Logger) *Monitor {
@@ -57,6 +60,7 @@ func NewMonitor(targets []Target, opts Options, rec Recorder, log *slog.Logger) 
 		log:     log,
 		now:     time.Now,
 		status:  make(map[string]Status, len(targets)),
+		subs:    map[chan struct{}]struct{}{},
 	}
 	for _, t := range targets {
 		m.status[t.Name] = Status{Node: t.Name, State: Unknown}
@@ -102,6 +106,7 @@ func (m *Monitor) CheckOnce(ctx context.Context, t Target) Status {
 	m.status[t.Name] = s
 	m.mu.Unlock()
 
+	m.notify()
 	if s.State != prev.State {
 		m.log.Info("node state changed", "node", t.Name, "from", prev.State, "to", s.State, "error", s.LastError)
 	}
@@ -155,6 +160,32 @@ func check(ctx context.Context, t Target) Result {
 		r.AuthOK = true
 	}
 	return r
+}
+
+// Subscribe returns a channel that receives a value after every check
+// (coalesced: a slow reader sees one pending notification, not a backlog).
+// Call the returned function to unsubscribe.
+func (m *Monitor) Subscribe() (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	m.subsMu.Lock()
+	m.subs[ch] = struct{}{}
+	m.subsMu.Unlock()
+	return ch, func() {
+		m.subsMu.Lock()
+		delete(m.subs, ch)
+		m.subsMu.Unlock()
+	}
+}
+
+func (m *Monitor) notify() {
+	m.subsMu.Lock()
+	defer m.subsMu.Unlock()
+	for ch := range m.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // Snapshot returns the latest status of every node, sorted by name.

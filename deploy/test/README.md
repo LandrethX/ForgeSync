@@ -78,9 +78,13 @@ Run the controller on the Mac from the repo root. It uses `forgesync.yaml`, the 
 `setup.sh` created in `.tokens/`, and the `forgesync-db` database:
 
 ```sh
-make run                                                   # or: go run ./cmd/forgesyncd -config deploy/test/forgesync.yaml
+make web && make run                                       # builds the UI, then runs the controller
 go run ./cmd/forgesync --token-file deploy/test/.tokens/admin.token node list
 ```
+
+The admin UI is at http://127.0.0.1:8090. Sign in with the contents of `.tokens/admin.token`.
+To work on the UI with hot reload, run `make web-dev` alongside `make run` and open
+http://127.0.0.1:5173.
 
 Containers reach a ForgeSync process running on the Mac through `http://host.docker.internal:<port>`.
 Use that address as the webhook target.

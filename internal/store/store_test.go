@@ -77,12 +77,16 @@ func TestNodesStatusAndAudit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	tr, err := s.Transitions(ctx, "se")
+	tr, err := s.Transitions(ctx, "se", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tr) != 2 || tr[0].To != health.Healthy || tr[1].From != health.Healthy || tr[1].To != health.Suspect {
-		t.Fatalf("transitions = %+v (unchanged states must not add rows)", tr)
+	// Newest first; an unchanged state must not add a row.
+	if len(tr) != 2 || tr[0].From != health.Healthy || tr[0].To != health.Suspect || tr[1].To != health.Healthy {
+		t.Fatalf("transitions = %+v", tr)
+	}
+	if all, err := s.Transitions(ctx, "", 1); err != nil || len(all) != 1 || all[0].To != health.Suspect {
+		t.Fatalf("all nodes, limit 1 = %+v, err %v", all, err)
 	}
 	var state string
 	if err := s.pool.QueryRow(ctx, `SELECT state FROM node_status WHERE node = 'se'`).Scan(&state); err != nil || state != "SUSPECT" {
@@ -95,8 +99,15 @@ func TestNodesStatusAndAudit(t *testing.T) {
 	if err := s.Audit(ctx, "cli:admin", "repo.set_primary", "alice/demo", map[string]any{"primary": "dk"}); err != nil {
 		t.Fatal(err)
 	}
-	var primary string
-	if err := s.pool.QueryRow(ctx, `SELECT details->>'primary' FROM audit_log WHERE action = 'repo.set_primary'`).Scan(&primary); err != nil || primary != "dk" {
-		t.Fatalf("audit details primary = %q, err %v", primary, err)
+	entries, err := s.AuditEntries(ctx, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[0].Action != "repo.set_primary" || entries[0].Details["primary"] != "dk" || entries[1].Details == nil {
+		t.Fatalf("audit entries = %+v", entries)
+	}
+	older, err := s.AuditEntries(ctx, 10, entries[0].ID)
+	if err != nil || len(older) != 1 || older[0].Action != "node.register" {
+		t.Fatalf("entries before %d = %+v, err %v", entries[0].ID, older, err)
 	}
 }

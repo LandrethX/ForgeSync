@@ -22,6 +22,7 @@ import (
 	"scenegit.org/forgesync/internal/forgejo"
 	"scenegit.org/forgesync/internal/health"
 	"scenegit.org/forgesync/internal/store"
+	"scenegit.org/forgesync/internal/webui"
 )
 
 func main() {
@@ -40,6 +41,7 @@ func main() {
 }
 
 func run(configPath string) error {
+	startedAt := time.Now()
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -96,11 +98,14 @@ func run(configPath string) error {
 	srv := &http.Server{
 		Addr: cfg.HTTP.Listen,
 		Handler: (&api.Server{
-			AdminToken: cfg.HTTP.AdminToken,
-			Nodes:      infos,
-			Health:     monitor,
-			DB:         db,
-			Log:        log,
+			AdminToken:    cfg.HTTP.AdminToken,
+			Nodes:         infos,
+			Health:        monitor,
+			DB:            db,
+			Log:           log,
+			StartedAt:     startedAt,
+			SecureCookies: *cfg.HTTP.SecureCookies,
+			Frontend:      webui.Handler(),
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,

@@ -53,6 +53,9 @@ nodes:
 	if cfg.Health.Interval != 30*time.Second || cfg.Health.Timeout != 5*time.Second || cfg.Health.FailureThreshold != 3 {
 		t.Errorf("health = %+v", cfg.Health)
 	}
+	if !*cfg.HTTP.SecureCookies {
+		t.Error("secure_cookies should default to true")
+	}
 	if cfg.HTTP.Listen != "127.0.0.1:8090" || cfg.Nodes[0].ServiceUser != "forgesync" || cfg.Log.Level != "info" {
 		t.Errorf("defaults not applied: %+v", cfg)
 	}

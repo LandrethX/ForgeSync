@@ -4,10 +4,19 @@ LDFLAGS := -s -w \
 	-X scenegit.org/forgesync/internal/buildinfo.Version=$(VERSION) \
 	-X scenegit.org/forgesync/internal/buildinfo.Commit=$(COMMIT)
 
-.PHONY: build test test-db vet fmt check run clean
+.PHONY: build web web-dev web-test test test-db vet fmt check run clean
 
-build: ## Build forgesyncd and forgesync into bin/
+build: web ## Build the web UI, then forgesyncd (with the UI embedded) and forgesync into bin/
 	go build -ldflags '$(LDFLAGS)' -o bin/ ./cmd/...
+
+web: ## Build the admin UI into internal/webui/dist (embedded by go build)
+	cd web && npm ci --no-audit --no-fund && npm run build
+
+web-dev: ## Vite dev server on :5173, proxying /api to a controller on :8090 (make run)
+	cd web && npm run dev
+
+web-test: ## Type-check and unit-test the admin UI
+	cd web && npm run typecheck && npm test
 
 test: ## Unit tests (database tests skip without FORGESYNC_TEST_DATABASE_URL)
 	go test ./...
@@ -23,7 +32,7 @@ vet:
 fmt:
 	gofmt -w .
 
-check: vet test ## vet, gofmt check and tests
+check: vet test web-test ## vet, gofmt check, Go and UI tests
 	@test -z "$$(gofmt -l .)" || { echo "gofmt needed:"; gofmt -l .; exit 1; }
 
 run: ## Run the controller against the local test environment

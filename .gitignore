@@ -6,3 +6,7 @@
 
 # Build output
 bin/
+
+# Built web UI (make web); only the placeholder is committed so go:embed works
+internal/webui/dist/*
+!internal/webui/dist/.gitkeep

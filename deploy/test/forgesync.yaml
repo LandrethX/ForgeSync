@@ -8,6 +8,8 @@ log:
 http:
   listen: 127.0.0.1:8090
   admin_token_file: .tokens/admin.token
+  # Plain http on localhost; production keeps the default (true).
+  secure_cookies: false
 database:
   # Test-only credentials (see .env). Real deployments use url_file or
   # FORGESYNC_DATABASE_URL instead of an inline URL.

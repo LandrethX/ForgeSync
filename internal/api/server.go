@@ -39,6 +39,7 @@ type DB interface {
 	Users(ctx context.Context) ([]store.UserRecord, error)
 	User(ctx context.Context, id string) (store.UserRecord, error)
 	SetUserHome(ctx context.Context, id, node string) (string, error)
+	Archives(ctx context.Context, repositoryID string) ([]store.Archive, error)
 	NodeScans(ctx context.Context) ([]store.NodeScan, error)
 	Conflicts(ctx context.Context, f store.ConflictFilter) ([]store.Conflict, int, map[string]int, error)
 	ConflictByID(ctx context.Context, id int64) (store.Conflict, error)

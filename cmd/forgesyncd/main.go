@@ -114,6 +114,7 @@ func run(configPath string) error {
 			AutoFix:       *cfg.Replication.AutoFix,
 			HandOff:       *cfg.Replication.HandOffConflicts,
 			BackupFor:     time.Duration(cfg.Replication.BackupDays) * 24 * time.Hour,
+			ArchiveOrg:    cfg.Replication.ArchiveOrg,
 			// Rescan so the inventory shows the result. Forgejo updates some
 			// repository fields (e.g. "empty" after the first push) just after
 			// a push, so give it a moment first. The scanner exists by then.
@@ -128,6 +129,8 @@ func run(configPath string) error {
 	scanner = inventory.NewScanner(scanTargets, inventory.Options{
 		Interval:          cfg.Inventory.Interval,
 		BranchConcurrency: cfg.Inventory.BranchConcurrency,
+		// Archived copies of deleted repositories aren't inventoried.
+		SkipOwners: []string{cfg.Replication.ArchiveOrg},
 		AfterScan: func(ctx context.Context) {
 			if err := inventory.AssignPrimaries(ctx, db, nodeNames, log); err != nil {
 				log.Error("assigning primaries failed", "error", err)

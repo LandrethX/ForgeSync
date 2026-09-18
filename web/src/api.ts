@@ -60,7 +60,7 @@ export function historyExportURL(f: HistoryFilter, format: "csv" | "json"): stri
   return `/api/v1/history/export?${p}`;
 }
 
-export type RepoStatus = "same" | "differs" | "missing" | "unknown";
+export type RepoStatus = "same" | "differs" | "missing" | "unknown" | "deleted";
 export type Presence = "present" | "absent" | "unknown";
 
 export interface Replica {
@@ -87,7 +87,18 @@ export interface NodeView {
   replica?: Replica;
 }
 
-export type ReplicaState = "synced" | "conflict" | "error" | "waiting" | "missing";
+export type ReplicaState = "synced" | "conflict" | "error" | "waiting" | "missing" | "archived";
+
+/** A copy of a repository deleted on its primary, kept on one node for a while. */
+export interface Archive {
+  id: number;
+  node: string;
+  original_name: string;
+  archived_name: string;
+  state: "renamed" | "archived" | "purged";
+  archived_at: string;
+  delete_after?: string;
+}
 
 export interface ReplicaSync {
   node: string;
@@ -112,6 +123,9 @@ export interface Repository {
   status: RepoStatus;
   nodes: NodeView[];
   replication?: { enabled: boolean; replicas: ReplicaSync[] };
+  /** When ForgeSync found it deleted on its primary. */
+  deleted_at?: string;
+  archives?: Archive[];
 }
 
 export interface UserAccount {

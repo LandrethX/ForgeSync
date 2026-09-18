@@ -149,7 +149,9 @@ type RepositoryRecord struct {
 	// without one), "manual", or "" while none is set.
 	PrimarySource string    `json:"primary_source"`
 	FirstSeenAt   time.Time `json:"first_seen_at"`
-	Replicas      []Replica `json:"-"`
+	// DeletedAt is when ForgeSync found it deleted on its primary.
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	Replicas  []Replica  `json:"-"`
 }
 
 // Repositories returns every known repository with its replicas, by name.
@@ -174,7 +176,7 @@ func (s *Store) Repository(ctx context.Context, id string) (RepositoryRecord, er
 
 func (s *Store) repositories(ctx context.Context, id string) ([]RepositoryRecord, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT r.id::text, r.full_name, coalesce(r.primary_node, ''), r.primary_source, r.first_seen_at,
+		SELECT r.id::text, r.full_name, coalesce(r.primary_node, ''), r.primary_source, r.first_seen_at, r.deleted_at,
 			rr.node, rr.present, rr.forgejo_id, rr.private, rr.fork, rr.mirror, rr.archived, rr.empty,
 			rr.default_branch, rr.head_sha, rr.head_error, rr.forgejo_updated_at, rr.forgejo_created_at,
 			rr.last_seen_at, rr.checked_at
@@ -195,7 +197,7 @@ func (s *Store) repositories(ctx context.Context, id string) ([]RepositoryRecord
 		var forgejoID *int64
 		var branch, sha, headErr *string
 		var checked *time.Time
-		if err := rows.Scan(&rec.ID, &rec.FullName, &rec.PrimaryNode, &rec.PrimarySource, &rec.FirstSeenAt,
+		if err := rows.Scan(&rec.ID, &rec.FullName, &rec.PrimaryNode, &rec.PrimarySource, &rec.FirstSeenAt, &rec.DeletedAt,
 			&node, &present, &forgejoID, &private, &fork, &mirror, &archived, &empty,
 			&branch, &sha, &headErr, &rp.ForgejoUpdated, &rp.ForgejoCreated, &rp.LastSeenAt, &checked); err != nil {
 			return nil, err

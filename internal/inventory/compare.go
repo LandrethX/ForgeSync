@@ -19,6 +19,9 @@ const (
 	// Unknown: some node hasn't been scanned since the repository appeared,
 	// or a branch head couldn't be read.
 	Unknown Status = "unknown"
+	// Deleted: deleted on its primary; the other copies are archived and
+	// deleted after the backup period.
+	Deleted Status = "deleted"
 )
 
 // Presence is what one node has of a repository.
@@ -75,6 +78,8 @@ func Compare(rec store.RepositoryRecord, nodes []string, scans map[string]store.
 	}
 
 	switch {
+	case rec.DeletedAt != nil:
+		return Deleted, views
 	case missing:
 		return Missing, views
 	case unknown || len(present) == 0:

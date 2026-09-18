@@ -35,6 +35,7 @@ export function RepositoryDetail({ id }: { id: string }) {
 
       {r && (
         <>
+          {(r.deleted_at || (r.archives && r.archives.length > 0)) && <ArchivePanel repo={r} />}
           <RepoConflicts repositoryId={r.id} />
           <PrimaryPanel repo={r} onSaved={repo.reload} />
           <ReplicationPanel repo={r} onChange={repo.reload} />
@@ -174,6 +175,41 @@ function PrimaryPanel({ repo, onSaved }: { repo: Repository; onSaved: () => void
   );
 }
 
+function ArchivePanel({ repo }: { repo: Repository }) {
+  const kept = (repo.archives ?? []).filter((a) => a.state !== "purged");
+  return (
+    <section className="panel" aria-labelledby="deleted-heading">
+      <h2 id="deleted-heading">{repo.deleted_at ? "Deleted on the primary" : "Archived copies"}</h2>
+      {repo.deleted_at ? (
+        <p>
+          Deleted on {repo.primary_node} (found {formatDateTime(repo.deleted_at)}). ForgeSync doesn't delete the other
+          copies right away: it moves each one into a private archive organization, with its issues, wiki and all
+          commits, and deletes it after the backup period. An administrator can move a copy back to restore it.
+        </p>
+      ) : (
+        <p>
+          This repository was deleted on its primary once and created again. These copies of the old one are kept until
+          they expire.
+        </p>
+      )}
+      {kept.length > 0 ? (
+        <ul>
+          {kept.map((a) => (
+            <li key={a.id}>
+              {a.node}: <span className="mono">{a.archived_name}</span>
+              {a.state === "archived" && a.delete_after
+                ? ` in the archive organization · deleted after ${formatDateTime(a.delete_after)}`
+                : " · being archived"}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted">No copies are kept.</p>
+      )}
+    </section>
+  );
+}
+
 function PrimarySource({ repo }: { repo: Repository }) {
   if (!repo.primary_node) {
     return <span className="muted">Set automatically after the next complete scan of every node.</span>;
@@ -215,6 +251,7 @@ const REPLICA_STATE: Record<ReplicaState, { tone: Tone; label: string }> = {
   error: { tone: "critical", label: "Error" },
   waiting: { tone: "warning", label: "Waiting" },
   missing: { tone: "serious", label: "Repository missing" },
+  archived: { tone: "neutral", label: "Archived" },
 };
 
 function ReplicationPanel({ repo, onChange }: { repo: Repository; onChange: () => void }) {

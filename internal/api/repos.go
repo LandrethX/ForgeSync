@@ -33,6 +33,9 @@ type Repository struct {
 	Status      inventory.Status     `json:"status"`
 	Nodes       []inventory.NodeView `json:"nodes"`
 	Replication *RepoReplication     `json:"replication,omitempty"` // only on the single-repository endpoint
+	// Archives are the copies kept after it was deleted on its primary
+	// (single-repository endpoint only).
+	Archives []store.Archive `json:"archives,omitempty"`
 }
 
 // RepoReplication is a repository's replication state per replica.
@@ -81,9 +84,9 @@ func (s *Server) listRepositories(w http.ResponseWriter, r *http.Request) {
 	}
 	status := inventory.Status(r.URL.Query().Get("status"))
 	switch status {
-	case "", inventory.Same, inventory.Differs, inventory.Missing, inventory.Unknown:
+	case "", inventory.Same, inventory.Differs, inventory.Missing, inventory.Unknown, inventory.Deleted:
 	default:
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "status must be same, differs, missing or unknown"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "status must be same, differs, missing, unknown or deleted"})
 		return
 	}
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
@@ -145,7 +148,12 @@ func (s *Server) getRepository(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, Repository{RepositoryRecord: rec, Status: st, Nodes: views, Replication: repl})
+	archives, err := s.DB.Archives(r.Context(), rec.ID)
+	if err != nil {
+		s.serverError(w, "get archives", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, Repository{RepositoryRecord: rec, Status: st, Nodes: views, Replication: repl, Archives: archives})
 }
 
 // replicateNow starts replicating one repository. Operators and up.

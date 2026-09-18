@@ -53,9 +53,13 @@ type Replication struct {
 	// HandOffConflicts opens a pull request on the primary for each diverged
 	// branch, for the repository's owner to decide. Default true.
 	HandOffConflicts *bool `yaml:"hand_off_conflicts"`
-	// BackupDays is how long a replica's version is kept after the owner
-	// chose the primary's. Default 30.
+	// BackupDays is how long ForgeSync keeps what it takes away: a
+	// replica's version after the owner chose the primary's, and the archived
+	// copies of a repository deleted on its primary. Default 30.
 	BackupDays int `yaml:"backup_days"`
+	// ArchiveOrg is the private organization ForgeSync moves the copies of a
+	// repository deleted on its primary into. Default "forgesync-archive".
+	ArchiveOrg string `yaml:"archive_org"`
 }
 
 // Inventory controls the periodic repository scan of every node.
@@ -202,6 +206,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Replication.BackupDays == 0 {
 		c.Replication.BackupDays = 30
+	}
+	if c.Replication.ArchiveOrg == "" {
+		c.Replication.ArchiveOrg = "forgesync-archive"
 	}
 	if c.Replication.Git == "" {
 		c.Replication.Git = "git"

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,6 +43,9 @@ type Options struct {
 	// AfterScan, if set, runs after every scan of all nodes (e.g. conflict
 	// detection, which needs every node's latest view).
 	AfterScan func(ctx context.Context)
+	// SkipOwners are owners whose repositories aren't inventoried, e.g.
+	// ForgeSync's archive organization.
+	SkipOwners []string
 }
 
 // pageSize matches Forgejo's default MAX_RESPONSE_ITEMS.
@@ -184,6 +188,15 @@ func (s *Scanner) scanUsers(ctx context.Context, t Target) ([]store.ScannedUser,
 	}
 }
 
+func (s *Scanner) skipOwner(login string) bool {
+	for _, o := range s.opts.SkipOwners {
+		if strings.EqualFold(o, login) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Scanner) scanNode(ctx context.Context, t Target) ([]store.ScannedRepo, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.NodeTimeout)
 	defer cancel()
@@ -200,12 +213,15 @@ func (s *Scanner) scanNode(ctx context.Context, t Target) ([]store.ScannedRepo, 
 		}
 		for _, r := range repos {
 			// Repositories created while paging can shift pages; skip repeats.
-			if !seen[r.ID] {
-				seen[r.ID] = true
+			if seen[r.ID] {
+				continue
+			}
+			seen[r.ID] = true
+			if !s.skipOwner(r.Owner.Login) {
 				all = append(all, r)
 			}
 		}
-		if len(repos) < pageSize || len(all) >= total || page > total/pageSize+2 {
+		if len(repos) < pageSize || len(seen) >= total || page > total/pageSize+2 {
 			break
 		}
 	}

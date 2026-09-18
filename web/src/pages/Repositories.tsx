@@ -7,7 +7,7 @@ import { useDebounced, useLoad, useNodes, useNow, useSession } from "../hooks";
 import { Link } from "../router";
 
 const PAGE = 100;
-const FILTERS: (RepoStatus | "")[] = ["", "missing", "differs", "unknown", "same"];
+const FILTERS: (RepoStatus | "")[] = ["", "missing", "differs", "unknown", "same", "deleted"];
 
 export function Repositories() {
   const session = useSession();

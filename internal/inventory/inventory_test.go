@@ -246,3 +246,18 @@ func TestTrigger(t *testing.T) {
 		t.Fatal("trigger accepted while a scan is running")
 	}
 }
+
+func TestScannerSkipsOwners(t *testing.T) {
+	repos := []forgejo.Repository{
+		{ID: 1, Name: "a", FullName: "alice/a", Owner: forgejo.User{Login: "alice"}, Empty: true},
+		{ID: 2, Name: "alice--a--20260919-103000", FullName: "forgesync-archive/alice--a--20260919-103000",
+			Owner: forgejo.User{Login: "forgesync-archive"}, Empty: true},
+	}
+	rec := &fakeRecorder{scans: map[string][]store.ScannedRepo{}, users: map[string][]store.ScannedUser{}, failures: map[string]error{}}
+	s := NewScanner([]Target{{Name: "se", Client: &fakeForgejo{repos: repos}}},
+		Options{Interval: time.Hour, SkipOwners: []string{"ForgeSync-Archive"}}, rec, slog.New(slog.DiscardHandler))
+	s.ScanAll(context.Background())
+	if got := rec.scans["se"]; len(got) != 1 || got[0].FullName != "alice/a" {
+		t.Errorf("scanned %+v, want only alice/a", got)
+	}
+}

@@ -657,3 +657,56 @@ func TestHandoffs(t *testing.T) {
 		t.Errorf("re-handing off: %v", err)
 	}
 }
+
+func TestArchives(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncNodes(ctx, []NodeRecord{{Name: "se", URL: "http://se"}, {Name: "dk", URL: "http://dk"}}); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
+	if err := s.RecordNodeScan(ctx, "dk", t0, t0, []ScannedRepo{{FullName: "alice/demo"}}); err != nil {
+		t.Fatal(err)
+	}
+	recs, _ := s.Repositories(ctx)
+	id := recs[0].ID
+	if err := s.MarkRepositoryDeleted(ctx, id, t0); err != nil {
+		t.Fatal(err)
+	}
+	s.MarkRepositoryDeleted(ctx, id, t0.Add(time.Hour)) // the first time counts
+	if r, _ := s.Repository(ctx, id); r.DeletedAt == nil || !r.DeletedAt.Equal(t0) {
+		t.Fatalf("deleted_at = %v", r.DeletedAt)
+	}
+	a := Archive{RepositoryID: id, Node: "dk", OriginalName: "alice/demo", ArchivedName: "alice--demo--x", State: "renamed", ArchivedAt: t0}
+	aid, err := s.SaveArchive(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	until := t0.Add(30 * 24 * time.Hour)
+	a.ID, a.State, a.DeleteAfter = aid, "archived", &until
+	if _, err := s.SaveArchive(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Archives(ctx, id)
+	if err != nil || len(got) != 1 || got[0].State != "archived" || !got[0].DeleteAfter.Equal(until) {
+		t.Fatalf("archives = %+v, %v", got, err)
+	}
+	if err := s.UndeleteRepository(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := s.Repository(ctx, id); r.DeletedAt != nil {
+		t.Error("still deleted")
+	}
+	if err := s.DeleteRepository(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Repository(ctx, id); !errors.Is(err, ErrNotFound) {
+		t.Errorf("forgotten repository: %v", err)
+	}
+	if got, _ := s.Archives(ctx, id); len(got) != 0 {
+		t.Errorf("archives outlived the repository: %+v", got)
+	}
+}

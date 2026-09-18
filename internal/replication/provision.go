@@ -24,6 +24,12 @@ type NodeAPI interface {
 	GetPullRequest(ctx context.Context, owner, repo string, number int64) (forgejo.PullRequest, bool, error)
 	Comment(ctx context.Context, owner, repo string, number int64, body string) error
 	OrgOwners(ctx context.Context, org string) ([]string, error)
+
+	// For repositories deleted on their primary (deletion.go).
+	EditRepo(ctx context.Context, owner, repo string, opt forgejo.EditRepoOption) error
+	TransferRepo(ctx context.Context, owner, repo, newOwner string) error
+	DeleteRepo(ctx context.Context, owner, repo string) error
+	AdminCreateOrg(ctx context.Context, owner string, opt forgejo.CreateOrgOption) error
 }
 
 // blocked is a reason a missing repository can't be created on a replica

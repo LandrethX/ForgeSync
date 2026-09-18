@@ -33,6 +33,7 @@ type fakeDB struct {
 	conflicts []store.Conflict
 	syncs     []store.ReplicaSync
 	users     []store.UserRecord
+	archives  []store.Archive
 }
 
 func (f *fakeDB) Repositories(context.Context) ([]store.RepositoryRecord, error) {
@@ -89,7 +90,8 @@ func (f *fakeDB) SetUserHome(_ context.Context, id, node string) (string, error)
 	}
 	return "", store.ErrNotFound
 }
-func (f *fakeDB) NodeScans(context.Context) ([]store.NodeScan, error) { return f.scans, nil }
+func (f *fakeDB) Archives(context.Context, string) ([]store.Archive, error) { return f.archives, nil }
+func (f *fakeDB) NodeScans(context.Context) ([]store.NodeScan, error)       { return f.scans, nil }
 func (f *fakeDB) Conflicts(_ context.Context, flt store.ConflictFilter) ([]store.Conflict, int, map[string]int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -437,3 +437,47 @@ func (c *Client) OrgOwners(ctx context.Context, org string) ([]string, error) {
 	}
 	return out, nil
 }
+
+// EditRepoOption is the part of PATCH /repos/{owner}/{repo} ForgeSync uses
+// (modules/structs/repo.go).
+type EditRepoOption struct {
+	Name     *string `json:"name,omitempty"`
+	Archived *bool   `json:"archived,omitempty"`
+}
+
+// EditRepo changes a repository's settings.
+func (c *Client) EditRepo(ctx context.Context, owner, repo string, opt EditRepoOption) error {
+	return c.do(ctx, http.MethodPatch, repoPath(owner, repo), true, opt, nil)
+}
+
+// TransferRepo moves a repository to another owner. Forgejo does it at once
+// when the caller may create repositories there, and otherwise leaves it
+// pending the new owner's acceptance; callers check where it ended up.
+func (c *Client) TransferRepo(ctx context.Context, owner, repo, newOwner string) error {
+	return c.do(ctx, http.MethodPost, repoPath(owner, repo)+"/transfer", true, map[string]string{"new_owner": newOwner}, nil)
+}
+
+// DeleteRepo deletes a repository. A repository that's already gone is not
+// an error.
+func (c *Client) DeleteRepo(ctx context.Context, owner, repo string) error {
+	err := c.do(ctx, http.MethodDelete, repoPath(owner, repo), true, nil, nil)
+	if isNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// CreateOrgOption is the body of POST /admin/users/{username}/orgs
+// (modules/structs/org.go).
+type CreateOrgOption struct {
+	UserName    string `json:"username"`
+	FullName    string `json:"full_name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Visibility  string `json:"visibility,omitempty"`
+}
+
+// AdminCreateOrg creates an organization owned by the given user. Site
+// admin only.
+func (c *Client) AdminCreateOrg(ctx context.Context, owner string, opt CreateOrgOption) error {
+	return c.do(ctx, http.MethodPost, "/api/v1/admin/users/"+url.PathEscape(owner)+"/orgs", true, opt, nil)
+}

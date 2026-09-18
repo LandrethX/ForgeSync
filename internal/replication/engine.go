@@ -46,6 +46,11 @@ type Store interface {
 	Handoffs(ctx context.Context, repositoryID string, activeOnly bool) ([]store.Handoff, error)
 	SaveHandoff(ctx context.Context, h store.Handoff) (int64, error)
 	UpdateHandoff(ctx context.Context, h store.Handoff) error
+	MarkRepositoryDeleted(ctx context.Context, id string, at time.Time) error
+	UndeleteRepository(ctx context.Context, id string) error
+	DeleteRepository(ctx context.Context, id string) error
+	Archives(ctx context.Context, repositoryID string) ([]store.Archive, error)
+	SaveArchive(ctx context.Context, a store.Archive) (int64, error)
 	NoteCreatedAccount(ctx context.Context, node, login string) error
 	SaveReplicaSync(ctx context.Context, st store.ReplicaSync, refs map[string]string) error
 	SyncConflicts(ctx context.Context, found []store.FoundConflict, checked, kinds []string, at time.Time) ([]store.ConflictChange, error)
@@ -69,9 +74,13 @@ type Options struct {
 	// HandOff hands diverged branches to the repository's owner as a pull
 	// request on the primary (see handoff.go).
 	HandOff bool
-	// BackupFor is how long a replica's branch is kept after the owner
-	// chose the primary's version. Default 30 days.
+	// BackupFor is how long ForgeSync keeps what it takes away: a replica's
+	// branch after the owner chose the primary's version, and the archived
+	// copies of a repository deleted on its primary. Default 30 days.
 	BackupFor time.Duration
+	// ArchiveOrg is the organization archived copies are moved into.
+	// Default "forgesync-archive".
+	ArchiveOrg string
 	// AfterTriggered, if set, runs after a replication started by Trigger,
 	// e.g. to rescan so the inventory reflects the new state right away.
 	AfterTriggered func()
@@ -98,6 +107,9 @@ func NewEngine(nodes []Node, git *Git, st Store, h HealthSource, opts Options, l
 	}
 	if opts.BackupFor == 0 {
 		opts.BackupFor = 30 * 24 * time.Hour
+	}
+	if opts.ArchiveOrg == "" {
+		opts.ArchiveOrg = "forgesync-archive"
 	}
 	e := &Engine{nodes: map[string]Node{}, git: git, store: st, health: h, opts: opts, log: log, now: time.Now, running: map[string]bool{}}
 	for _, n := range nodes {
@@ -216,6 +228,18 @@ func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again
 		}
 	}
 
+	// Archived copies whose backup period is over go first; once nothing of
+	// a deleted repository is left, ForgeSync forgets it.
+	if gone, err := e.purgeArchives(ctx, rec, healthy); err != nil {
+		return false, err
+	} else if gone {
+		if err := e.store.DeleteRepository(ctx, rec.ID); err != nil {
+			return false, err
+		}
+		e.log.Info("deleted repository forgotten", "repository", rec.FullName)
+		e.audit(ctx, "repo.forgotten", rec.FullName, map[string]any{"repository_id": rec.ID})
+		return false, nil
+	}
 	if !healthy[primary.Name] {
 		allReplicas(StateWaiting, "primary "+primary.Name+" isn't healthy")
 		return false, nil
@@ -227,7 +251,28 @@ func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again
 	}
 	pRemote := e.remote(primary, rec.FullName)
 	pRefs, err := e.git.LsRemote(ctx, pRemote)
+	if errors.Is(err, ErrRepoNotFound) {
+		switch had, gone := primaryHad(rec, primary.Name); {
+		case had && gone:
+			_, err := e.deletedOnPrimary(ctx, rec, primary, replicas, healthy, record)
+			return false, err
+		case had:
+			// Git says it's gone, but the latest scan still listed it.
+			allReplicas(StateWaiting, "the repository is gone from the primary "+primary.Name+
+				"; waiting for the next scan to confirm it was deleted")
+			return false, nil
+		}
+	}
+	if err == nil && rec.DeletedAt != nil {
+		// Created again on the primary: a normal repository again.
+		if err := e.store.UndeleteRepository(ctx, rec.ID); err != nil {
+			return false, err
+		}
+		e.log.Info("deleted repository created again on its primary", "repository", rec.FullName)
+		e.audit(ctx, "repo.recreated_on_primary", rec.FullName, map[string]any{"repository_id": rec.ID, "primary": primary.Name})
+	}
 	if errors.Is(err, ErrRepoNotFound) && e.opts.CreateMissing {
+		// Only a primary that never had it gets here.
 		// The primary follows the owner, so it may not have the repository
 		// yet (e.g. created on SE by a user whose primary site is DK).
 		var why blocked
@@ -333,16 +378,8 @@ func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again
 		// Every replica was compared: conflicts not found again are resolved.
 		checked = []string{rec.ID}
 	}
-	changes, err := e.store.SyncConflicts(ctx, found, checked, ConflictKinds, e.now().UTC())
-	if err != nil {
+	if err := e.syncConflicts(ctx, rec, found, checked); err != nil {
 		return again, err
-	}
-	for _, c := range changes {
-		e.log.Info("conflict "+c.Change, "repository", c.FullName, "kind", c.Kind, "ref", c.Ref)
-		if err := e.store.Audit(ctx, "forgesync", "conflict."+c.Change, c.FullName,
-			map[string]any{"conflict_id": c.ID, "kind": c.Kind, "ref": c.Ref}); err != nil {
-			e.log.Error("writing audit log failed", "error", err)
-		}
 	}
 	if e.opts.AutoFix && !again {
 		e.fixDefaultBranches(ctx, rec, primary, healthy)
@@ -494,6 +531,20 @@ func (e *Engine) seedPrimary(ctx context.Context, dir string, rec store.Reposito
 		}
 	}
 	e.log.Info("copied repository to its primary", "repository", rec.FullName, "from", from.Name, "to", primary.Name, "refs", len(creates))
+	return nil
+}
+
+// syncConflicts stores the git conflicts found for a repository and audits
+// what opened or cleared.
+func (e *Engine) syncConflicts(ctx context.Context, rec store.RepositoryRecord, found []store.FoundConflict, checked []string) error {
+	changes, err := e.store.SyncConflicts(ctx, found, checked, ConflictKinds, e.now().UTC())
+	if err != nil {
+		return err
+	}
+	for _, c := range changes {
+		e.log.Info("conflict "+c.Change, "repository", c.FullName, "kind", c.Kind, "ref", c.Ref)
+		e.audit(ctx, "conflict."+c.Change, c.FullName, map[string]any{"conflict_id": c.ID, "kind": c.Kind, "ref": c.Ref})
+	}
 	return nil
 }
 

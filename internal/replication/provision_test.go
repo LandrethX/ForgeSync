@@ -29,6 +29,8 @@ type fakeAPI struct {
 	pulls     []fakePull
 	comments  []string
 	calls     []string
+	// failTransfer makes the next TransferRepo fail.
+	failTransfer bool
 }
 
 type fakePull struct {
@@ -124,6 +126,68 @@ func (f *fakeAPI) Comment(_ context.Context, _, _ string, n int64, body string) 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.comments = append(f.comments, fmt.Sprintf("#%d %s", n, body))
+	return nil
+}
+func (f *fakeAPI) moveRepo(from, to string) {
+	r := f.repos[from]
+	delete(f.repos, from)
+	owner, name, _ := strings.Cut(to, "/")
+	r.FullName, r.Name, r.Owner.Login = to, name, owner
+	f.repos[to] = r
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(f.git.root, to)), 0o755); err != nil {
+		panic(err)
+	}
+	if err := os.Rename(filepath.Join(f.git.root, from+".git"), filepath.Join(f.git.root, to+".git")); err != nil {
+		panic(err)
+	}
+}
+func (f *fakeAPI) EditRepo(_ context.Context, owner, repo string, opt forgejo.EditRepoOption) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	full := owner + "/" + repo
+	if _, ok := f.repos[full]; !ok {
+		return &forgejo.APIError{StatusCode: http.StatusNotFound}
+	}
+	if opt.Name != nil {
+		f.moveRepo(full, owner+"/"+*opt.Name)
+		f.calls = append(f.calls, "rename "+full+" "+*opt.Name)
+	}
+	if opt.Archived != nil {
+		f.calls = append(f.calls, "archive "+full)
+		if r, ok := f.repos[full]; ok {
+			r.Archived = *opt.Archived
+			f.repos[full] = r
+		}
+	}
+	return nil
+}
+func (f *fakeAPI) TransferRepo(_ context.Context, owner, repo, newOwner string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failTransfer {
+		f.failTransfer = false
+		return &forgejo.APIError{StatusCode: http.StatusInternalServerError, Message: "boom"}
+	}
+	f.moveRepo(owner+"/"+repo, newOwner+"/"+repo)
+	f.calls = append(f.calls, "transfer "+owner+"/"+repo+" "+newOwner)
+	return nil
+}
+func (f *fakeAPI) DeleteRepo(_ context.Context, owner, repo string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	full := owner + "/" + repo
+	if _, ok := f.repos[full]; ok {
+		delete(f.repos, full)
+		os.RemoveAll(filepath.Join(f.git.root, full+".git"))
+		f.calls = append(f.calls, "delete "+full)
+	}
+	return nil
+}
+func (f *fakeAPI) AdminCreateOrg(_ context.Context, owner string, opt forgejo.CreateOrgOption) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.orgs[opt.UserName] = true
+	f.calls = append(f.calls, "create org "+opt.UserName+" "+opt.Visibility+" for "+owner)
 	return nil
 }
 func (f *fakeAPI) OrgOwners(_ context.Context, org string) ([]string, error) {

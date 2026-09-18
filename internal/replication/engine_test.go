@@ -24,6 +24,45 @@ type memStore struct {
 	checked  []string
 	audit    []string
 	handoffs []store.Handoff
+	archives []store.Archive
+	deleted  bool // DeleteRepository was called
+}
+
+func (m *memStore) MarkRepositoryDeleted(_ context.Context, _ string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.rec.DeletedAt == nil {
+		m.rec.DeletedAt = &at
+	}
+	return nil
+}
+func (m *memStore) UndeleteRepository(context.Context, string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rec.DeletedAt = nil
+	return nil
+}
+func (m *memStore) DeleteRepository(context.Context, string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleted = true
+	return nil
+}
+func (m *memStore) Archives(context.Context, string) ([]store.Archive, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]store.Archive(nil), m.archives...), nil
+}
+func (m *memStore) SaveArchive(_ context.Context, a store.Archive) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if a.ID == 0 {
+		a.ID = int64(len(m.archives) + 1)
+		m.archives = append(m.archives, a)
+	} else {
+		m.archives[a.ID-1] = a
+	}
+	return a.ID, nil
 }
 
 func newMemStore(rec store.RepositoryRecord) *memStore {

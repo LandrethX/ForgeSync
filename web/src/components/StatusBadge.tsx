@@ -91,6 +91,12 @@ export const REPO_STATUS: Record<RepoStatus, StateInfo> = {
     label: "Not known yet",
     description: "A node hasn't been scanned since it appeared, or a branch couldn't be read.",
   },
+  deleted: {
+    tone: "neutral",
+    label: "Deleted",
+    description:
+      "Deleted on its primary. The copies on other nodes are archived and deleted after the backup period.",
+  },
 };
 
 export function RepoStatusBadge({ status }: { status: RepoStatus }) {

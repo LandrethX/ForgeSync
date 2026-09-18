@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"scenegit.org/forgesync/internal/forgejo"
 	"strings"
 	"testing"
 )
@@ -134,3 +135,8 @@ func testGit(t *testing.T) *Git {
 }
 
 func bg() context.Context { return context.Background() }
+
+// apiRepo is alice/demo as the fake API describes it.
+func (n *gitNode) apiRepo() forgejo.Repository {
+	return forgejo.Repository{FullName: "alice/demo", Name: "demo", Owner: forgejo.User{Login: "alice"}, DefaultBranch: "main"}
+}

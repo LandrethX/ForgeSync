@@ -154,3 +154,34 @@ describe("ReplicationPanel", () => {
     expect(call[1].method).toBe("POST");
   });
 });
+
+describe("deleted repositories", () => {
+  it("say the copies are archived, and until when", async () => {
+    const deleted: Repository = {
+      ...demo,
+      primary_node: "se",
+      primary_source: "owner",
+      status: "deleted",
+      deleted_at: "2026-09-19T10:30:00Z",
+      archives: [
+        {
+          id: 1, node: "dk", original_name: "alice/demo", archived_name: "alice--demo--20260919-103000",
+          state: "archived", archived_at: "2026-09-19T10:30:00Z", delete_after: "2026-10-19T10:30:00Z",
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const path = url.replace(/^\/api\/v1/, "");
+        const body = path === `/repositories/${demo.id}` ? deleted : path.startsWith("/conflicts?") ? { total: 0, counts: {}, items: [] } : {};
+        return new Response(JSON.stringify(body), { status: 200 });
+      }),
+    );
+    render(wrap("viewer", <RepositoryDetail id={demo.id} />));
+    expect(await screen.findByRole("heading", { name: "Deleted on the primary" })).toBeTruthy();
+    expect(screen.getByText("alice--demo--20260919-103000")).toBeTruthy();
+    expect(screen.getByText(/in the archive organization · deleted after/)).toBeTruthy();
+    expect(screen.getAllByText("Deleted").length).toBeGreaterThan(0);
+  });
+});

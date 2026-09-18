@@ -122,8 +122,11 @@ mkdir -p .work
   cat forgesync.docker.yaml
   echo "nodes:"
   for n in $NODES; do
-    printf '  - name: %s\n    site: %s\n    url: http://forgejo-%s.test:%s\n    token_file: /etc/forgesync/tokens/%s.token\n' \
-      "$n" "$(site_of "$n")" "$n" "$(port_of "$n")" "$n"
+    # The SceneID login source's id differs per node; ForgeSync needs it to
+    # create SceneID users there.
+    src=$(compose exec -T -u git "forgejo-$n" forgejo admin auth list | awk '$2 == "SceneID" {print $1}')
+    printf '  - name: %s\n    site: %s\n    url: http://forgejo-%s.test:%s\n    token_file: /etc/forgesync/tokens/%s.token\n    sceneid_source_id: %s\n' \
+      "$n" "$(site_of "$n")" "$n" "$(port_of "$n")" "$n" "${src:-0}"
   done
 } > .work/forgesync.docker.yaml
 docker compose $PROFILE_ARGS --profile controller up -d --build --force-recreate --wait forgesync

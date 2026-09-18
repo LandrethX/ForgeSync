@@ -43,6 +43,9 @@ type Replication struct {
 	WorkDir     string `yaml:"work_dir"`
 	Concurrency int    `yaml:"concurrency"` // repositories in parallel
 	Git         string `yaml:"git"`         // git binary
+	// CreateMissing creates a repository on a node that doesn't have it (and
+	// its owner, if a SceneID user). Default true.
+	CreateMissing *bool `yaml:"create_missing"`
 }
 
 // Inventory controls the periodic repository scan of every node.
@@ -121,7 +124,10 @@ type Node struct {
 	TokenFile string `yaml:"token_file"`
 	// ServiceUser is the local admin account the token must belong to.
 	ServiceUser string `yaml:"service_user"`
-	Token       string `yaml:"-"`
+	// SceneIDSourceID is the id of the SceneID login source on this node
+	// (`forgejo admin auth list`). Needed to create users here.
+	SceneIDSourceID int64  `yaml:"sceneid_source_id"`
+	Token           string `yaml:"-"`
 }
 
 var nodeName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
@@ -177,6 +183,10 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Replication.Concurrency == 0 {
 		c.Replication.Concurrency = 2
+	}
+	if c.Replication.CreateMissing == nil {
+		yes := true
+		c.Replication.CreateMissing = &yes
 	}
 	if c.Replication.Git == "" {
 		c.Replication.Git = "git"

@@ -37,10 +37,13 @@ nodes:
     site: SE
     url: http://forgejo-se.test:3001
     token_file: .tokens/se.token
+    # Id of the SceneID login source on this node (forgejo admin auth list).
+    sceneid_source_id: 1
   - name: dk
     site: DK
     url: http://forgejo-dk.test:3002
     token_file: .tokens/dk.token
+    sceneid_source_id: 1
 replication:
   # Copies branches and tags from each repository's primary to the other
   # nodes, for repositories with a primary set. Needs git 2.32+ on the Mac.

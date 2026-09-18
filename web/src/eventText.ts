@@ -7,6 +7,7 @@ export const CATEGORIES: { key: string; label: string }[] = [
   { key: "session", label: "Sign-ins" },
   { key: "node", label: "Node health" },
   { key: "repo", label: "Repositories" },
+  { key: "user", label: "Users" },
   { key: "conflict", label: "Conflicts" },
   { key: "inventory", label: "Scans" },
   { key: "history", label: "Exports" },
@@ -37,6 +38,10 @@ export function describe(e: HistoryEvent): string {
     }
     case "repo.primary_assigned":
       return `Primary set to ${str(d.to)}, where the repository was created first`;
+    case "repo.created_on_node":
+      return `Created on ${str(d.node)}, copying from the primary ${str(d.primary)}`;
+    case "user.created_on_node":
+      return `SceneID user created on ${str(d.node)} (as on ${str(d.from)}), linked on first sign-in`;
     case "repo.replicate_requested":
       return "Asked for replication";
     case "inventory.scan_requested":

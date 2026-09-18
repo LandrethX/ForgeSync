@@ -47,6 +47,12 @@ func (m *memStore) ReplicatedRefs(_ context.Context, _, node string) (map[string
 	}
 	return out, nil
 }
+func (m *memStore) ForgetReplicatedRefs(_ context.Context, _, node string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.refs, node)
+	return nil
+}
 func (m *memStore) SaveReplicaSync(_ context.Context, st store.ReplicaSync, refs map[string]string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

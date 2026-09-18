@@ -38,6 +38,13 @@ func (s *Store) ReplicatedRefs(ctx context.Context, repositoryID, node string) (
 	return refs, rows.Err()
 }
 
+// ForgetReplicatedRefs drops what ForgeSync last wrote to a replica, e.g.
+// after it recreated the repository there.
+func (s *Store) ForgetReplicatedRefs(ctx context.Context, repositoryID, node string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM replicated_refs WHERE repository_id = $1::uuid AND node = $2`, repositoryID, node)
+	return err
+}
+
 // SaveReplicaSync records a replication attempt. If refs is non-nil it
 // replaces the replica's replicated refs in the same transaction.
 // out_of_sync_since keeps the start of a streak of non-synced attempts.

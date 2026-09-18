@@ -29,6 +29,12 @@ type Node struct {
 	URL   string // base URL, e.g. https://forgejo-se.example
 	User  string // service account
 	Token string
+	// API is the node's REST API, used to create missing repositories. nil
+	// leaves them missing.
+	API NodeAPI
+	// SceneIDSourceID is the id of the SceneID login source on this node
+	// (it differs per node). 0 = unknown: owners can't be created here.
+	SceneIDSourceID int64
 }
 
 // Store is the state the engine reads and writes.
@@ -36,6 +42,7 @@ type Store interface {
 	Repositories(ctx context.Context) ([]store.RepositoryRecord, error)
 	Repository(ctx context.Context, id string) (store.RepositoryRecord, error)
 	ReplicatedRefs(ctx context.Context, repositoryID, node string) (map[string]string, error)
+	ForgetReplicatedRefs(ctx context.Context, repositoryID, node string) error
 	SaveReplicaSync(ctx context.Context, st store.ReplicaSync, refs map[string]string) error
 	SyncConflicts(ctx context.Context, found []store.FoundConflict, checked, kinds []string, at time.Time) ([]store.ConflictChange, error)
 	Audit(ctx context.Context, actor, action, target string, details map[string]any) error
@@ -48,6 +55,9 @@ type HealthSource interface {
 
 type Options struct {
 	Concurrency int // repositories replicated in parallel
+	// CreateMissing creates a repository (and its SceneID owner) on a
+	// replica that doesn't have it, instead of leaving it missing.
+	CreateMissing bool
 	// AfterTriggered, if set, runs after a replication started by Trigger,
 	// e.g. to rescan so the inventory reflects the new state right away.
 	AfterTriggered func()
@@ -211,7 +221,7 @@ func (e *Engine) RunRepo(ctx context.Context, rec store.RepositoryRecord) error 
 			conclusive = false
 			continue
 		}
-		state, detail, updated, refs, issues, err := e.replicate(ctx, dir, rec, pRefs, e.nodes[name])
+		state, detail, updated, refs, issues, err := e.replicate(ctx, dir, rec, pRefs, primary, e.nodes[name])
 		record(name, state, detail, updated, refs)
 		if err != nil || state == StateMissing {
 			conclusive = false
@@ -262,13 +272,27 @@ func (e *Engine) RunRepo(ctx context.Context, rec store.RepositoryRecord) error 
 // replicate brings one replica up to date. It returns the state to record,
 // the refs ForgeSync now knows to be on the replica (nil = keep the old
 // ones), and the issues found.
-func (e *Engine) replicate(ctx context.Context, dir string, rec store.RepositoryRecord, pRefs Refs, node Node) (
+func (e *Engine) replicate(ctx context.Context, dir string, rec store.RepositoryRecord, pRefs Refs, primary, node Node) (
 	state, detail string, updated int, refs map[string]string, issues []Issue, err error) {
 
 	remote := e.remote(node, rec.FullName)
 	rRefs, err := e.git.LsRemote(ctx, remote)
 	if errors.Is(err, ErrRepoNotFound) {
-		return StateMissing, "the repository doesn't exist on " + node.Name + "; create it there to start replicating", 0, nil, nil, nil
+		if !e.opts.CreateMissing {
+			return StateMissing, "the repository doesn't exist on " + node.Name + "; create it there to start replicating", 0, nil, nil, nil
+		}
+		var why blocked
+		switch err := e.createOnReplica(ctx, rec.FullName, primary, node); {
+		case errors.As(err, &why):
+			return StateMissing, why.Error(), 0, nil, nil, nil
+		case err != nil:
+			return StateError, "creating the repository on " + node.Name + " failed: " + err.Error(), 0, nil, nil, err
+		}
+		// Anything ForgeSync wrote to an earlier copy that was deleted is gone.
+		if err := e.store.ForgetReplicatedRefs(ctx, rec.ID, node.Name); err != nil {
+			return StateError, err.Error(), 0, nil, nil, err
+		}
+		rRefs, err = e.git.LsRemote(ctx, remote)
 	}
 	if err == nil && len(rRefs) > 0 {
 		// The replica's objects are needed to tell behind from ahead.

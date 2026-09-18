@@ -8,6 +8,15 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
+# A running controller replicates and creates repositories and users on other
+# nodes, which changes what the probes observe (e.g. "not on DK yet").
+if curl -fsS -m 2 http://localhost:8090/healthz >/dev/null 2>&1 && [ -z "${PHASE0_ALLOW_CONTROLLER:-}" ]; then
+  echo "The ForgeSync controller is running and would interfere with the probes. Stop it first:" >&2
+  echo "  (cd deploy/test && docker compose --profile controller stop forgesync)" >&2
+  echo "or set PHASE0_ALLOW_CONTROLLER=1 to run anyway." >&2
+  exit 1
+fi
+
 export NODE_A=${NODE_A:-se} NODE_B=${NODE_B:-dk}
 export RUN_ID=${RUN_ID:-$(date +%m%d%H%M%S)-$NODE_A-$NODE_B}
 export RESULTS=results/run-$RUN_ID.tsv

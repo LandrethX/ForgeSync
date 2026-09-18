@@ -169,6 +169,9 @@ type User struct {
 	IsAdmin   bool   `json:"is_admin"`
 	SourceID  int64  `json:"source_id"`
 	LoginName string `json:"login_name"`
+	// Visibility is public, limited or private.
+	Visibility string    `json:"visibility"`
+	Created    time.Time `json:"created"`
 }
 
 // CurrentUser returns the account the token (or sudo user) acts as.
@@ -180,19 +183,23 @@ func (c *Client) CurrentUser(ctx context.Context) (User, error) {
 
 // Repository is a Forgejo repository as listed by /repos/search.
 type Repository struct {
-	ID            int64     `json:"id"`
-	FullName      string    `json:"full_name"`
-	Owner         User      `json:"owner"`
-	Name          string    `json:"name"`
-	Private       bool      `json:"private"`
-	Fork          bool      `json:"fork"`
-	Mirror        bool      `json:"mirror"`
-	Archived      bool      `json:"archived"`
-	Empty         bool      `json:"empty"`
-	DefaultBranch string    `json:"default_branch"`
-	Size          int       `json:"size"`
-	Updated       time.Time `json:"updated_at"`
-	Created       time.Time `json:"created_at"`
+	ID            int64  `json:"id"`
+	FullName      string `json:"full_name"`
+	Owner         User   `json:"owner"`
+	Name          string `json:"name"`
+	Private       bool   `json:"private"`
+	Fork          bool   `json:"fork"`
+	Mirror        bool   `json:"mirror"`
+	Archived      bool   `json:"archived"`
+	Empty         bool   `json:"empty"`
+	DefaultBranch string `json:"default_branch"`
+	Description   string `json:"description"`
+	Template      bool   `json:"template"`
+	// ObjectFormatName is sha1 or sha256; a copy must use the same.
+	ObjectFormatName string    `json:"object_format_name"`
+	Size             int       `json:"size"`
+	Updated          time.Time `json:"updated_at"`
+	Created          time.Time `json:"created_at"`
 }
 
 // ListRepos returns one page of all repositories the token can see (for a
@@ -253,4 +260,92 @@ func (c *Client) CommitsAhead(ctx context.Context, owner, repo, base, head strin
 		return 0, false, err
 	}
 	return res.TotalCommits, true, nil
+}
+
+// isNotFound reports whether err is a 404 from Forgejo.
+func isNotFound(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
+}
+
+// IsConflict reports whether err is a 409 or 422 from Forgejo, which it
+// returns when something being created already exists.
+func IsConflict(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) &&
+		(apiErr.StatusCode == http.StatusConflict || apiErr.StatusCode == http.StatusUnprocessableEntity)
+}
+
+// GetUser returns a user by login name; found is false if there's none.
+// With a site-admin token, LoginName and SourceID are filled in.
+func (c *Client) GetUser(ctx context.Context, login string) (u User, found bool, err error) {
+	err = c.do(ctx, http.MethodGet, "/api/v1/users/"+url.PathEscape(login), true, nil, &u)
+	if isNotFound(err) {
+		return User{}, false, nil
+	}
+	return u, err == nil, err
+}
+
+// IsOrg reports whether an organization with this name exists.
+func (c *Client) IsOrg(ctx context.Context, name string) (bool, error) {
+	err := c.do(ctx, http.MethodGet, "/api/v1/orgs/"+url.PathEscape(name), true, nil, nil)
+	if isNotFound(err) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// GetRepo returns a repository; found is false if there's none.
+func (c *Client) GetRepo(ctx context.Context, owner, name string) (r Repository, found bool, err error) {
+	err = c.do(ctx, http.MethodGet, "/api/v1/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name), true, nil, &r)
+	if isNotFound(err) {
+		return Repository{}, false, nil
+	}
+	return r, err == nil, err
+}
+
+// UsersByLoginName returns the users of a login source with this login name
+// (for SceneID users, the OIDC subject). Site admin only.
+func (c *Client) UsersByLoginName(ctx context.Context, sourceID int64, loginName string) ([]User, error) {
+	var us []User
+	path := fmt.Sprintf("/api/v1/admin/users?source_id=%d&login_name=%s&limit=50", sourceID, url.QueryEscape(loginName))
+	err := c.do(ctx, http.MethodGet, path, true, nil, &us)
+	return us, err
+}
+
+// CreateUserOption is the body of POST /admin/users (modules/structs/admin_user.go).
+type CreateUserOption struct {
+	SourceID           int64      `json:"source_id"`
+	LoginName          string     `json:"login_name"`
+	Username           string     `json:"username"`
+	FullName           string     `json:"full_name,omitempty"`
+	Email              string     `json:"email"`
+	MustChangePassword *bool      `json:"must_change_password,omitempty"`
+	Visibility         string     `json:"visibility,omitempty"`
+	Created            *time.Time `json:"created_at,omitempty"`
+}
+
+// AdminCreateUser creates an account. Site admin only.
+func (c *Client) AdminCreateUser(ctx context.Context, opt CreateUserOption) (User, error) {
+	var u User
+	err := c.do(ctx, http.MethodPost, "/api/v1/admin/users", true, opt, &u)
+	return u, err
+}
+
+// CreateRepoOption is the body of repository creation (modules/structs/repo.go).
+type CreateRepoOption struct {
+	Name             string `json:"name"`
+	Description      string `json:"description,omitempty"`
+	Private          bool   `json:"private"`
+	Template         bool   `json:"template,omitempty"`
+	DefaultBranch    string `json:"default_branch,omitempty"`
+	ObjectFormatName string `json:"object_format_name,omitempty"`
+}
+
+// AdminCreateRepo creates an empty repository owned by a user or an
+// organization. Site admin only.
+func (c *Client) AdminCreateRepo(ctx context.Context, owner string, opt CreateRepoOption) (Repository, error) {
+	var r Repository
+	err := c.do(ctx, http.MethodPost, "/api/v1/admin/users/"+url.PathEscape(owner)+"/repos", true, opt, &r)
+	return r, err
 }

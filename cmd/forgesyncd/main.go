@@ -88,7 +88,8 @@ func run(configPath string) error {
 		scanTargets = append(scanTargets, inventory.Target{Name: n.Name, Client: client})
 		nodeNames = append(nodeNames, n.Name)
 		comparers[n.Name] = client
-		gitNodes = append(gitNodes, replication.Node{Name: n.Name, URL: n.URL, User: n.ServiceUser, Token: n.Token})
+		gitNodes = append(gitNodes, replication.Node{Name: n.Name, URL: n.URL, User: n.ServiceUser, Token: n.Token,
+			API: client, SceneIDSourceID: n.SceneIDSourceID})
 	}
 	if err := db.SyncNodes(ctx, records); err != nil {
 		return err
@@ -108,13 +109,15 @@ func run(configPath string) error {
 			return fmt.Errorf("replication is enabled but %w", err)
 		}
 		engine = replication.NewEngine(gitNodes, git, db, monitor, replication.Options{
-			Concurrency: cfg.Replication.Concurrency,
+			Concurrency:   cfg.Replication.Concurrency,
+			CreateMissing: *cfg.Replication.CreateMissing,
 			// Rescan so the inventory shows the result. Forgejo updates some
 			// repository fields (e.g. "empty" after the first push) just after
 			// a push, so give it a moment first. The scanner exists by then.
 			AfterTriggered: func() { time.AfterFunc(5*time.Second, func() { scanner.Trigger() }) },
 		}, log)
-		log.Info("replication enabled", "git", v, "work_dir", cfg.Replication.WorkDir)
+		log.Info("replication enabled", "git", v, "work_dir", cfg.Replication.WorkDir,
+			"create_missing", *cfg.Replication.CreateMissing)
 	}
 	detector := conflicts.NewDetector(nodeNames, comparers, db, log)
 	detector.ReplicationOwnsPrimaries = engine != nil

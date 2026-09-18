@@ -851,3 +851,79 @@ select:focus-visible {
   margin: 0 0 0.25rem;
   padding-left: 1.25rem;
 }
+
+/* ---------------------------------------------------------------- history */
+
+.filters {
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.filters .toolbar {
+  margin-bottom: 0;
+}
+
+.filters .segmented {
+  justify-self: start;
+}
+
+.toolbar.tight {
+  margin: 0;
+  gap: 0.5rem;
+}
+
+.button-link-inline {
+  text-decoration: none;
+  font: inherit;
+  padding: 0.45rem 0.9rem;
+  border-radius: 6px;
+  display: inline-block;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.category {
+  display: inline-block;
+  min-width: 6.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.event-details summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 0.2rem;
+}
+
+.event-details pre {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 0.5rem 0.6rem;
+  margin: 0.3rem 0 0;
+  max-width: 40rem;
+  overflow-x: auto;
+}
+
+table.history td:first-child {
+  width: 12rem;
+}
+
+@media (max-width: 720px) {
+  .category {
+    display: block;
+  }
+}

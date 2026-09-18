@@ -2,10 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, hasRole, SIGNED_OUT_EVENT, type Session } from "./api";
 import { Layout, PageHeader } from "./components/Layout";
 import { NodeStreamContext, SessionContext, useNodeStream } from "./hooks";
-import { Audit } from "./pages/Audit";
 import { ConflictDetail } from "./pages/ConflictDetail";
 import { Conflicts } from "./pages/Conflicts";
 import { Dashboard } from "./pages/Dashboard";
+import { History } from "./pages/History";
 import { Login } from "./pages/Login";
 import { NodeDetail } from "./pages/NodeDetail";
 import { Nodes } from "./pages/Nodes";
@@ -103,11 +103,11 @@ function Routes({ session }: { session: Session }) {
   if (conflict?.id && /^\d+$/.test(conflict.id)) return <ConflictDetail id={Number(conflict.id)} />;
   if (match("/audit", path)) {
     return hasRole(session, "operator") ? (
-      <Audit />
+      <History />
     ) : (
       <>
-        <PageHeader title="Audit log" />
-        <p>The audit log needs the operator role. Ask an administrator if you need it.</p>
+        <PageHeader title="Events & audit" />
+        <p>The event and audit history needs the operator role. Ask an administrator if you need it.</p>
       </>
     );
   }

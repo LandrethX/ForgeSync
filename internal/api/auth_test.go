@@ -167,8 +167,8 @@ func TestRoles(t *testing.T) {
 	if rec := f.do(req{path: "/api/v1/nodes", cookie: viewer}); rec.Code != 200 {
 		t.Errorf("viewer GET /nodes = %d", rec.Code)
 	}
-	if rec := f.do(req{path: "/api/v1/audit", cookie: viewer}); rec.Code != 403 {
-		t.Errorf("viewer GET /audit = %d, want 403", rec.Code)
+	if rec := f.do(req{path: "/api/v1/history", cookie: viewer}); rec.Code != 403 {
+		t.Errorf("viewer GET /history = %d, want 403", rec.Code)
 	}
 
 	o.finishID = alice // operator
@@ -178,8 +178,8 @@ func TestRoles(t *testing.T) {
 			operator = c
 		}
 	}
-	if rec := f.do(req{path: "/api/v1/audit", cookie: operator}); rec.Code != 200 {
-		t.Errorf("operator GET /audit = %d", rec.Code)
+	if rec := f.do(req{path: "/api/v1/history", cookie: operator}); rec.Code != 200 {
+		t.Errorf("operator GET /history = %d", rec.Code)
 	}
 }
 
@@ -195,7 +195,7 @@ func TestTokenSignInWithSceneID(t *testing.T) {
 		t.Errorf("token sign-in with SceneID on = %d, want 403", rec.Code)
 	}
 	// The CLI's bearer token keeps working.
-	if rec := f.do(req{path: "/api/v1/audit", bearer: "s3cret"}); rec.Code != 200 {
+	if rec := f.do(req{path: "/api/v1/history", bearer: "s3cret"}); rec.Code != 200 {
 		t.Errorf("bearer token = %d", rec.Code)
 	}
 

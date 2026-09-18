@@ -41,7 +41,9 @@ type DB interface {
 	ConflictByID(ctx context.Context, id int64) (store.Conflict, error)
 	AcknowledgeConflict(ctx context.Context, id int64, actor, note string, at time.Time) error
 	OpenConflicts(ctx context.Context) (int, error)
-	AuditEntries(ctx context.Context, limit int, beforeID int64) ([]store.AuditEntry, error)
+	History(ctx context.Context, f store.EventFilter) ([]store.Event, string, error)
+	HistoryEach(ctx context.Context, f store.EventFilter, max int, fn func(store.Event) error) error
+	HistoryActors(ctx context.Context) ([]string, error)
 	Audit(ctx context.Context, actor, action, target string, details map[string]any) error
 }
 
@@ -127,8 +129,13 @@ func (s *Server) Handler() http.Handler {
 			r.With(requireRole(auth.Operator)).Post("/conflicts/{id}/acknowledge", s.acknowledgeConflict)
 			r.With(requireRole(auth.Operator)).Post("/inventory/scan", s.scanNow)
 			r.With(requireRole(auth.Administrator)).Put("/repositories/{id}/primary", s.setPrimary)
-			// The audit log shows who signed in from where: operators and up.
-			r.With(requireRole(auth.Operator)).Get("/audit", s.listAudit)
+			// The history shows who signed in from where: operators and up.
+			r.Group(func(r chi.Router) {
+				r.Use(requireRole(auth.Operator))
+				r.Get("/history", s.listHistory)
+				r.Get("/history/actors", s.historyActors)
+				r.Get("/history/export", s.exportHistory)
+			})
 		})
 		r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "not found"})
@@ -196,25 +203,6 @@ func (s *Server) nodeTransitions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, tr)
-}
-
-func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {
-	limit, err := queryInt(r, "limit", 100, 1, 500)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
-		return
-	}
-	before, err := queryInt(r, "before", 0, 0, 1<<62)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
-		return
-	}
-	entries, err := s.DB.AuditEntries(r.Context(), limit, int64(before))
-	if err != nil {
-		s.serverError(w, "list audit log", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, entries)
 }
 
 // Overview is the dashboard summary.

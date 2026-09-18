@@ -25,13 +25,39 @@ export interface Transition {
   error?: string;
 }
 
-export interface AuditEntry {
-  id: number;
+export interface HistoryEvent {
+  id: string;
   at: string;
+  category: string;
   actor: string;
   action: string;
   target: string;
   details: Record<string, unknown>;
+}
+
+export interface HistoryFilter {
+  categories: string[];
+  actor: string;
+  q: string;
+  from?: string; // RFC 3339
+  to?: string;
+}
+
+function historyParams(f: HistoryFilter): URLSearchParams {
+  const p = new URLSearchParams();
+  if (f.categories.length) p.set("category", f.categories.join(","));
+  if (f.actor) p.set("actor", f.actor);
+  if (f.q) p.set("q", f.q);
+  if (f.from) p.set("from", f.from);
+  if (f.to) p.set("to", f.to);
+  return p;
+}
+
+/** The export is a plain download link; the session cookie authenticates it. */
+export function historyExportURL(f: HistoryFilter, format: "csv" | "json"): string {
+  const p = historyParams(f);
+  p.set("format", format);
+  return `/api/v1/history/export?${p}`;
 }
 
 export type RepoStatus = "same" | "differs" | "missing" | "unknown";
@@ -249,6 +275,11 @@ export const api = {
   },
   conflict: (id: number) => request<Conflict>("GET", `/conflicts/${id}`),
   acknowledgeConflict: (id: number, note: string) => request<Conflict>("POST", `/conflicts/${id}/acknowledge`, { note }),
-  audit: (limit: number, before?: number) =>
-    request<AuditEntry[]>("GET", `/audit?limit=${limit}${before ? `&before=${before}` : ""}`),
+  history: (f: HistoryFilter, limit: number, cursor?: string) => {
+    const p = historyParams(f);
+    p.set("limit", String(limit));
+    if (cursor) p.set("cursor", cursor);
+    return request<{ items: HistoryEvent[]; next_cursor?: string }>("GET", `/history?${p}`);
+  },
+  historyActors: () => request<string[]>("GET", "/history/actors"),
 };

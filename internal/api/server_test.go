@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -17,10 +18,16 @@ import (
 	"scenegit.org/forgesync/internal/store"
 )
 
+// auditEntry is what the fake records for each Audit call.
+type auditEntry struct {
+	Actor, Action, Target string
+	Details               map[string]any
+}
+
 type fakeDB struct {
 	pingErr   error
 	mu        sync.Mutex
-	audit     []store.AuditEntry
+	audit     []auditEntry
 	repos     []store.RepositoryRecord
 	scans     []store.NodeScan
 	conflicts []store.Conflict
@@ -102,15 +109,40 @@ func (f *fakeDB) Ping(context.Context) error { return f.pingErr }
 func (f *fakeDB) Transitions(_ context.Context, node string, limit int) ([]store.Transition, error) {
 	return []store.Transition{{ID: 1, Node: "se", From: health.Unknown, To: health.Healthy}}, nil
 }
-func (f *fakeDB) AuditEntries(context.Context, int, int64) ([]store.AuditEntry, error) {
+func (f *fakeDB) History(_ context.Context, flt store.EventFilter) ([]store.Event, string, error) {
+	if flt.Cursor == "bad" {
+		return nil, "", store.ErrBadCursor
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]store.AuditEntry(nil), f.audit...), nil
+	var out []store.Event
+	for i := len(f.audit) - 1; i >= 0; i-- {
+		e := f.audit[i]
+		if flt.Actor != "" && e.Actor != flt.Actor {
+			continue
+		}
+		out = append(out, store.Event{ID: fmt.Sprintf("a%d", i+1), Category: strings.SplitN(e.Action, ".", 2)[0],
+			Actor: e.Actor, Action: e.Action, Target: e.Target, Details: e.Details})
+	}
+	return out, "", nil
 }
-func (f *fakeDB) Audit(_ context.Context, actor, action, target string, _ map[string]any) error {
+func (f *fakeDB) HistoryEach(ctx context.Context, flt store.EventFilter, max int, fn func(store.Event) error) error {
+	events, _, _ := f.History(ctx, flt)
+	for i, e := range events {
+		if i >= max {
+			break
+		}
+		if err := fn(e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (f *fakeDB) HistoryActors(context.Context) ([]string, error) { return []string{"forgesync"}, nil }
+func (f *fakeDB) Audit(_ context.Context, actor, action, target string, details map[string]any) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.audit = append(f.audit, store.AuditEntry{Actor: actor, Action: action, Target: target})
+	f.audit = append(f.audit, auditEntry{Actor: actor, Action: action, Target: target, Details: details})
 	return nil
 }
 func (f *fakeDB) actions() []string {
@@ -364,7 +396,7 @@ func TestListNodesAndOverview(t *testing.T) {
 
 func TestQueryValidation(t *testing.T) {
 	f := newFixture("s3cret")
-	if rec := f.do(req{path: "/api/v1/audit?limit=0", bearer: "s3cret"}); rec.Code != 400 {
+	if rec := f.do(req{path: "/api/v1/history?limit=0", bearer: "s3cret"}); rec.Code != 400 {
 		t.Errorf("limit=0 -> %d", rec.Code)
 	}
 	if rec := f.do(req{path: "/api/v1/transitions?limit=10", bearer: "s3cret"}); rec.Code != 200 {

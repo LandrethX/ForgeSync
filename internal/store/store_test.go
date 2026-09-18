@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,16 +102,13 @@ func TestNodesStatusAndAudit(t *testing.T) {
 	if err := s.Audit(ctx, "cli:admin", "repo.set_primary", "alice/demo", map[string]any{"primary": "dk"}); err != nil {
 		t.Fatal(err)
 	}
-	entries, err := s.AuditEntries(ctx, 10, 0)
+	events, _, err := s.History(ctx, EventFilter{Categories: []string{"repo", "node"}, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 || entries[0].Action != "repo.set_primary" || entries[0].Details["primary"] != "dk" || entries[1].Details == nil {
-		t.Fatalf("audit entries = %+v", entries)
-	}
-	older, err := s.AuditEntries(ctx, 10, entries[0].ID)
-	if err != nil || len(older) != 1 || older[0].Action != "node.register" {
-		t.Fatalf("entries before %d = %+v, err %v", entries[0].ID, older, err)
+	// Two audit entries (repo.set_primary, node.register) and two node state changes.
+	if len(events) != 4 || events[0].Action != "repo.set_primary" || events[0].Details["primary"] != "dk" {
+		t.Fatalf("history = %+v", events)
 	}
 }
 
@@ -269,5 +268,117 @@ func TestConflicts(t *testing.T) {
 	}
 	if n, err := s.OpenConflicts(ctx); err != nil || n != 1 {
 		t.Errorf("open count = %d, %v", n, err)
+	}
+}
+
+func TestHistory(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncNodes(ctx, []NodeRecord{{Name: "se", URL: "http://se"}}); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	for i := 0; i < 7; i++ {
+		if _, err := s.pool.Exec(ctx, `INSERT INTO audit_log (at, actor, action, target, details) VALUES ($1, $2, $3, $4, $5)`,
+			t0.Add(time.Duration(i)*time.Minute), []string{"sceneid:alice", "sceneid:bob"}[i%2],
+			[]string{"session.sign_in", "repo.set_primary"}[i%2], "alice/demo_"+strconv.Itoa(i), map[string]any{"i": i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st := health.Status{Node: "se", State: health.Unreachable, LastChecked: t0.Add(3 * time.Minute), LastError: "connection refused"}
+	if err := s.RecordNodeStatus(ctx, st, health.Healthy); err != nil {
+		t.Fatal(err)
+	}
+
+	all, next, err := s.History(ctx, EventFilter{Limit: 100})
+	if err != nil || len(all) != 8 || next != "" {
+		t.Fatalf("all = %d entries, next %q, err %v", len(all), next, err)
+	}
+	for i := 1; i < len(all); i++ {
+		if all[i].At.After(all[i-1].At) {
+			t.Fatalf("not newest first at %d: %v then %v", i, all[i-1].At, all[i].At)
+		}
+	}
+	var node Event
+	for _, e := range all {
+		if e.Category == "node" {
+			node = e
+		}
+	}
+	if node.Action != "node.state_changed" || node.Target != "se" || node.Details["to"] != "UNREACHABLE" || node.Details["error"] != "connection refused" {
+		t.Errorf("node event = %+v", node)
+	}
+
+	// Paging with a cursor visits every entry exactly once.
+	seen := map[string]bool{}
+	cursor := ""
+	for pages := 0; ; pages++ {
+		page, nextCursor, err := s.History(ctx, EventFilter{Limit: 3, Cursor: cursor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range page {
+			if seen[e.ID] {
+				t.Fatalf("%s returned twice", e.ID)
+			}
+			seen[e.ID] = true
+		}
+		if nextCursor == "" {
+			break
+		}
+		cursor = nextCursor
+		if pages > 5 {
+			t.Fatal("paging doesn't end")
+		}
+	}
+	if len(seen) != 8 {
+		t.Errorf("paging saw %d entries, want 8", len(seen))
+	}
+
+	count := func(f EventFilter) int {
+		t.Helper()
+		f.Limit = 100
+		got, _, err := s.History(ctx, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(got)
+	}
+	if n := count(EventFilter{Categories: []string{"session"}}); n != 4 {
+		t.Errorf("category session = %d, want 4", n)
+	}
+	if n := count(EventFilter{Actor: "sceneid:bob"}); n != 3 {
+		t.Errorf("actor bob = %d, want 3", n)
+	}
+	if n := count(EventFilter{Query: "DEMO_3"}); n != 1 {
+		t.Errorf("query DEMO_3 = %d, want 1", n)
+	}
+	// "_" must match literally, not as a LIKE wildcard.
+	if n := count(EventFilter{Query: "o_3"}); n != 1 {
+		t.Errorf("query o_3 = %d, want 1 (only demo_3)", n)
+	}
+	if n := count(EventFilter{Query: "refused"}); n != 1 {
+		t.Errorf("query in details = %d, want 1", n)
+	}
+	if n := count(EventFilter{From: t0.Add(2 * time.Minute), To: t0.Add(4 * time.Minute)}); n != 3 {
+		t.Errorf("time window = %d, want 3 (two audit entries and the node change)", n)
+	}
+	if _, _, err := s.History(ctx, EventFilter{Limit: 3, Cursor: "garbage"}); !errors.Is(err, ErrBadCursor) {
+		t.Errorf("bad cursor: %v", err)
+	}
+
+	var exported []string
+	if err := s.HistoryEach(ctx, EventFilter{Categories: []string{"repo"}}, 2, func(e Event) error {
+		exported = append(exported, e.ID)
+		return nil
+	}); err != nil || len(exported) != 2 {
+		t.Errorf("export = %v, %v", exported, err)
+	}
+	actors, err := s.HistoryActors(ctx)
+	if err != nil || strings.Join(actors, ",") != "forgesync,sceneid:alice,sceneid:bob" {
+		t.Errorf("actors = %v, %v", actors, err)
 	}
 }

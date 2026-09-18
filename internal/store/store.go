@@ -125,37 +125,6 @@ func (s *Store) Transitions(ctx context.Context, node string, limit int) ([]Tran
 	return out, rows.Err()
 }
 
-// AuditEntry is one row of the audit log.
-type AuditEntry struct {
-	ID      int64          `json:"id"`
-	At      time.Time      `json:"at"`
-	Actor   string         `json:"actor"`
-	Action  string         `json:"action"`
-	Target  string         `json:"target"`
-	Details map[string]any `json:"details"`
-}
-
-// AuditEntries returns up to limit entries older than beforeID (0 = newest), newest first.
-func (s *Store) AuditEntries(ctx context.Context, limit int, beforeID int64) ([]AuditEntry, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, at, actor, action, target, details FROM audit_log
-		WHERE $2 = 0 OR id < $2
-		ORDER BY id DESC LIMIT $1`, limit, beforeID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []AuditEntry{}
-	for rows.Next() {
-		var e AuditEntry
-		if err := rows.Scan(&e.ID, &e.At, &e.Actor, &e.Action, &e.Target, &e.Details); err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
-}
-
 // Audit appends an entry to the audit log.
 func (s *Store) Audit(ctx context.Context, actor, action, target string, details map[string]any) error {
 	if details == nil {

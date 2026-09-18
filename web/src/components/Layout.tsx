@@ -8,7 +8,7 @@ const NAV: { to: string; label: string; role: Role }[] = [
   { to: "/nodes", label: "Nodes", role: "viewer" },
   { to: "/repositories", label: "Repositories", role: "viewer" },
   { to: "/conflicts", label: "Conflicts", role: "viewer" },
-  { to: "/audit", label: "Audit log", role: "operator" },
+  { to: "/audit", label: "Events & audit", role: "operator" },
 ];
 
 const ROLE_LABEL: Record<Role, string> = { viewer: "Viewer", operator: "Operator", administrator: "Administrator" };

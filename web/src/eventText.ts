@@ -35,6 +35,8 @@ export function describe(e: HistoryEvent): string {
       const to = str(d.to) || "not set";
       return `Primary changed from ${from} to ${to}`;
     }
+    case "repo.primary_assigned":
+      return `Primary set to ${str(d.to)}, where the repository was created first`;
     case "repo.replicate_requested":
       return "Asked for replication";
     case "inventory.scan_requested":

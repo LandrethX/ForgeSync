@@ -179,18 +179,23 @@ func (s *Server) replicateNow(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]bool{"queued": queued, "running": !queued})
 }
 
-// setPrimary: PUT {"node": "se"} or {"node": ""} to clear. Administrators only.
-// With replication on, the primary is where branches and tags are copied from.
+// setPrimary: PUT {"node": "se"}. Administrators only. Every repository has a
+// primary (by default its origin, set after a scan), so it can be changed but
+// not cleared. With replication on, it's where branches and tags are copied from.
 func (s *Server) setPrimary(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Node *string `json:"node"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil || body.Node == nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": `expected JSON {"node": "<name>"} or {"node": ""}`})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": `expected JSON {"node": "<name>"}`})
 		return
 	}
 	node := *body.Node
-	if node != "" && !contains(s.nodeNames(), node) {
+	if node == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "a repository's primary can be changed but not cleared"})
+		return
+	}
+	if !contains(s.nodeNames(), node) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "no node named " + node})
 		return
 	}

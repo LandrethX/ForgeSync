@@ -11,6 +11,7 @@ const demo: Repository = {
   id: "11111111-1111-1111-1111-111111111111",
   full_name: "alice/demo",
   primary_node: "",
+  primary_source: "",
   first_seen_at: "2026-09-18T10:00:00Z",
   status: "missing",
   nodes: [

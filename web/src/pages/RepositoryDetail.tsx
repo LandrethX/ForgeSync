@@ -118,7 +118,7 @@ function PrimaryPanel({ repo, onSaved }: { repo: Repository; onSaved: () => void
     setMessage(undefined);
     try {
       await api.setPrimary(repo.id, choice);
-      setMessage({ ok: true, text: choice ? `Primary set to ${choice}.` : "Primary cleared." });
+      setMessage({ ok: true, text: `Primary set to ${choice}.` });
       onSaved();
     } catch (e) {
       setMessage({ ok: false, text: e instanceof ApiError ? e.message : "Saving failed." });
@@ -131,7 +131,8 @@ function PrimaryPanel({ repo, onSaved }: { repo: Repository; onSaved: () => void
     <section className="panel" aria-labelledby="primary-heading">
       <h2 id="primary-heading">Primary node</h2>
       <p className="muted">
-        The node that's authoritative for this repository.{" "}
+        The node that's authoritative for this repository. Every repository has one: by default the node it was
+        created on first.{" "}
         {repo.replication?.enabled
           ? "Replication copies its branches and tags to the other nodes; changing it changes where they're copied from."
           : "While replication is off, it's only recorded."}
@@ -140,7 +141,7 @@ function PrimaryPanel({ repo, onSaved }: { repo: Repository; onSaved: () => void
         <div className="toolbar">
           <label htmlFor="primary">Primary</label>
           <select id="primary" value={choice} onChange={(e) => setChoice(e.target.value)}>
-            <option value="">Not set</option>
+            {!repo.primary_node && <option value="">Not set yet</option>}
             {repo.nodes.map((v) => (
               <option key={v.node} value={v.node}>
                 {v.node}
@@ -148,9 +149,15 @@ function PrimaryPanel({ repo, onSaved }: { repo: Repository; onSaved: () => void
               </option>
             ))}
           </select>
-          <button type="button" className="button-primary" onClick={save} disabled={busy || choice === repo.primary_node}>
+          <button
+            type="button"
+            className="button-primary"
+            onClick={save}
+            disabled={busy || !choice || choice === repo.primary_node}
+          >
             {busy ? "Saving…" : "Save"}
           </button>
+          <PrimarySource repo={repo} />
           {message && (
             <span role="status" className={message.ok ? "muted" : "error-inline"}>
               {message.text}
@@ -159,11 +166,22 @@ function PrimaryPanel({ repo, onSaved }: { repo: Repository; onSaved: () => void
         </div>
       ) : (
         <p>
-          <strong>{repo.primary_node || "Not set"}</strong>
+          <strong>{repo.primary_node || "Not set yet"}</strong> <PrimarySource repo={repo} />
           <span className="muted"> · Only administrators can change it.</span>
         </p>
       )}
     </section>
+  );
+}
+
+function PrimarySource({ repo }: { repo: Repository }) {
+  if (!repo.primary_node) {
+    return <span className="muted">Set automatically after the next complete scan of every node.</span>;
+  }
+  return (
+    <span className="muted">
+      {repo.primary_source === "origin" ? "Set automatically: created here first." : "Chosen by an administrator."}
+    </span>
   );
 }
 
@@ -246,7 +264,7 @@ function ReplicationPanel({ repo, onChange }: { repo: Repository; onChange: () =
         )}
       </div>
       {!repo.primary_node ? (
-        <p className="muted">Set a primary to start replicating this repository.</p>
+        <p className="muted">Replication starts once the primary is set, after the next complete scan.</p>
       ) : repl.replicas.length === 0 ? (
         <p className="muted">
           Branches and tags are copied from {repo.primary_node} after each scan. It hasn't run for this repository yet.

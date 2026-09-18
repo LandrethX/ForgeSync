@@ -85,8 +85,9 @@ export function ConflictDetail({ id }: { id: number }) {
         )}
         {!primary && (
           <p className="muted">
-            No primary is set for this repository.{" "}
-            <Link to={`/repositories/${c.repository_id}`}>Set one</Link> to record which side is authoritative.
+            No primary is set for this repository yet. It's set automatically to the node where the repository was
+            created first, after the next complete scan; an administrator can{" "}
+            <Link to={`/repositories/${c.repository_id}`}>choose another</Link>.
           </p>
         )}
       </section>

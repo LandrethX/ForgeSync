@@ -189,14 +189,95 @@ func TestRepositoryInventory(t *testing.T) {
 	if _, err := s.SetPrimary(ctx, demo, "nope"); err == nil {
 		t.Fatal("unknown node accepted as primary")
 	}
-	if prev, err := s.SetPrimary(ctx, demo, ""); err != nil || prev != "dk" {
-		t.Fatalf("clear primary: prev %q, err %v", prev, err)
+	if _, err := s.SetPrimary(ctx, demo, ""); err == nil {
+		t.Fatal("a primary was cleared")
+	}
+	if rec, _ := s.Repository(ctx, demo); rec.PrimaryNode != "dk" || rec.PrimarySource != "manual" {
+		t.Fatalf("after changes: primary %q source %q, want dk manual", rec.PrimaryNode, rec.PrimarySource)
 	}
 	if _, err := s.SetPrimary(ctx, "00000000-0000-0000-0000-000000000000", "se"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown repo: err %v", err)
 	}
 	if _, err := s.Repository(ctx, "not-a-uuid"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("bad id: err %v", err)
+	}
+}
+
+func TestAssignOriginPrimaries(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	nodes := []string{"se", "dk", "de"}
+	var recs []NodeRecord
+	for _, n := range nodes {
+		recs = append(recs, NodeRecord{Name: n, URL: "http://" + n})
+	}
+	if err := s.SyncNodes(ctx, recs); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	day := 24 * time.Hour
+	scan := func(node string, repos ...ScannedRepo) {
+		t.Helper()
+		if err := s.RecordNodeScan(ctx, node, t0, t0.Add(time.Second), repos); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scan("se",
+		ScannedRepo{FullName: "alice/only-se", Created: t0.Add(-day)},
+		ScannedRepo{FullName: "alice/both", Created: t0.Add(-day)},
+		ScannedRepo{FullName: "alice/mirrored", Created: t0.Add(-3 * day), Mirror: true},
+		ScannedRepo{FullName: "alice/chosen", Created: t0.Add(-day)})
+	scan("dk",
+		ScannedRepo{FullName: "alice/both", Created: t0.Add(-2 * day)}, // created on DK first
+		ScannedRepo{FullName: "alice/mirrored", Created: t0.Add(-2 * day)},
+		ScannedRepo{FullName: "alice/chosen", Created: t0.Add(-2 * day)})
+
+	// DE has never been scanned, so it could hide an earlier copy: nothing is assigned.
+	if got, ok, err := s.AssignOriginPrimaries(ctx, nodes); err != nil || ok || len(got) != 0 {
+		t.Fatalf("with DE unscanned: %v %v %v", got, ok, err)
+	}
+	scan("de")
+
+	all, _ := s.Repositories(ctx)
+	byName := map[string]RepositoryRecord{}
+	for _, r := range all {
+		byName[r.FullName] = r
+	}
+	if _, err := s.SetPrimary(ctx, byName["alice/chosen"].ID, "se"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok, err := s.AssignOriginPrimaries(ctx, nodes)
+	if err != nil || !ok {
+		t.Fatalf("assign: ok %v err %v", ok, err)
+	}
+	want := map[string]string{"alice/only-se": "se", "alice/both": "dk", "alice/mirrored": "dk"}
+	if len(got) != len(want) {
+		t.Fatalf("assigned %+v, want %v", got, want)
+	}
+	for _, a := range got {
+		if want[a.FullName] != a.Node {
+			t.Errorf("%s -> %s, want %s", a.FullName, a.Node, want[a.FullName])
+		}
+	}
+	if b := got[0]; b.FullName == "alice/both" && len(b.Nodes) != 2 {
+		t.Errorf("alice/both nodes = %v", b.Nodes)
+	}
+	all, _ = s.Repositories(ctx)
+	for _, r := range all {
+		source := "origin"
+		if r.FullName == "alice/chosen" {
+			source = "manual" // an Administrator's choice is never replaced
+		}
+		if r.PrimarySource != source {
+			t.Errorf("%s: primary %s source %q, want %q", r.FullName, r.PrimaryNode, r.PrimarySource, source)
+		}
+	}
+	if again, _, _ := s.AssignOriginPrimaries(ctx, nodes); len(again) != 0 {
+		t.Errorf("second run assigned %+v", again)
 	}
 }
 

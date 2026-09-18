@@ -122,6 +122,9 @@ func run(configPath string) error {
 		Interval:          cfg.Inventory.Interval,
 		BranchConcurrency: cfg.Inventory.BranchConcurrency,
 		AfterScan: func(ctx context.Context) {
+			if err := inventory.AssignOrigins(ctx, db, nodeNames, log); err != nil {
+				log.Error("assigning primaries failed", "error", err)
+			}
 			if err := detector.Run(ctx); err != nil {
 				log.Error("conflict detection failed", "error", err)
 			}

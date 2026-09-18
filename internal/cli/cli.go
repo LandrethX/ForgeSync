@@ -201,9 +201,10 @@ func repoCommand(o *options) *cobra.Command {
 
 	setPrimary := &cobra.Command{
 		Use:   "set-primary OWNER/NAME NODE",
-		Short: "Record which node is a repository's primary (use - to clear)",
-		Long: "Record which node is a repository's primary. Needs an administrator (the admin token is one).\n" +
-			"ForgeSync doesn't replicate yet, so this only records the designation.",
+		Short: "Change which node is a repository's primary",
+		Long: "Change which node is a repository's primary. Needs an administrator (the admin token is one).\n" +
+			"Every repository gets a primary automatically: the node it was created on first.\n" +
+			"With replication on, branches and tags are copied from the primary to the other nodes.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := o.findRepository(cmd.Context(), args[0])
@@ -211,9 +212,6 @@ func repoCommand(o *options) *cobra.Command {
 				return err
 			}
 			node := args[1]
-			if node == "-" {
-				node = ""
-			}
 			var res struct {
 				Primary  string `json:"primary_node"`
 				Previous string `json:"previous"`

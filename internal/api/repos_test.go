@@ -128,7 +128,11 @@ func TestSetPrimaryNeedsAdministrator(t *testing.T) {
 	}
 	// Setting the same value again doesn't add an audit entry.
 	f.do(req{method: "PUT", path: path, body: body, cookie: admin, csrf: true})
-	f.do(req{method: "PUT", path: path, body: `{"node":""}`, cookie: admin, csrf: true})
+	// A primary can't be cleared: every repository has one.
+	if rec := f.do(req{method: "PUT", path: path, body: `{"node":""}`, cookie: admin, csrf: true}); rec.Code != 400 || f.db.repos[0].PrimaryNode != "se" {
+		t.Errorf("clear = %d, primary now %q; want 400 and unchanged", rec.Code, f.db.repos[0].PrimaryNode)
+	}
+	f.do(req{method: "PUT", path: path, body: `{"node":"dk"}`, cookie: admin, csrf: true})
 
 	var primary []string
 	for _, e := range f.db.audit {
@@ -137,7 +141,7 @@ func TestSetPrimaryNeedsAdministrator(t *testing.T) {
 		}
 	}
 	if len(primary) != 2 || primary[0] != "sceneid:u-administrator alice/demo" {
-		t.Errorf("audit = %v, want set then clear", primary)
+		t.Errorf("audit = %v, want two changes", primary)
 	}
 }
 

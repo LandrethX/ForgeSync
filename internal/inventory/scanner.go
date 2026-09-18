@@ -169,6 +169,7 @@ func (s *Scanner) scanNode(ctx context.Context, t Target) ([]store.ScannedRepo, 
 		out[i] = store.ScannedRepo{
 			FullName: r.FullName, ForgejoID: r.ID, Private: r.Private, Fork: r.Fork, Mirror: r.Mirror,
 			Archived: r.Archived, Empty: r.Empty, DefaultBranch: r.DefaultBranch, Updated: r.Updated,
+			Created: r.Created,
 		}
 		if r.Empty || r.DefaultBranch == "" {
 			continue

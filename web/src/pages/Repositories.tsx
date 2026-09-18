@@ -98,7 +98,10 @@ export function Repositories() {
                     <td>
                       <RepoStatusBadge status={r.status} />
                     </td>
-                    <td>{r.primary_node || <span className="muted">Not set</span>}</td>
+                    <td>
+                      {r.primary_node || <span className="muted">Not set yet</span>}
+                      {r.primary_source === "manual" && <span className="muted"> (chosen)</span>}
+                    </td>
                     {nodeNames.map((n) => {
                       const v = r.nodes.find((x) => x.node === n);
                       const rp = v?.replica;

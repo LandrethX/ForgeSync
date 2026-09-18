@@ -192,6 +192,7 @@ type Repository struct {
 	DefaultBranch string    `json:"default_branch"`
 	Size          int       `json:"size"`
 	Updated       time.Time `json:"updated_at"`
+	Created       time.Time `json:"created_at"`
 }
 
 // ListRepos returns one page of all repositories the token can see (for a

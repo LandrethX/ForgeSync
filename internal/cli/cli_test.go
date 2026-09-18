@@ -90,13 +90,6 @@ func TestRepoSetPrimary(t *testing.T) {
 		t.Errorf("body %q, output %q", gotBody, out.String())
 	}
 
-	cmd = NewRootCommand(&out)
-	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{"--server", srv.URL, "--token", "tok", "repo", "set-primary", "alice/Demo", "-"})
-	cmd.Execute()
-	if gotBody != `{"node":""}` {
-		t.Errorf("clearing sent %q", gotBody)
-	}
 }
 
 func TestConflictList(t *testing.T) {

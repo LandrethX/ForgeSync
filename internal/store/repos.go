@@ -25,6 +25,7 @@ type ScannedRepo struct {
 	HeadSHA       string
 	HeadError     string
 	Updated       time.Time
+	Created       time.Time
 }
 
 // RecordNodeScan stores a successful scan of a node: every repository it
@@ -51,16 +52,16 @@ func (s *Store) RecordNodeScan(ctx context.Context, node string, started, finish
 		}
 		_, err = tx.Exec(ctx, `
 			INSERT INTO repository_replicas (repository_id, node, present, forgejo_id, private, fork, mirror, archived,
-				empty, default_branch, head_sha, head_error, forgejo_updated_at, last_seen_at, checked_at)
-			VALUES ($1, $2, true, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
+				empty, default_branch, head_sha, head_error, forgejo_updated_at, forgejo_created_at, last_seen_at, checked_at)
+			VALUES ($1, $2, true, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
 			ON CONFLICT (repository_id, node) DO UPDATE SET
 				present = true, forgejo_id = EXCLUDED.forgejo_id, private = EXCLUDED.private, fork = EXCLUDED.fork,
 				mirror = EXCLUDED.mirror, archived = EXCLUDED.archived, empty = EXCLUDED.empty,
 				default_branch = EXCLUDED.default_branch, head_sha = EXCLUDED.head_sha, head_error = EXCLUDED.head_error,
-				forgejo_updated_at = EXCLUDED.forgejo_updated_at, last_seen_at = EXCLUDED.last_seen_at,
+				forgejo_updated_at = EXCLUDED.forgejo_updated_at, forgejo_created_at = EXCLUDED.forgejo_created_at, last_seen_at = EXCLUDED.last_seen_at,
 				checked_at = EXCLUDED.checked_at`,
 			id, node, r.ForgejoID, r.Private, r.Fork, r.Mirror, r.Archived, r.Empty,
-			r.DefaultBranch, r.HeadSHA, r.HeadError, nullTime(r.Updated), finished)
+			r.DefaultBranch, r.HeadSHA, r.HeadError, nullTime(r.Updated), nullTime(r.Created), finished)
 		if err != nil {
 			return fmt.Errorf("record %s on %s: %w", r.FullName, node, err)
 		}
@@ -133,17 +134,21 @@ type Replica struct {
 	HeadSHA        string     `json:"head_sha"`
 	HeadError      string     `json:"head_error,omitempty"`
 	ForgejoUpdated *time.Time `json:"forgejo_updated_at,omitempty"`
+	ForgejoCreated *time.Time `json:"forgejo_created_at,omitempty"`
 	LastSeenAt     *time.Time `json:"last_seen_at,omitempty"`
 	CheckedAt      time.Time  `json:"checked_at"`
 }
 
 // RepositoryRecord is a repository and what each node has of it.
 type RepositoryRecord struct {
-	ID          string    `json:"id"`
-	FullName    string    `json:"full_name"`
-	PrimaryNode string    `json:"primary_node"`
-	FirstSeenAt time.Time `json:"first_seen_at"`
-	Replicas    []Replica `json:"-"`
+	ID          string `json:"id"`
+	FullName    string `json:"full_name"`
+	PrimaryNode string `json:"primary_node"`
+	// PrimarySource is how the primary was chosen: "origin" (automatically,
+	// the node it was created on first), "manual", or "" while none is set.
+	PrimarySource string    `json:"primary_source"`
+	FirstSeenAt   time.Time `json:"first_seen_at"`
+	Replicas      []Replica `json:"-"`
 }
 
 // Repositories returns every known repository with its replicas, by name.
@@ -168,9 +173,10 @@ func (s *Store) Repository(ctx context.Context, id string) (RepositoryRecord, er
 
 func (s *Store) repositories(ctx context.Context, id string) ([]RepositoryRecord, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT r.id::text, r.full_name, coalesce(r.primary_node, ''), r.first_seen_at,
+		SELECT r.id::text, r.full_name, coalesce(r.primary_node, ''), r.primary_source, r.first_seen_at,
 			rr.node, rr.present, rr.forgejo_id, rr.private, rr.fork, rr.mirror, rr.archived, rr.empty,
-			rr.default_branch, rr.head_sha, rr.head_error, rr.forgejo_updated_at, rr.last_seen_at, rr.checked_at
+			rr.default_branch, rr.head_sha, rr.head_error, rr.forgejo_updated_at, rr.forgejo_created_at,
+			rr.last_seen_at, rr.checked_at
 		FROM repositories r
 		LEFT JOIN repository_replicas rr ON rr.repository_id = r.id
 		WHERE $1 = '' OR r.id = $1::uuid
@@ -188,9 +194,9 @@ func (s *Store) repositories(ctx context.Context, id string) ([]RepositoryRecord
 		var forgejoID *int64
 		var branch, sha, headErr *string
 		var checked *time.Time
-		if err := rows.Scan(&rec.ID, &rec.FullName, &rec.PrimaryNode, &rec.FirstSeenAt,
+		if err := rows.Scan(&rec.ID, &rec.FullName, &rec.PrimaryNode, &rec.PrimarySource, &rec.FirstSeenAt,
 			&node, &present, &forgejoID, &private, &fork, &mirror, &archived, &empty,
-			&branch, &sha, &headErr, &rp.ForgejoUpdated, &rp.LastSeenAt, &checked); err != nil {
+			&branch, &sha, &headErr, &rp.ForgejoUpdated, &rp.ForgejoCreated, &rp.LastSeenAt, &checked); err != nil {
 			return nil, err
 		}
 		if len(out) == 0 || out[len(out)-1].ID != rec.ID {
@@ -207,9 +213,12 @@ func (s *Store) repositories(ctx context.Context, id string) ([]RepositoryRecord
 	return out, rows.Err()
 }
 
-// SetPrimary records which node is the repository's primary ("" clears it)
+// SetPrimary records an Administrator's choice of primary for a repository
 // and returns the previous value.
 func (s *Store) SetPrimary(ctx context.Context, id, node string) (string, error) {
+	if node == "" {
+		return "", errors.New("a repository's primary can't be cleared")
+	}
 	if !isUUID(id) {
 		return "", ErrNotFound
 	}
@@ -226,10 +235,78 @@ func (s *Store) SetPrimary(ctx context.Context, id, node string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE repositories SET primary_node = nullif($2, '') WHERE id = $1::uuid`, id, node); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE repositories SET primary_node = $2, primary_source = 'manual' WHERE id = $1::uuid`, id, node); err != nil {
 		return "", err
 	}
 	return prev, tx.Commit(ctx)
+}
+
+// OriginAssignment is a primary set automatically to a repository's origin.
+type OriginAssignment struct {
+	RepositoryID string
+	FullName     string
+	Node         string
+	CreatedAt    time.Time
+	// Nodes is every node the repository was on, with its creation time there.
+	Nodes map[string]time.Time
+}
+
+// AssignOriginPrimaries gives every repository without a primary its origin:
+// the node where it was created first, by Forgejo's created_at. Pull mirrors
+// never count as an origin. It only runs when the latest scan of every node
+// in nodes succeeded; otherwise a node that's down could hide an earlier
+// copy, and it returns ok=false without changing anything.
+func (s *Store) AssignOriginPrimaries(ctx context.Context, nodes []string) (assigned []OriginAssignment, ok bool, err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var good int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM inventory_scans WHERE ok AND node = ANY($1)`, nodes).Scan(&good); err != nil {
+		return nil, false, err
+	}
+	if good < len(nodes) {
+		return nil, false, nil
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT r.id::text, r.full_name, rr.node, rr.forgejo_created_at
+		FROM repositories r
+		JOIN repository_replicas rr ON rr.repository_id = r.id
+		WHERE r.primary_node IS NULL AND rr.present AND NOT rr.mirror
+			AND rr.forgejo_created_at IS NOT NULL AND rr.node = ANY($1)
+		ORDER BY r.id, rr.forgejo_created_at, rr.node
+		FOR UPDATE OF r`, nodes)
+	if err != nil {
+		return nil, false, err
+	}
+	for rows.Next() {
+		var id, name, node string
+		var created time.Time
+		if err := rows.Scan(&id, &name, &node, &created); err != nil {
+			rows.Close()
+			return nil, false, err
+		}
+		// Rows come oldest first per repository, so the first one is the origin.
+		if len(assigned) == 0 || assigned[len(assigned)-1].RepositoryID != id {
+			assigned = append(assigned, OriginAssignment{RepositoryID: id, FullName: name, Node: node,
+				CreatedAt: created, Nodes: map[string]time.Time{}})
+		}
+		assigned[len(assigned)-1].Nodes[node] = created
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	for _, a := range assigned {
+		if _, err := tx.Exec(ctx, `
+			UPDATE repositories SET primary_node = $2, primary_source = 'origin'
+			WHERE id = $1::uuid AND primary_node IS NULL`, a.RepositoryID, a.Node); err != nil {
+			return nil, false, err
+		}
+	}
+	return assigned, true, tx.Commit(ctx)
 }
 
 func nullTime(t time.Time) *time.Time {

@@ -103,6 +103,8 @@ export interface Repository {
   id: string;
   full_name: string;
   primary_node: string;
+  /** "origin": set automatically to the node it was created on first; "manual": an administrator chose it. */
+  primary_source: "" | "origin" | "manual";
   first_seen_at: string;
   status: RepoStatus;
   nodes: NodeView[];

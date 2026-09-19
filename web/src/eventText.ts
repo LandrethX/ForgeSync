@@ -59,6 +59,16 @@ export function describe(e: HistoryEvent): string {
       return `${str(d.who)} given ${str(d.permission)} access on ${str(d.node)}, as elsewhere`;
     case "repo.collaborator_removed":
       return `${str(d.who)} no longer has access on ${str(d.node)}, as elsewhere`;
+    case "org.created_on_node":
+      return `Organization created on ${str(d.node)} (as on ${str(d.from)}), owned by ${str(d.owner)}`;
+    case "org.team_created":
+      return `Team ${str(d.team)} created on ${str(d.node)} with ${str(d.permission)} access, as elsewhere`;
+    case "org.team_removed":
+      return `Team ${str(d.team)} removed on ${str(d.node)}, as elsewhere`;
+    case "org.member_added":
+      return `${str(d.who)} put in the team ${str(d.team)} on ${str(d.node)}, as elsewhere`;
+    case "org.member_removed":
+      return `${str(d.who)} taken out of the team ${str(d.team)} on ${str(d.node)}, as elsewhere`;
     case "node.webhook_installed":
       return "ForgeSync's system webhook installed on this node";
     case "repo.renamed_on_primary":

@@ -129,6 +129,11 @@ type Replication struct {
 	// each may do, the same on every node. It is what lets an assignee be
 	// set on a replica at all. Off by default; it needs no other option.
 	Collaborators bool `yaml:"collaborators"`
+	// Organizations keeps the organizations that own repositories the same
+	// on every node: the organization itself, its profile, its teams and
+	// who is in them. Without it, a repository owned by an organization a
+	// node hasn't got can't be copied there at all. Off by default.
+	Organizations bool `yaml:"organizations"`
 	// ArchiveOrg is the private organization ForgeSync moves the copies of a
 	// repository deleted on its primary into. Default "forgesync-archive".
 	ArchiveOrg string `yaml:"archive_org"`

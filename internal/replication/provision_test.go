@@ -36,6 +36,135 @@ type fakeAPI struct {
 	// do; refusesGrant is a login this node won't take.
 	collabs      map[string]string
 	refusesGrant string
+	// orgState is each organization this node has, with its teams and who
+	// is in them; orgs above is only what IsOrg answers.
+	orgState map[string]*fakeOrg
+	nextTeam int64
+}
+
+// fakeOrg is one organization on a node.
+type fakeOrg struct {
+	org     forgejo.Org
+	teams   map[string]*forgejo.Team // by name
+	members map[int64]map[string]bool
+}
+
+func (f *fakeAPI) GetOrg(_ context.Context, name string) (forgejo.Org, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	o := f.orgState[name]
+	if o == nil {
+		return forgejo.Org{}, false, nil
+	}
+	return o.org, true, nil
+}
+
+func (f *fakeAPI) EditOrg(_ context.Context, name string, fields map[string]any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	o := f.orgState[name]
+	if o == nil {
+		return fmt.Errorf("no organization %s", name)
+	}
+	for k, v := range fields {
+		s, _ := v.(string)
+		switch k {
+		case "full_name":
+			o.org.FullName = s
+		case "description":
+			o.org.Description = s
+		case "website":
+			o.org.Website = s
+		case "location":
+			o.org.Location = s
+		case "visibility":
+			o.org.Visibility = s
+		}
+	}
+	f.calls = append(f.calls, "edit org "+name)
+	return nil
+}
+
+func (f *fakeAPI) OrgTeams(_ context.Context, org string) ([]forgejo.Team, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	o := f.orgState[org]
+	if o == nil {
+		return nil, nil
+	}
+	var out []forgejo.Team
+	for _, t := range o.teams {
+		out = append(out, *t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (f *fakeAPI) CreateTeam(_ context.Context, org string, t forgejo.Team) (forgejo.Team, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	o := f.orgState[org]
+	if o == nil {
+		return forgejo.Team{}, fmt.Errorf("no organization %s", org)
+	}
+	f.nextTeam++
+	t.ID = f.nextTeam
+	o.teams[t.Name] = &t
+	o.members[t.ID] = map[string]bool{}
+	f.calls = append(f.calls, "create team "+t.Name)
+	return t, nil
+}
+
+func (f *fakeAPI) DeleteTeam(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, o := range f.orgState {
+		for name, t := range o.teams {
+			if t.ID == id {
+				delete(o.teams, name)
+				delete(o.members, id)
+				f.calls = append(f.calls, "delete team "+name)
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+func (f *fakeAPI) TeamMembers(_ context.Context, id int64) ([]forgejo.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []forgejo.User
+	for _, o := range f.orgState {
+		for login := range o.members[id] {
+			out = append(out, forgejo.User{Login: login})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Login < out[j].Login })
+	return out, nil
+}
+
+func (f *fakeAPI) AddTeamMember(_ context.Context, id int64, login string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, o := range f.orgState {
+		if o.members[id] != nil {
+			o.members[id][login] = true
+			f.calls = append(f.calls, "add member "+login)
+			return nil
+		}
+	}
+	return fmt.Errorf("no team %d", id)
+}
+
+func (f *fakeAPI) RemoveTeamMember(_ context.Context, id int64, login string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, o := range f.orgState {
+		delete(o.members[id], login)
+	}
+	f.calls = append(f.calls, "remove member "+login)
+	return nil
 }
 
 // fakePull is a pull request as this fake keeps it: what it was opened
@@ -242,6 +371,18 @@ func (f *fakeAPI) AdminCreateOrg(_ context.Context, owner string, opt forgejo.Cr
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.orgs[opt.UserName] = true
+	// As Forgejo does: the new organization has an Owners team with the
+	// person it was created for in it.
+	if f.orgState != nil {
+		f.nextTeam++
+		id := f.nextTeam
+		f.orgState[opt.UserName] = &fakeOrg{
+			org: forgejo.Org{Name: opt.UserName, FullName: opt.FullName, Description: opt.Description,
+				Website: opt.Website, Location: opt.Location, Visibility: opt.Visibility},
+			teams:   map[string]*forgejo.Team{"Owners": {ID: id, Name: "Owners", Permission: "owner"}},
+			members: map[int64]map[string]bool{id: {owner: true}},
+		}
+	}
 	f.calls = append(f.calls, "create org "+opt.UserName+" "+opt.Visibility+" for "+owner)
 	return nil
 }

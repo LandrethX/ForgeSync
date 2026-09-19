@@ -214,7 +214,8 @@ export type ConflictKind =
   | "git_primary_rewrote"
   | "git_replica_changed"
   | "git_replica_extra_ref"
-  | "issue_conflict";
+  | "issue_conflict"
+  | "org_metadata";
 
 export interface Handoff {
   pr_number: number;
@@ -261,6 +262,8 @@ export interface Conflict {
     item?: string;
     /** issue_conflict (assignees): "<node>: <why>" for each node that can't hold the value. */
     blocked?: string[];
+    /** org_metadata: the organization whose profile differs. */
+    organization?: string;
   };
   detected_at: string;
   last_seen_at: string;

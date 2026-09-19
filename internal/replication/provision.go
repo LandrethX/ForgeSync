@@ -17,6 +17,14 @@ type NodeAPI interface {
 	UsersByLoginName(ctx context.Context, sourceID int64, loginName string) ([]forgejo.User, error)
 	AdminCreateUser(ctx context.Context, opt forgejo.CreateUserOption) (forgejo.User, error)
 	AdminCreateRepo(ctx context.Context, owner string, opt forgejo.CreateRepoOption) (forgejo.Repository, error)
+	GetOrg(ctx context.Context, name string) (forgejo.Org, bool, error)
+	EditOrg(ctx context.Context, name string, fields map[string]any) error
+	OrgTeams(ctx context.Context, org string) ([]forgejo.Team, error)
+	CreateTeam(ctx context.Context, org string, t forgejo.Team) (forgejo.Team, error)
+	DeleteTeam(ctx context.Context, id int64) error
+	TeamMembers(ctx context.Context, id int64) ([]forgejo.User, error)
+	AddTeamMember(ctx context.Context, id int64, login string) error
+	RemoveTeamMember(ctx context.Context, id int64, login string) error
 	Collaborators(ctx context.Context, owner, repo string) ([]forgejo.User, error)
 	CollaboratorPermission(ctx context.Context, owner, repo, login string) (string, error)
 	AddCollaborator(ctx context.Context, owner, repo, login, permission string) error

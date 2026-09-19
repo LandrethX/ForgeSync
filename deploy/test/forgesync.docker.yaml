@@ -67,4 +67,8 @@ replication:
   # The people each repository is shared with, and what they may do. This
   # is what lets an assignee be set on a replica at all.
   collaborators: true
+  # The organizations that own repositories, their teams and who is in
+  # them. Without it a repository owned by one can't be copied to a node
+  # that hasn't got the organization.
+  organizations: true
   work_dir: /var/lib/forgesync/git

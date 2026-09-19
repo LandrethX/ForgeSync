@@ -28,6 +28,7 @@ type memStore struct {
 	deleted  bool // DeleteRepository was called
 	// renamedTo is what RenamedTo answers.
 	renamedTo string
+	orgs      map[string]store.OrgRecord
 	// onSave, if set, runs whenever a replica's state is saved.
 	onSave func()
 }
@@ -45,6 +46,25 @@ func (m *memStore) MarkRepositoryDeleted(_ context.Context, _ string, at time.Ti
 	}
 	return nil
 }
+func (m *memStore) Org(_ context.Context, name string) (store.OrgRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if rec, ok := m.orgs[name]; ok {
+		return rec, nil
+	}
+	return store.OrgRecord{Name: name, BaseFields: map[string]string{}}, nil
+}
+
+func (m *memStore) SaveOrg(_ context.Context, rec store.OrgRecord) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.orgs == nil {
+		m.orgs = map[string]store.OrgRecord{}
+	}
+	m.orgs[rec.Name] = rec
+	return nil
+}
+
 func (m *memStore) SetRepositoryCollaborators(_ context.Context, _, value string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

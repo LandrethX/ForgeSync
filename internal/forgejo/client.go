@@ -439,6 +439,101 @@ func (c *Client) Comment(ctx context.Context, owner, repo string, number int64, 
 		map[string]string{"body": body}, nil)
 }
 
+// Org is an organization as ForgeSync keeps it the same everywhere.
+type Org struct {
+	Name        string `json:"username"`
+	FullName    string `json:"full_name"`
+	Description string `json:"description"`
+	Website     string `json:"website"`
+	Location    string `json:"location"`
+	// Visibility is public, limited or private.
+	Visibility string `json:"visibility"`
+}
+
+// Team is one of an organization's teams. Units are the parts of a
+// repository it reaches ("repo.code", "repo.issues", ...).
+type Team struct {
+	ID                      int64    `json:"id"`
+	Name                    string   `json:"name"`
+	Description             string   `json:"description"`
+	Permission              string   `json:"permission"` // none, read, write, admin, owner
+	Units                   []string `json:"units"`
+	CanCreateOrgRepo        bool     `json:"can_create_org_repo"`
+	IncludesAllRepositories bool     `json:"includes_all_repositories"`
+}
+
+// GetOrg returns an organization; found is false if the node hasn't got it.
+func (c *Client) GetOrg(ctx context.Context, name string) (Org, bool, error) {
+	var o Org
+	err := c.do(ctx, http.MethodGet, "/api/v1/orgs/"+url.PathEscape(name), true, nil, &o)
+	if isNotFound(err) {
+		return Org{}, false, nil
+	}
+	return o, err == nil, err
+}
+
+// EditOrg changes the given fields of an organization.
+func (c *Client) EditOrg(ctx context.Context, name string, fields map[string]any) error {
+	return c.do(ctx, http.MethodPatch, "/api/v1/orgs/"+url.PathEscape(name), true, fields, nil)
+}
+
+// OrgTeams lists an organization's teams.
+func (c *Client) OrgTeams(ctx context.Context, org string) ([]Team, error) {
+	var out []Team
+	err := c.do(ctx, http.MethodGet, "/api/v1/orgs/"+url.PathEscape(org)+"/teams?limit=100", true, nil, &out)
+	return out, err
+}
+
+// CreateTeam adds a team to an organization.
+func (c *Client) CreateTeam(ctx context.Context, org string, t Team) (Team, error) {
+	var out Team
+	err := c.do(ctx, http.MethodPost, "/api/v1/orgs/"+url.PathEscape(org)+"/teams", true, teamBody(t), &out)
+	return out, err
+}
+
+// EditTeam changes a team.
+func (c *Client) EditTeam(ctx context.Context, id int64, t Team) error {
+	return c.do(ctx, http.MethodPatch, fmt.Sprintf("/api/v1/teams/%d", id), true, teamBody(t), nil)
+}
+
+func teamBody(t Team) map[string]any {
+	return map[string]any{"name": t.Name, "description": t.Description, "permission": t.Permission,
+		"units": t.Units, "can_create_org_repo": t.CanCreateOrgRepo,
+		"includes_all_repositories": t.IncludesAllRepositories}
+}
+
+// DeleteTeam removes a team. Already gone is not an error.
+func (c *Client) DeleteTeam(ctx context.Context, id int64) error {
+	err := c.do(ctx, http.MethodDelete, fmt.Sprintf("/api/v1/teams/%d", id), true, nil, nil)
+	if isNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// TeamMembers lists who is in a team.
+func (c *Client) TeamMembers(ctx context.Context, id int64) ([]User, error) {
+	var out []User
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/v1/teams/%d/members?limit=100", id), true, nil, &out)
+	return out, err
+}
+
+// AddTeamMember puts someone in a team.
+func (c *Client) AddTeamMember(ctx context.Context, id int64, login string) error {
+	return c.do(ctx, http.MethodPut,
+		fmt.Sprintf("/api/v1/teams/%d/members/%s", id, url.PathEscape(login)), true, nil, nil)
+}
+
+// RemoveTeamMember takes them out again. Already gone is not an error.
+func (c *Client) RemoveTeamMember(ctx context.Context, id int64, login string) error {
+	err := c.do(ctx, http.MethodDelete,
+		fmt.Sprintf("/api/v1/teams/%d/members/%s", id, url.PathEscape(login)), true, nil, nil)
+	if isNotFound(err) {
+		return nil
+	}
+	return err
+}
+
 // Collaborators lists the people a repository is shared with, which is not
 // the same as who can see it: the owner and site admins aren't in here.
 func (c *Client) Collaborators(ctx context.Context, owner, repo string) ([]User, error) {
@@ -556,6 +651,8 @@ type CreateOrgOption struct {
 	UserName    string `json:"username"`
 	FullName    string `json:"full_name,omitempty"`
 	Description string `json:"description,omitempty"`
+	Website     string `json:"website,omitempty"`
+	Location    string `json:"location,omitempty"`
 	Visibility  string `json:"visibility,omitempty"`
 }
 

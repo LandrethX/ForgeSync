@@ -229,6 +229,7 @@ func (r *run) item(ctx context.Context, k itemKind, it *store.RepoItem) (bool, e
 			}
 			if !sameFields(f, it.Base, k.fields) {
 				r.conflict(ref+" deleted", map[string]any{"field": k.name + " deleted", "item": it.Base[k.key], "node": n})
+				r.itemKept(n, it.ID)
 				continue
 			}
 			if err := r.deleteItem(ctx, k, n, fid); err != nil {
@@ -322,6 +323,20 @@ func (r *run) itemVanished(node string) {
 	r.complete = false
 }
 
+// itemKept notes that this node's copy of a label or milestone deleted on
+// the primary was changed there, so it stays for its owner to settle. The
+// issues on that node keep it too: ForgeSync neither reads it as something
+// the other nodes lost nor takes it off them.
+func (r *run) itemKept(node, item string) {
+	if r.kept == nil {
+		r.kept = map[string]map[string]bool{}
+	}
+	if r.kept[node] == nil {
+		r.kept[node] = map[string]bool{}
+	}
+	r.kept[node][item] = true
+}
+
 func sameFields(a, b map[string]string, fields []string) bool {
 	for _, f := range fields {
 		if a[f] != b[f] {
@@ -352,11 +367,12 @@ func newItemIndex(items []store.RepoItem) itemIndex {
 }
 
 // labelsValue is an issue's labels on a node as merge sees them: the
-// sorted item ids of the repository labels it has.
-func (x itemIndex) labelsValue(node string, is forgejo.Issue) string {
+// sorted item ids of the repository labels it has, leaving out any kept
+// there for their owner, which are none of ForgeSync's business.
+func (x itemIndex) labelsValue(node string, is forgejo.Issue, kept map[string]bool) string {
 	var ids []string
 	for _, l := range is.Labels {
-		if id, ok := x.toItem[node][l.ID]; ok {
+		if id, ok := x.toItem[node][l.ID]; ok && !kept[id] {
 			ids = append(ids, id)
 		}
 	}
@@ -372,9 +388,10 @@ func (x itemIndex) milestoneValue(node string, is forgejo.Issue) string {
 }
 
 // labelFIDs translates a labels value to a node's label ids, keeping the
-// labels the issue has there that aren't the repository's own (e.g. an
-// organization's). ok is false if a label has no copy there yet.
-func (x itemIndex) labelFIDs(node, value string, is *forgejo.Issue) (fids []int64, ok bool) {
+// labels the issue has there that aren't ForgeSync's to move: the ones that
+// aren't the repository's own (an organization's, say) and the ones kept
+// for their owner. ok is false if a label has no copy there yet.
+func (x itemIndex) labelFIDs(node, value string, is *forgejo.Issue, kept map[string]bool) (fids []int64, ok bool) {
 	if value != "" {
 		for _, id := range strings.Split(value, ",") {
 			fid, has := x.toFID[node][id]
@@ -386,7 +403,7 @@ func (x itemIndex) labelFIDs(node, value string, is *forgejo.Issue) (fids []int6
 	}
 	if is != nil {
 		for _, l := range is.Labels {
-			if _, repoLabel := x.toItem[node][l.ID]; !repoLabel {
+			if id, repoLabel := x.toItem[node][l.ID]; !repoLabel || kept[id] {
 				fids = append(fids, l.ID)
 			}
 		}

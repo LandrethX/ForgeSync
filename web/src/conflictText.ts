@@ -97,7 +97,8 @@ export function conflictExplanation(c: Conflict): string | undefined {
       if (item) {
         const what = itemName(c, item.kind);
         if (item.field === "deleted") {
-          return `${what.charAt(0).toUpperCase()}${what.slice(1)} was deleted on ${primary}, but changed on ${c.details.node ?? "another node"} since. ForgeSync kept that copy and won't copy it back.`;
+          const node = c.details.node ?? "another node";
+          return `${what.charAt(0).toUpperCase()}${what.slice(1)} was deleted on ${primary}, but changed on ${node} since. ForgeSync kept that copy, left it on the issues that have it there, and won't copy it back.`;
         }
         return `The ${item.field} of ${what} was changed to different values on different nodes since they last agreed. ForgeSync doesn't pick one.`;
       }

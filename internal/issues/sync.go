@@ -246,6 +246,14 @@ type run struct {
 	// restored are the nodes where a label or milestone deleted there is
 	// being recreated in this run; see itemVanished.
 	restored map[string]bool
+	// kept is, per node, the labels and milestones deleted on the primary
+	// whose changed copy stays there for its owner; see itemKept.
+	kept map[string]map[string]bool
+}
+
+// labelsValue is an issue's labels on a node, as merge sees them there.
+func (r *run) labelsValue(node string, is forgejo.Issue) string {
+	return r.labels.labelsValue(node, is, r.kept[node])
 }
 
 func (s *Syncer) runOnce(ctx context.Context, id string) error {
@@ -488,18 +496,23 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 		// items: the value names labels or milestones, so a node whose copy
 		// of one is being recreated can't be compared in this run.
 		items bool
+		// hold leaves a node's value alone: neither compared nor written.
+		// An issue holds one milestone, so a node keeping one for its owner
+		// can't take part without losing it; labels are a set, and
+		// labelsValue and labelFIDs keep a held one there on their own.
+		hold func(node string, is forgejo.Issue) bool
 	}{
-		{"title", &rec.BaseTitle, func(_ string, i forgejo.Issue) string { return i.Title }, nil, false},
-		{"body", &rec.BaseBody, func(_ string, i forgejo.Issue) string { return i.Body }, nil, false},
-		{"state", &rec.BaseState, func(_ string, i forgejo.Issue) string { return i.State }, nil, false},
-		{"labels", &rec.BaseLabels, r.labels.labelsValue,
+		{"title", &rec.BaseTitle, func(_ string, i forgejo.Issue) string { return i.Title }, nil, false, nil},
+		{"body", &rec.BaseBody, func(_ string, i forgejo.Issue) string { return i.Body }, nil, false, nil},
+		{"state", &rec.BaseState, func(_ string, i forgejo.Issue) string { return i.State }, nil, false, nil},
+		{"labels", &rec.BaseLabels, r.labelsValue,
 			func(ctx context.Context, n string, number int64, v string, is forgejo.Issue) error {
-				fids, ok := r.labels.labelFIDs(n, v, &is)
+				fids, ok := r.labels.labelFIDs(n, v, &is, r.kept[n])
 				if !ok {
 					return errNotThereYet
 				}
 				return r.s.nodes[n].API.ReplaceIssueLabels(ctx, r.owner, r.name, number, fids)
-			}, true},
+			}, true, nil},
 		{"milestone", &rec.BaseMilestone, r.milestones.milestoneValue,
 			func(ctx context.Context, n string, number int64, v string, _ forgejo.Issue) error {
 				fid, ok := r.milestones.milestoneFID(n, v)
@@ -507,12 +520,16 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 					return errNotThereYet
 				}
 				return r.s.nodes[n].API.SetIssueMilestone(ctx, r.owner, r.name, number, fid)
-			}, true},
+			}, true,
+			func(n string, is forgejo.Issue) bool { return r.kept[n][r.milestones.milestoneValue(n, is)] }},
 	}
 	want := map[string]string{} // for new copies
 	for _, f := range fields {
 		vals := map[string]string{}
 		for n, is := range present {
+			if f.hold != nil && f.hold(n, is) {
+				continue // the owner's to settle; leave the node as it is
+			}
 			if f.items && r.restored[n] {
 				continue // a copy coming back, not someone's change
 			}
@@ -535,6 +552,9 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 		// loss as a change.
 		if f.items {
 			for n, is := range present {
+				if f.hold != nil && f.hold(n, is) {
+					continue
+				}
 				if r.restored[n] && f.get(n, is) != value {
 					writes = append(writes, n)
 				}
@@ -589,7 +609,7 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 		}
 		// Only with every label and the milestone: a copy missing some would
 		// look like someone removed them, and that would be copied everywhere.
-		labelIDs, ok1 := r.labels.labelFIDs(n, want["labels"], nil)
+		labelIDs, ok1 := r.labels.labelFIDs(n, want["labels"], nil, nil)
 		milestone, ok2 := r.milestones.milestoneFID(n, want["milestone"])
 		if !ok1 || !ok2 {
 			r.s.log.Debug("issues: copy waits for its labels or milestone", "repository", r.rec.FullName, "node", n, "issue", ref)

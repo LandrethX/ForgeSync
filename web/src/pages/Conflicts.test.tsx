@@ -224,6 +224,9 @@ describe("label and milestone conflict text", () => {
     expect(conflictExplanation(gone)).toContain(
       "The milestone v1 was deleted on se, but changed on dk",
     );
+    expect(conflictExplanation(gone)).toContain(
+      "left it on the issues that have it there",
+    );
     expect(conflictFix(gone)).toContain(
       "create it again on se with the same title",
     );

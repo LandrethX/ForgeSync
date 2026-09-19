@@ -190,3 +190,83 @@ func TestLabelDeletedOnReplicaKeepsIssueLabels(t *testing.T) {
 		t.Errorf("conflicts: %+v", st.found)
 	}
 }
+
+// A label or milestone changed on a replica and then deleted on the primary
+// stays there for its owner to settle -- and so does its place on that
+// node's issues. Other labels still reach the node meanwhile.
+func TestItemKeptForItsOwnerStaysOnTheIssues(t *testing.T) {
+	s, st, f, _ := setup(t)
+	bug := f["se"].label("bug", "ee0701")
+	v1 := f["se"].milestone("v1")
+	is := f["se"].open("alice", "labelled")
+	f["se"].setLabels(is, []int64{bug})
+	f["se"].setMilestone(is, v1)
+	s.run(t)
+	if f["de"].labelNames(1) != "bug" || f["de"].milestoneTitle(1) != "v1" {
+		t.Fatalf("de #1 before: %q %q", f["de"].labelNames(1), f["de"].milestoneTitle(1))
+	}
+
+	// Changed on de and deleted on the primary in the same window.
+	f["de"].labelNamed("bug").Color = "b60205"
+	f["de"].milestoneNamed("v1").Description = "ships in May"
+	fakeAPI{f["se"], "alice"}.DeleteLabel(nil, "", "", f["se"].labelNamed("bug").ID)
+	fakeAPI{f["se"], "alice"}.DeleteMilestone(nil, "", "", f["se"].milestoneNamed("v1").ID)
+	s.run(t)
+
+	if f["de"].labelNamed("bug") == nil || f["de"].milestoneNamed("v1") == nil {
+		t.Fatal("de's changed copies should be kept")
+	}
+	if got, ms := f["de"].labelNames(1), f["de"].milestoneTitle(1); got != "bug" || ms != "v1" {
+		t.Errorf("de #1 kept: labels %q milestone %q", got, ms)
+	}
+	for _, n := range []string{"se", "dk"} {
+		if f[n].labelNamed("bug") != nil || f[n].milestoneNamed("v1") != nil {
+			t.Errorf("%s still has them", n)
+		}
+		if got, ms := f[n].labelNames(1), f[n].milestoneTitle(1); got != "" || ms != "" {
+			t.Errorf("%s #1: labels %q milestone %q", n, got, ms)
+		}
+	}
+	var refs []string
+	for _, c := range st.found {
+		refs = append(refs, c.Ref)
+	}
+	sort.Strings(refs)
+	if len(refs) != 2 || refs[0] != "label bug deleted" || refs[1] != "milestone v1 deleted" {
+		t.Errorf("conflicts = %v", refs)
+	}
+
+	// A settled run leaves de's issue as it is.
+	writes(f)
+	s.run(t)
+	if n := writes(f); n != 0 {
+		t.Errorf("a settled run wrote %d times", n)
+	}
+	if got, ms := f["de"].labelNames(1), f["de"].milestoneTitle(1); got != "bug" || ms != "v1" {
+		t.Errorf("de #1 after a settled run: labels %q milestone %q", got, ms)
+	}
+
+	// A new label still reaches de, next to the one it's keeping.
+	docs := f["se"].label("docs", "0075ca")
+	f["se"].setLabels(f["se"].issue(1), []int64{docs})
+	s.run(t)
+	if got := f["de"].labelNames(1); got != "bug,docs" {
+		t.Errorf("de #1 with a new label: %q", got)
+	}
+	for _, n := range []string{"se", "dk"} {
+		if got := f[n].labelNames(1); got != "docs" {
+			t.Errorf("%s #1 with a new label: %q", n, got)
+		}
+	}
+
+	// Deleted on de as well: both are forgotten and the conflicts clear.
+	fakeAPI{f["de"], "carol"}.DeleteLabel(nil, "", "", f["de"].labelNamed("bug").ID)
+	fakeAPI{f["de"], "carol"}.DeleteMilestone(nil, "", "", f["de"].milestoneNamed("v1").ID)
+	s.run(t)
+	if len(st.found) != 0 {
+		t.Errorf("conflicts left: %+v", st.found)
+	}
+	if len(st.items) != 1 { // docs
+		t.Errorf("items left: %+v", st.items)
+	}
+}

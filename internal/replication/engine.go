@@ -58,6 +58,8 @@ type Store interface {
 	SetRepositoryMetadata(ctx context.Context, id string, fields map[string]string, topics string) error
 	SetRepositoryReleases(ctx context.Context, id, releases, assets string) error
 	SetRepositoryActionVariables(ctx context.Context, id, value string) error
+	PackageOwner(ctx context.Context, owner string) (store.PackageOwnerRecord, error)
+	SetPackageOwner(ctx context.Context, owner, base string) error
 	WikiRefs(ctx context.Context, repositoryID, node string) (map[string]string, error)
 	SaveWikiRefs(ctx context.Context, repositoryID, node string, refs map[string]string) error
 	Org(ctx context.Context, name string) (store.OrgRecord, error)
@@ -112,6 +114,11 @@ type Options struct {
 	// Wiki replicates each repository's wiki, which is a second git
 	// repository, from its primary to the replicas (wiki.go).
 	Wiki bool
+	// Packages copies what the nodes' registries hold, for the package
+	// types whose files can be fetched and published by path (packages.go).
+	// PackageMax is the largest file it carries; 0 means no limit.
+	Packages   bool
+	PackageMax int64
 	// LFS copies the Git LFS objects a repository's pointer files name, so
 	// every node that has the repository can check it out (lfs.go). LFSMax
 	// is the largest object it carries; 0 means no limit.
@@ -189,8 +196,14 @@ func (e *Engine) RunAll(ctx context.Context) {
 		return
 	}
 	defer func() {
-		if e.opts.Organizations && ctx.Err() == nil {
+		if ctx.Err() != nil {
+			return
+		}
+		if e.opts.Organizations {
 			e.syncOrgs(ctx, recs, e.healthy())
+		}
+		if e.opts.Packages {
+			e.syncPackages(ctx, recs, e.healthy())
 		}
 	}()
 	sem := make(chan struct{}, e.opts.Concurrency)

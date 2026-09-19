@@ -161,6 +161,14 @@ type Replication struct {
 	// the API so Forgejo makes the repository, which is then replaced by
 	// the primary's history. Off by default.
 	Wiki bool `yaml:"wiki"`
+	// Packages copies what the nodes' registries hold, for the package
+	// types whose files can be fetched and published by path alone
+	// (generic and maven). A package of any other type that isn't on every
+	// node is reported rather than quietly left behind.
+	// PackageMaxBytes bounds one file; 0 (the default) means no limit.
+	// Off by default.
+	Packages        bool  `yaml:"packages"`
+	PackageMaxBytes int64 `yaml:"package_max_bytes"`
 	// LFS copies the Git LFS objects a repository's pointer files name to
 	// every node that has the repository, so a replica can be checked out
 	// at all. Objects are only ever added, never deleted. LFSMaxBytes

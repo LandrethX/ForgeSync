@@ -23,6 +23,50 @@ function conflict(over: Partial<Conflict>): Conflict {
   };
 }
 
+describe("Package conflicts", () => {
+  it("says which package can't be copied, and why not", () => {
+    const c = conflict({
+      kind: "package_unreplicated",
+      ref: "npm demo 1.0.0",
+      details: {
+        package_type: "npm",
+        package: "demo",
+        version: "1.0.0",
+        missing: ["dk", "de"],
+      },
+    });
+    expect(conflictTitle(c)).toBe(
+      "ForgeSync can't copy npm packages: demo 1.0.0",
+    );
+    expect(conflictExplanation(c)).toMatch(
+      /^dk and de haven't got this package/,
+    );
+    expect(conflictExplanation(c)).toMatch(/generic and maven/);
+    expect(conflictFix(c)).toMatch(/npm client/);
+  });
+
+  it("shows what each node holds under a contested file name", () => {
+    const c = conflict({
+      kind: "package_incomplete",
+      ref: "generic demo-art 1.0.0 demo.bin",
+      details: {
+        package_type: "generic",
+        package: "demo-art",
+        version: "1.0.0",
+        file: "demo.bin",
+        digests: { se: "aaaaaaaaaaaa", dk: "bbbbbbbbbbbb" },
+      },
+    });
+    expect(conflictTitle(c)).toBe("demo-art 1.0.0 · demo.bin");
+    expect(conflictSides(c)).toEqual([
+      ["dk", "bbbbbbbbbbbb"],
+      ["se", "aaaaaaaaaaaa"],
+    ]);
+    expect(conflictExplanation(c)).toMatch(/doesn't change/);
+    expect(conflictFix(c)).toMatch(/won't overwrite a published file/);
+  });
+});
+
 describe("LFS conflicts", () => {
   it("says how many objects a node is short of, and what that means", () => {
     const c = conflict({

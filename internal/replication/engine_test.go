@@ -30,6 +30,8 @@ type memStore struct {
 	renamedTo string
 	orgs      map[string]store.OrgRecord
 	wikiRefs  map[string]map[string]string
+	// packageBase is what the nodes last agreed each owner's packages are.
+	packageBase map[string]string
 	// onSave, if set, runs whenever a replica's state is saved.
 	onSave func()
 }
@@ -60,6 +62,22 @@ func (m *memStore) SaveWikiRefs(_ context.Context, _, node string, refs map[stri
 		m.wikiRefs = map[string]map[string]string{}
 	}
 	m.wikiRefs[node] = refs
+	return nil
+}
+
+func (m *memStore) PackageOwner(_ context.Context, owner string) (store.PackageOwnerRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return store.PackageOwnerRecord{Owner: owner, Base: m.packageBase[owner]}, nil
+}
+
+func (m *memStore) SetPackageOwner(_ context.Context, owner, base string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.packageBase == nil {
+		m.packageBase = map[string]string{}
+	}
+	m.packageBase[owner] = base
 	return nil
 }
 

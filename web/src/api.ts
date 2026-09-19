@@ -219,7 +219,9 @@ export type ConflictKind =
   | "repo_metadata"
   | "actions_variable_conflict"
   | "actions_secret_missing"
-  | "lfs_incomplete";
+  | "lfs_incomplete"
+  | "package_incomplete"
+  | "package_unreplicated";
 
 export interface Handoff {
   pr_number: number;
@@ -275,6 +277,15 @@ export interface Conflict {
     /** actions_secret_missing: the secret, and the nodes that haven't got it. */
     secret?: string;
     missing?: string[];
+    /** package_*: the package this is about, and what each node holds under a
+     * contested file name. `node` is the node that's short of it, when it's one node. */
+    owner?: string;
+    package_type?: string;
+    package?: string;
+    version?: string;
+    file?: string;
+    digests?: Record<string, string>;
+    reason?: string;
     /** lfs_incomplete: how many LFS objects the node is short of and some of them,
      * or why it couldn't be asked. The node is in `node`, as for a deleted issue. */
     objects?: number;

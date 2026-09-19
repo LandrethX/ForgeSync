@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"scenegit.org/forgesync/internal/forgejo"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,7 +33,16 @@ type gitNode struct {
 	lfsMu  sync.Mutex
 	lfs    map[string][]byte
 	lfsOff bool
+
+	// pkgs is this node's package registry: a version's files by name.
+	// The REST API (fakeAPI) and the registry endpoints below are the same
+	// node, as they are in Forgejo.
+	pkgMu sync.Mutex
+	pkgs  map[pkgKey]map[string][]byte
 }
+
+// pkgKey identifies one package version in a node's registry.
+type pkgKey struct{ owner, typ, name, version string }
 
 const testUser, testToken = "forgesync", "node-token"
 
@@ -42,7 +52,7 @@ func newGitNode(t *testing.T) *gitNode {
 	if err != nil {
 		t.Skip("git not installed")
 	}
-	n := &gitNode{t: t, root: t.TempDir(), lfs: map[string][]byte{}}
+	n := &gitNode{t: t, root: t.TempDir(), lfs: map[string][]byte{}, pkgs: map[pkgKey]map[string][]byte{}}
 	backend := &cgi.Handler{
 		Path: gitPath,
 		Args: []string{"http-backend"},
@@ -53,6 +63,10 @@ func newGitNode(t *testing.T) *gitNode {
 		if r.Header.Get("Authorization") != want {
 			w.Header().Set("WWW-Authenticate", `Basic realm="forgejo"`)
 			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/packages/") {
+			n.serveRegistry(w, r)
 			return
 		}
 		if i := strings.Index(r.URL.Path, "/info/lfs/"); i >= 0 {
@@ -280,4 +294,112 @@ func pointerFor(content string) string {
 	sum := sha256.Sum256([]byte(content))
 	return "version https://git-lfs.github.com/spec/v1\noid sha256:" + hex.EncodeToString(sum[:]) +
 		"\nsize " + strconv.Itoa(len(content)) + "\n"
+}
+
+// serveRegistry answers the package registry endpoints ForgeSync uses:
+// the generic registry, which keeps a file under its package name and
+// version, and maven, which lays a package out as a Maven repository is.
+// Publishing the same name twice is refused, as Forgejo refuses it.
+func (n *gitNode) serveRegistry(w http.ResponseWriter, r *http.Request) {
+	key, file, ok := parseRegistryPath(strings.TrimPrefix(r.URL.Path, "/api/packages/"))
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	n.pkgMu.Lock()
+	defer n.pkgMu.Unlock()
+	switch r.Method {
+	case http.MethodPut:
+		if _, taken := n.pkgs[key][file]; taken {
+			http.Error(w, "file already exists", http.StatusConflict)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "application/octet-stream" {
+			// Forgejo reads the body as a form otherwise and refuses it.
+			http.Error(w, "request Content-Type isn't multipart/form-data", http.StatusInternalServerError)
+			return
+		}
+		if n.pkgs[key] == nil {
+			n.pkgs[key] = map[string][]byte{}
+		}
+		n.pkgs[key][file] = body
+		w.WriteHeader(http.StatusCreated)
+	case http.MethodGet:
+		body, here := n.pkgs[key][file]
+		if !here {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Write(body)
+	case http.MethodDelete:
+		if _, here := n.pkgs[key][file]; !here {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		delete(n.pkgs[key], file)
+		if len(n.pkgs[key]) == 0 {
+			delete(n.pkgs, key)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// parseRegistryPath reads "<owner>/<type>/..." the way each registry lays
+// its files out.
+func parseRegistryPath(path string) (pkgKey, string, bool) {
+	parts := strings.Split(path, "/")
+	if len(parts) < 3 {
+		return pkgKey{}, "", false
+	}
+	owner, typ, rest := parts[0], parts[1], parts[2:]
+	switch typ {
+	case "generic":
+		if len(rest) != 3 {
+			return pkgKey{}, "", false
+		}
+		return pkgKey{owner, typ, rest[0], rest[1]}, rest[2], true
+	case "maven":
+		if len(rest) < 4 {
+			return pkgKey{}, "", false
+		}
+		file := rest[len(rest)-1]
+		version := rest[len(rest)-2]
+		artifact := rest[len(rest)-3]
+		group := strings.Join(rest[:len(rest)-3], ".")
+		return pkgKey{owner, typ, group + ":" + artifact, version}, file, true
+	}
+	return pkgKey{}, "", false
+}
+
+// publish puts a file in the registry directly, as a client's upload does.
+func (n *gitNode) publish(owner, typ, name, version, file, content string) {
+	n.pkgMu.Lock()
+	defer n.pkgMu.Unlock()
+	key := pkgKey{owner, typ, name, version}
+	if n.pkgs[key] == nil {
+		n.pkgs[key] = map[string][]byte{}
+	}
+	n.pkgs[key][file] = []byte(content)
+}
+
+// packageList is what the node holds, as "<type> <name> <version> <file>=<content>",
+// sorted, for a test to compare.
+func (n *gitNode) packageList() string {
+	n.pkgMu.Lock()
+	defer n.pkgMu.Unlock()
+	var out []string
+	for key, files := range n.pkgs {
+		for file, body := range files {
+			out = append(out, key.typ+" "+key.name+" "+key.version+" "+file+"="+string(body))
+		}
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
 }

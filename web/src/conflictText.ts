@@ -13,6 +13,8 @@ export const KIND_LABEL: Record<Conflict["kind"], string> = {
   actions_variable_conflict: "Variable changed differently",
   actions_secret_missing: "Secret missing on a node",
   lfs_incomplete: "LFS objects missing on a node",
+  package_incomplete: "Package file differs or couldn't be copied",
+  package_unreplicated: "Package ForgeSync can't copy",
 };
 
 /**
@@ -42,6 +44,12 @@ function nodeList(names: string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
+/** "demo-art 1.0.0", or the conflict's ref if the details are missing. */
+function packageName(c: Conflict): string {
+  if (!c.details.package) return c.ref;
+  return `${c.details.package} ${c.details.version ?? ""}`.trimEnd();
+}
+
 /** A wiki's branch is written wiki:refs/heads/main, so it can't be taken
  *  for the repository's own. */
 function inWiki(c: Conflict): boolean {
@@ -69,6 +77,15 @@ export function conflictTitle(c: Conflict): string {
     return where
       ? `Secret ${secret} is missing on ${where}`
       : `${label}: ${secret}`;
+  }
+  if (c.kind === "package_unreplicated") {
+    return `ForgeSync can't copy ${c.details.package_type ?? ""} packages: ${packageName(c)}`.replace(
+      "  ",
+      " ",
+    );
+  }
+  if (c.kind === "package_incomplete") {
+    return `${packageName(c)}${c.details.file ? ` · ${c.details.file}` : ""}`;
   }
   if (c.kind === "lfs_incomplete") {
     const node = c.details.node ?? c.ref;
@@ -111,6 +128,11 @@ export function relationText(r: Relation): string {
 
 /** Node name -> what it has (commit or branch), sorted by node. */
 export function conflictSides(c: Conflict): [string, string][] {
+  if (c.kind === "package_incomplete" && c.details.digests) {
+    return Object.entries(c.details.digests).sort(([a], [b]) =>
+      a.localeCompare(b),
+    );
+  }
   const m =
     (c.kind === "default_branch_mismatch"
       ? c.details.branches
@@ -140,6 +162,17 @@ export function conflictExplanation(c: Conflict): string | undefined {
       const has = missing.length > 1 ? "haven't" : "hasn't";
       return `${who} ${has} got the Actions secret ${c.details.secret ?? c.ref}, which the other nodes have. Forgejo never gives a secret's value back, so ForgeSync can't copy one; a workflow that needs it would fail there.`;
     }
+    case "package_unreplicated": {
+      const where = c.details.missing?.length
+        ? nodeList(c.details.missing)
+        : (c.details.node ?? "A node");
+      return `${where} ${c.details.missing && c.details.missing.length > 1 ? "haven't" : "hasn't"} got this package, and ForgeSync can't publish ${c.details.package_type ?? "this"} packages: only the types whose files it can fetch and put back by path (generic and maven) travel. The others would need their own client to publish faithfully, so ForgeSync leaves them alone rather than half-copying them.`;
+    }
+    case "package_incomplete":
+      if (c.details.digests) {
+        return `Different content is published under this name on different nodes. A published file doesn't change, so one of them isn't what it says. Nothing was copied or deleted.`;
+      }
+      return `ForgeSync couldn't copy this file to ${c.details.node ?? "a node"}: ${c.details.reason ?? "the node refused it"}.`;
     case "lfs_incomplete": {
       const node = c.details.node ?? c.ref;
       if (c.details.error) {
@@ -228,6 +261,13 @@ export function conflictFix(c: Conflict): string {
       return `Set the variable ${c.details.variable ?? c.ref} on one of the nodes so it matches another; ForgeSync then copies that value everywhere.`;
     case "actions_secret_missing":
       return `Set the secret ${c.details.secret ?? c.ref} in the repository's Actions settings on ${nodeList(c.details.missing ?? []) || "the node that hasn't got it"}, with the same value as on the other nodes. Only someone who knows the value can do this.`;
+    case "package_unreplicated":
+      return `Publish it on ${c.details.missing?.length ? nodeList(c.details.missing) : "the nodes that haven't got it"} with the tool that made it (the same ${c.details.package_type ?? "registry"} client), pointed at each node. ForgeSync keeps reporting this until every node has it, and never deletes a package it can't copy.`;
+    case "package_incomplete":
+      if (c.details.digests) {
+        return "Decide which file is the real one. Delete the other version on the node that has the wrong one and let it be published again; ForgeSync copies it everywhere once the nodes agree. It won't overwrite a published file.";
+      }
+      return `The next run tries again. If it keeps failing, check that the registry is reachable on ${c.details.node ?? "that node"} and that the file isn't over replication.package_max_bytes.`;
     case "lfs_incomplete":
       return `Check that LFS is turned on for ${c.details.node ?? c.ref} ([server] LFS_START_SERVER) and that the repository's own LFS setting is on there. ForgeSync tries again every run; nothing is ever deleted, so a fixed node fills in by itself.`;
     case "repo_metadata":

@@ -17,6 +17,9 @@ type NodeAPI interface {
 	UsersByLoginName(ctx context.Context, sourceID int64, loginName string) ([]forgejo.User, error)
 	AdminCreateUser(ctx context.Context, opt forgejo.CreateUserOption) (forgejo.User, error)
 	AdminCreateRepo(ctx context.Context, owner string, opt forgejo.CreateRepoOption) (forgejo.Repository, error)
+	Packages(ctx context.Context, owner string, page, limit int) ([]forgejo.Package, error)
+	PackageFiles(ctx context.Context, owner, typ, name, version string) ([]forgejo.PackageFile, error)
+	DeletePackage(ctx context.Context, owner, typ, name, version string) error
 	ActionVariables(ctx context.Context, owner, repo string) ([]forgejo.ActionVariable, error)
 	CreateActionVariable(ctx context.Context, owner, repo, name, value string) error
 	UpdateActionVariable(ctx context.Context, owner, repo, name, value string) error

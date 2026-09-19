@@ -2,6 +2,8 @@ package replication
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -68,6 +70,56 @@ type fakeOrg struct {
 
 // meta is what this node's repository settings and topics are.
 // releases and files are what this node has published, by repository.
+// Packages, PackageFiles and DeletePackage read the same registry the
+// node serves over HTTP, as Forgejo's API and registry are one node.
+func (f *fakeAPI) Packages(_ context.Context, owner string, page, limit int) ([]forgejo.Package, error) {
+	if f.git == nil || page > 1 {
+		return nil, nil
+	}
+	f.git.pkgMu.Lock()
+	defer f.git.pkgMu.Unlock()
+	var out []forgejo.Package
+	for key := range f.git.pkgs {
+		if key.owner != owner {
+			continue
+		}
+		out = append(out, forgejo.Package{Type: key.typ, Name: key.name, Version: key.version,
+			Owner: forgejo.User{Login: owner}})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Type+out[i].Name+out[i].Version < out[j].Type+out[j].Name+out[j].Version
+	})
+	return out, nil
+}
+
+func (f *fakeAPI) PackageFiles(_ context.Context, owner, typ, name, version string) ([]forgejo.PackageFile, error) {
+	if f.git == nil {
+		return nil, nil
+	}
+	f.git.pkgMu.Lock()
+	defer f.git.pkgMu.Unlock()
+	var out []forgejo.PackageFile
+	for file, body := range f.git.pkgs[pkgKey{owner, typ, name, version}] {
+		sum := sha256.Sum256(body)
+		out = append(out, forgejo.PackageFile{Name: file, Size: int64(len(body)), HashSHA256: hex.EncodeToString(sum[:])})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (f *fakeAPI) DeletePackage(_ context.Context, owner, typ, name, version string) error {
+	f.mu.Lock()
+	f.calls = append(f.calls, "delete package "+name+" "+version)
+	f.mu.Unlock()
+	if f.git == nil {
+		return nil
+	}
+	f.git.pkgMu.Lock()
+	defer f.git.pkgMu.Unlock()
+	delete(f.git.pkgs, pkgKey{owner, typ, name, version})
+	return nil
+}
+
 // vars and secrets are this node's Actions variables and secret names.
 func (f *fakeAPI) ActionVariables(_ context.Context, _, _ string) ([]forgejo.ActionVariable, error) {
 	f.mu.Lock()

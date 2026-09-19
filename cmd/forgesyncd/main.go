@@ -151,6 +151,8 @@ func run(configPath string) error {
 			Releases:         cfg.Replication.Releases,
 			Wiki:             cfg.Replication.Wiki,
 			Actions:          cfg.Replication.Actions,
+			Packages:         cfg.Replication.Packages,
+			PackageMax:       cfg.Replication.PackageMaxBytes,
 			LFS:              cfg.Replication.LFS,
 			LFSMax:           cfg.Replication.LFSMaxBytes,
 			AssetMax:         cfg.Replication.AttachmentMaxBytes,
@@ -169,7 +171,7 @@ func run(configPath string) error {
 			"collaborators", cfg.Replication.Collaborators, "organizations", cfg.Replication.Organizations,
 			"protect_replicas", cfg.Replication.ProtectReplicas,
 			"branch_protection", cfg.Replication.BranchProtection, "metadata", cfg.Replication.Metadata, "releases", cfg.Replication.Releases, "wiki", cfg.Replication.Wiki,
-			"actions", cfg.Replication.Actions, "lfs", cfg.Replication.LFS)
+			"actions", cfg.Replication.Actions, "lfs", cfg.Replication.LFS, "packages", cfg.Replication.Packages)
 	}
 	// Renames and primaries are assigned after scans and after webhooks;
 	// one at a time.
@@ -411,6 +413,7 @@ func replicationFeatures(cfg *config.Config) []string {
 		}
 	}
 	add(r.LFS, "LFS objects")
+	add(r.Packages, "packages (generic and maven)")
 	add(r.Wiki, "the wiki")
 	add(r.Releases, "releases and their files")
 	add(r.Issues, "issues and comments")

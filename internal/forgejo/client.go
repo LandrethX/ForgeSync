@@ -296,6 +296,10 @@ func isNotFound(err error) bool {
 	return false
 }
 
+// IsNotFound reports whether err is a 404 from Forgejo: what it asks for
+// isn't there, which is often an answer rather than a failure.
+func IsNotFound(err error) bool { return isNotFound(err) }
+
 // IsConflict reports whether err is a 409 or 422 from Forgejo, which it
 // returns when something being created already exists.
 func IsConflict(err error) bool {

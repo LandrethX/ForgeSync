@@ -1,14 +1,23 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, ApiError, sceneIdLoginURL, type AuthConfig, type Session } from "../api";
+import {
+  api,
+  ApiError,
+  sceneIdLoginURL,
+  type AuthConfig,
+  type Session,
+} from "../api";
 import { formatDuration } from "../format";
 
 // Explanations for /?signin_error=... set by the SceneID callback.
 const SIGN_IN_ERRORS: Record<string, string> = {
-  no_role: "Your SceneID account doesn't have a ForgeSync role. Ask an administrator to give you one in SceneID.",
-  expired: "The sign-in took too long, or was started in another browser. Try again.",
+  no_role:
+    "Your SceneID account doesn't have a ForgeSync role. Ask an administrator to give you one in SceneID.",
+  expired:
+    "The sign-in took too long, or was started in another browser. Try again.",
   cancelled: "Sign-in was cancelled at SceneID.",
   unavailable: "Can't reach SceneID right now. Try again in a moment.",
-  failed: "Sign-in failed. Try again, or ask an administrator to check the controller log.",
+  failed:
+    "Sign-in failed. Try again, or ask an administrator to check the controller log.",
 };
 
 /** Reads and removes ?signin_error from the address bar, so a reload doesn't repeat it. */
@@ -18,7 +27,11 @@ function takeSignInError(): string | undefined {
   if (!code) return undefined;
   params.delete("signin_error");
   const rest = params.toString();
-  window.history.replaceState(null, "", window.location.pathname + (rest ? `?${rest}` : ""));
+  window.history.replaceState(
+    null,
+    "",
+    window.location.pathname + (rest ? `?${rest}` : ""),
+  );
   return SIGN_IN_ERRORS[code] ?? SIGN_IN_ERRORS.failed;
 }
 
@@ -31,18 +44,22 @@ export function Login({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
     api
       .authConfig()
       .then(setConfig)
-      .catch((e: unknown) => setConfigError(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) =>
+        setConfigError(e instanceof Error ? e.message : String(e)),
+      );
   }, []);
 
   const returnTo = window.location.pathname + window.location.search;
 
   return (
     <div className="login">
+      <div className="login-mark">
+        <img src="/logo.svg" alt="" width={132} height={132} />
+        <p className="wordmark">
+          Forge<span>Sync</span>
+        </p>
+      </div>
       <div className="login-card">
-        <div className="brand login-brand">
-          <img src="/favicon.svg" alt="" width={28} height={28} />
-          ForgeSync
-        </div>
         <h1>Sign in</h1>
         {sceneIdError && (
           <p className="error-note" role="alert">
@@ -56,8 +73,14 @@ export function Login({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
         )}
         {config?.sceneid && (
           <>
-            <p className="muted">Sign in with your SceneID account. Your ForgeSync role comes from SceneID.</p>
-            <a className="button-primary button-link" href={sceneIdLoginURL(returnTo)}>
+            <p className="muted">
+              Sign in with your SceneID account. Your ForgeSync role comes from
+              SceneID.
+            </p>
+            <a
+              className="button-primary button-link"
+              href={sceneIdLoginURL(returnTo)}
+            >
               Sign in with SceneID
             </a>
           </>
@@ -66,19 +89,25 @@ export function Login({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
           (config.sceneid ? (
             <details className="break-glass">
               <summary>Use the admin token instead</summary>
-              <p className="muted">For emergencies when SceneID is unavailable. Every use is recorded in the audit log.</p>
+              <p className="muted">
+                For emergencies when SceneID is unavailable. Every use is
+                recorded in the audit log.
+              </p>
               <TokenForm onSignedIn={onSignedIn} />
             </details>
           ) : (
             <>
               <p className="muted">
-                Use the controller's admin token (the file named by <code>http.admin_token_file</code>).
+                Use the controller's admin token (the file named by{" "}
+                <code>http.admin_token_file</code>).
               </p>
               <TokenForm onSignedIn={onSignedIn} />
             </>
           ))}
         {config && !config.sceneid && !config.token_sign_in && (
-          <p className="muted">Web sign-in isn't configured on this controller.</p>
+          <p className="muted">
+            Web sign-in isn't configured on this controller.
+          </p>
         )}
       </div>
     </div>
@@ -123,7 +152,11 @@ function TokenForm({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
           {error}
         </p>
       )}
-      <button type="submit" className="button-quiet" disabled={busy || token.trim() === ""}>
+      <button
+        type="submit"
+        className="button-quiet"
+        disabled={busy || token.trim() === ""}
+      >
         {busy ? "Signing in…" : "Sign in with token"}
       </button>
     </form>
@@ -134,7 +167,9 @@ function messageFor(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 401) return "That token isn't valid.";
     if (err.status === 429) {
-      const wait = err.retryAfterSeconds ? ` Try again in ${formatDuration(err.retryAfterSeconds * 1000)}.` : "";
+      const wait = err.retryAfterSeconds
+        ? ` Try again in ${formatDuration(err.retryAfterSeconds * 1000)}.`
+        : "";
       return `Too many failed attempts.${wait}`;
     }
     return err.message;

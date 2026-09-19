@@ -226,7 +226,7 @@ func (e *Engine) resetReplicas(ctx context.Context, dir string, rec store.Reposi
 	h *store.Handoff, healthy map[string]bool) bool {
 
 	target, onPrimary := pRefs[h.Ref]
-	var left []string
+	left := []string{} // not nil: it's stored as a list, never as nothing
 	for _, node := range h.Nodes {
 		n, ok := e.nodes[node]
 		if !ok {
@@ -240,7 +240,13 @@ func (e *Engine) resetReplicas(ctx context.Context, dir string, rec store.Reposi
 		if !onPrimary { // the owner deleted the branch on the primary
 			a = Action{Kind: Delete, Ref: h.Ref, Expected: h.SHA}
 		}
-		results, err := e.git.Push(ctx, dir, e.remote(n, rec.FullName), []Action{a})
+		// Forgejo won't let anyone rewrite or delete a protected branch, so
+		// ForgeSync lifts its own guard for this and puts it straight back.
+		var results map[string]PushResult
+		err := e.withoutGuard(ctx, rec, e.nodes[node], func() (err error) {
+			results, err = e.git.Push(ctx, dir, e.remote(n, rec.FullName), []Action{a})
+			return err
+		})
 		res := results[h.Ref]
 		switch {
 		case err != nil:

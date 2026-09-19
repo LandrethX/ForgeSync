@@ -59,6 +59,14 @@ export function describe(e: HistoryEvent): string {
       return `${str(d.who)} given ${str(d.permission)} access on ${str(d.node)}, as elsewhere`;
     case "repo.collaborator_removed":
       return `${str(d.who)} no longer has access on ${str(d.node)}, as elsewhere`;
+    case "repo.replica_guarded":
+      return `Replica on ${str(d.node)} guarded: people work on the primary`;
+    case "repo.replica_guard_restored":
+      return `Guard on ${str(d.node)} put back after it was removed or weakened`;
+    case "repo.protection_written":
+      return `Protection rule ${str(d.rule)} written on ${str(d.node)}, as elsewhere`;
+    case "repo.protection_removed":
+      return `Protection rule ${str(d.rule)} removed on ${str(d.node)}, as elsewhere`;
     case "org.created_on_node":
       return `Organization created on ${str(d.node)} (as on ${str(d.from)}), owned by ${str(d.owner)}`;
     case "org.team_created":

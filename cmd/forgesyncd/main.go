@@ -129,14 +129,16 @@ func run(configPath string) error {
 			return fmt.Errorf("replication is enabled but %w", err)
 		}
 		engine = replication.NewEngine(gitNodes, git, db, monitor, replication.Options{
-			Concurrency:   cfg.Replication.Concurrency,
-			CreateMissing: *cfg.Replication.CreateMissing,
-			AutoFix:       *cfg.Replication.AutoFix,
-			HandOff:       *cfg.Replication.HandOffConflicts,
-			Collaborators: cfg.Replication.Collaborators,
-			Organizations: cfg.Replication.Organizations,
-			BackupFor:     time.Duration(cfg.Replication.BackupDays) * 24 * time.Hour,
-			ArchiveOrg:    cfg.Replication.ArchiveOrg,
+			Concurrency:      cfg.Replication.Concurrency,
+			CreateMissing:    *cfg.Replication.CreateMissing,
+			AutoFix:          *cfg.Replication.AutoFix,
+			HandOff:          *cfg.Replication.HandOffConflicts,
+			Collaborators:    cfg.Replication.Collaborators,
+			Organizations:    cfg.Replication.Organizations,
+			ProtectReplicas:  cfg.Replication.ProtectReplicas,
+			BranchProtection: cfg.Replication.BranchProtection,
+			BackupFor:        time.Duration(cfg.Replication.BackupDays) * 24 * time.Hour,
+			ArchiveOrg:       cfg.Replication.ArchiveOrg,
 			// Rescan so the inventory shows the result. Forgejo updates some
 			// repository fields (e.g. "empty" after the first push) just after
 			// a push, so give it a moment first. The scanner exists by then.
@@ -147,7 +149,9 @@ func run(configPath string) error {
 		log.Info("replication enabled", "git", v, "work_dir", cfg.Replication.WorkDir,
 			"create_missing", *cfg.Replication.CreateMissing, "auto_fix", *cfg.Replication.AutoFix,
 			"hand_off_conflicts", *cfg.Replication.HandOffConflicts, "backup_days", cfg.Replication.BackupDays,
-			"collaborators", cfg.Replication.Collaborators, "organizations", cfg.Replication.Organizations)
+			"collaborators", cfg.Replication.Collaborators, "organizations", cfg.Replication.Organizations,
+			"protect_replicas", cfg.Replication.ProtectReplicas,
+			"branch_protection", cfg.Replication.BranchProtection)
 	}
 	// Renames and primaries are assigned after scans and after webhooks;
 	// one at a time.

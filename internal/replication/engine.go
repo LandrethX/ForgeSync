@@ -49,6 +49,7 @@ type Store interface {
 	MarkRepositoryDeleted(ctx context.Context, id string, at time.Time) error
 	UndeleteRepository(ctx context.Context, id string) error
 	SetRepositoryCollaborators(ctx context.Context, id, value string) error
+	SetRepositoryProtection(ctx context.Context, id, value string) error
 	Org(ctx context.Context, name string) (store.OrgRecord, error)
 	SaveOrg(ctx context.Context, rec store.OrgRecord) error
 	DeleteRepository(ctx context.Context, id string) error
@@ -84,6 +85,12 @@ type Options struct {
 	// Organizations keeps the organizations that own repositories, their
 	// teams and who is in them, the same on every node (orgs.go).
 	Organizations bool
+	// ProtectReplicas puts ForgeSync's guard on every replica, so people
+	// work on the primary and a replica can't be pushed to; it is put back
+	// whenever it's removed or changed (protection.go). BranchProtection
+	// keeps the owner's own rules the same everywhere.
+	ProtectReplicas  bool
+	BranchProtection bool
 	// BackupFor is how long ForgeSync keeps what it takes away: a replica's
 	// branch after the owner chose the primary's version, and the archived
 	// copies of a repository deleted on its primary. Default 30 days.
@@ -455,6 +462,15 @@ func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again
 	if e.opts.Collaborators && !again {
 		e.syncCollaborators(ctx, rec, primary, healthy)
 	}
+	if !again {
+		// The owner's rules first, so the guard isn't mistaken for one.
+		if e.opts.BranchProtection {
+			e.syncProtection(ctx, rec, healthy)
+		}
+		if e.opts.ProtectReplicas {
+			e.protectReplicas(ctx, rec, primary, healthy)
+		}
+	}
 	return again, nil
 }
 
@@ -499,7 +515,24 @@ func (e *Engine) replicate(ctx context.Context, dir string, rec store.Repository
 	actions, issues := Plan(pRefs, rRefs, base, func(a, b string) (bool, bool) {
 		return e.git.IsAncestor(ctx, dir, a, b)
 	})
-	results, err := e.git.Push(ctx, dir, remote, actions)
+	// A deletion needs ForgeSync's own guard lifted: Forgejo won't let
+	// anyone delete a protected branch. Everything else is a create or a
+	// fast-forward, which the guard lets a site admin through.
+	deleting := false
+	for _, a := range actions {
+		if a.Kind == Delete {
+			deleting = true
+		}
+	}
+	var results map[string]PushResult
+	if deleting {
+		err = e.withoutGuard(ctx, rec, node, func() (err error) {
+			results, err = e.git.Push(ctx, dir, remote, actions)
+			return err
+		})
+	} else {
+		results, err = e.git.Push(ctx, dir, remote, actions)
+	}
 	if err != nil {
 		return StateError, "pushing to " + node.Name + " failed: " + err.Error(), 0, nil, issues, err
 	}
@@ -519,6 +552,22 @@ func (e *Engine) replicate(ctx context.Context, dir string, rec store.Repository
 		if _, inP := pRefs[ref]; !inP {
 			if _, inR := rRefs[ref]; !inR {
 				delete(next, ref) // gone everywhere
+			}
+		}
+	}
+	// A replica that refuses ForgeSync's push has almost certainly had the
+	// guard's whitelist emptied; it can't be read back, so a refusal is
+	// how ForgeSync finds out. What git reports per ref is the porcelain
+	// status -- "pre-receive hook declined" -- not the message Forgejo
+	// prints beside it, so that is what's matched. Writing the guard again
+	// is one call and changes nothing when it was already right; the next
+	// run pushes again.
+	if e.opts.ProtectReplicas && node.Name != rec.PrimaryNode {
+		for _, res := range results {
+			if !res.OK && (strings.Contains(res.Reason, "pre-receive hook declined") ||
+				strings.Contains(res.Reason, "protected branch")) {
+				e.reassertGuard(ctx, rec, node)
+				break
 			}
 		}
 	}

@@ -71,4 +71,9 @@ replication:
   # them. Without it a repository owned by one can't be copied to a node
   # that hasn't got the organization.
   organizations: true
+  # The owner's own branch protection rules, kept the same everywhere.
+  branch_protection: true
+  # ForgeSync's guard on the replicas: people work on the primary, and a
+  # guard someone removes is put back (Phase 0 p02).
+  protect_replicas: true
   work_dir: /var/lib/forgesync/git

@@ -52,6 +52,7 @@ func (s *Store) Handoffs(ctx context.Context, repositoryID string, activeOnly bo
 // SaveHandoff records a new hand-off and returns its id.
 func (s *Store) SaveHandoff(ctx context.Context, h Handoff) (int64, error) {
 	var id int64
+	h.Nodes = noNilNodes(h.Nodes)
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO conflict_handoffs (repository_id, ref, sha, primary_node, nodes, branch, pr_number, pr_url, state, opened_at)
 		VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, 'open', $9)
@@ -59,8 +60,18 @@ func (s *Store) SaveHandoff(ctx context.Context, h Handoff) (int64, error) {
 	return id, err
 }
 
+// noNilNodes keeps an empty list an empty list: the column is NOT NULL, and
+// a hand-off whose last replica has been reset has no nodes left.
+func noNilNodes(v []string) []string {
+	if v == nil {
+		return []string{}
+	}
+	return v
+}
+
 // UpdateHandoff stores a hand-off's head, state, nodes and dates.
 func (s *Store) UpdateHandoff(ctx context.Context, h Handoff) error {
+	h.Nodes = noNilNodes(h.Nodes)
 	_, err := s.pool.Exec(ctx, `
 		UPDATE conflict_handoffs SET sha = $2, state = $3, nodes = $4, decided_at = $5, backup_until = $6 WHERE id = $1`,
 		h.ID, h.SHA, h.State, h.Nodes, h.DecidedAt, h.BackupUntil)

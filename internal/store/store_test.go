@@ -658,6 +658,33 @@ func TestHandoffs(t *testing.T) {
 	}
 }
 
+// A hand-off whose last replica has been reset has no nodes left. The
+// column is NOT NULL, so an empty list must stay a list.
+func TestAHandoffWithNoNodesLeft(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s.SyncNodes(ctx, []NodeRecord{{Name: "se", URL: "http://se"}, {Name: "dk", URL: "http://dk"}})
+	t0 := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
+	s.RecordNodeScan(ctx, "se", t0, t0, []ScannedRepo{{FullName: "alice/demo"}})
+	repos, _ := s.Repositories(ctx)
+
+	id, err := s.SaveHandoff(ctx, Handoff{RepositoryID: repos[0].ID, Ref: "refs/heads/main", SHA: "abc",
+		PrimaryNode: "se", Nodes: nil, Branch: "forgesync/conflict/dk/main", PRNumber: 1, OpenedAt: t0})
+	if err != nil {
+		t.Fatalf("saving with no nodes: %v", err)
+	}
+	if err := s.UpdateHandoff(ctx, Handoff{ID: id, SHA: "abc", State: "kept_primary", Nodes: nil}); err != nil {
+		t.Fatalf("updating with no nodes: %v", err)
+	}
+	hs, err := s.Handoffs(ctx, repos[0].ID, false)
+	if err != nil || len(hs) != 1 || len(hs[0].Nodes) != 0 {
+		t.Fatalf("hand-offs = %+v, %v", hs, err)
+	}
+}
+
 func TestArchives(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()

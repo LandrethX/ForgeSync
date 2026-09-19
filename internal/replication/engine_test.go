@@ -46,6 +46,13 @@ func (m *memStore) MarkRepositoryDeleted(_ context.Context, _ string, at time.Ti
 	}
 	return nil
 }
+func (m *memStore) SetRepositoryProtection(_ context.Context, _, value string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rec.BaseProtection = value
+	return nil
+}
+
 func (m *memStore) Org(_ context.Context, name string) (store.OrgRecord, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -36,6 +36,8 @@ type fakeAPI struct {
 	// do; refusesGrant is a login this node won't take.
 	collabs      map[string]string
 	refusesGrant string
+	// rules are this node's branch protection rules, by rule name.
+	rules map[string]forgejo.BranchProtection
 	// orgState is each organization this node has, with its teams and who
 	// is in them; orgs above is only what IsOrg answers.
 	orgState map[string]*fakeOrg
@@ -47,6 +49,45 @@ type fakeOrg struct {
 	org     forgejo.Org
 	teams   map[string]*forgejo.Team // by name
 	members map[int64]map[string]bool
+}
+
+func (f *fakeAPI) BranchProtections(_ context.Context, _, _ string) ([]forgejo.BranchProtection, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []forgejo.BranchProtection
+	for _, r := range f.rules {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].RuleName < out[j].RuleName })
+	return out, nil
+}
+
+func (f *fakeAPI) CreateBranchProtection(_ context.Context, _, _ string, r forgejo.BranchProtection) (forgejo.BranchProtection, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.rules == nil {
+		f.rules = map[string]forgejo.BranchProtection{}
+	}
+	f.rules[r.RuleName] = r
+	f.calls = append(f.calls, "protect "+r.RuleName)
+	return r, nil
+}
+
+func (f *fakeAPI) EditBranchProtection(_ context.Context, _, _, rule string, r forgejo.BranchProtection) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r.RuleName = rule
+	f.rules[rule] = r
+	f.calls = append(f.calls, "edit protection "+rule)
+	return nil
+}
+
+func (f *fakeAPI) DeleteBranchProtection(_ context.Context, _, _, rule string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.rules, rule)
+	f.calls = append(f.calls, "unprotect "+rule)
+	return nil
 }
 
 func (f *fakeAPI) GetOrg(_ context.Context, name string) (forgejo.Org, bool, error) {

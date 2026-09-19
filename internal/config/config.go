@@ -134,6 +134,15 @@ type Replication struct {
 	// who is in them. Without it, a repository owned by an organization a
 	// node hasn't got can't be copied there at all. Off by default.
 	Organizations bool `yaml:"organizations"`
+	// ProtectReplicas puts ForgeSync's own guard on every replica, so a
+	// replica can't be pushed to and people work on the primary. Phase 0
+	// (p02) found a repository's owner can delete a protection rule, so
+	// ForgeSync puts it back whenever it's gone or has been weakened. Off
+	// by default: it changes what users may do.
+	ProtectReplicas bool `yaml:"protect_replicas"`
+	// BranchProtection keeps the owner's own protection rules the same on
+	// every node. Off by default.
+	BranchProtection bool `yaml:"branch_protection"`
 	// ArchiveOrg is the private organization ForgeSync moves the copies of a
 	// repository deleted on its primary into. Default "forgesync-archive".
 	ArchiveOrg string `yaml:"archive_org"`

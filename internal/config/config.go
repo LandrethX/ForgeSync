@@ -97,9 +97,14 @@ type Replication struct {
 	// copies of a repository deleted on its primary. Default 30.
 	BackupDays int `yaml:"backup_days"`
 	// Issues replicates issues and their comments (title, body, state,
-	// labels, milestone) in both directions, merged per field, along with
-	// the repositories' own labels and milestones. Off by default.
+	// labels, milestone, assignees) in both directions, merged per field,
+	// along with the repositories' own labels and milestones. Off by default.
 	Issues bool `yaml:"issues"`
+	// Reactions also replicates the reactions on issues and comments, as
+	// the people who made them. Forgejo has no bulk endpoint for reactions,
+	// so this costs one API call per issue and per comment per node on
+	// every run; off by default, and it needs Issues.
+	Reactions bool `yaml:"reactions"`
 	// ArchiveOrg is the private organization ForgeSync moves the copies of a
 	// repository deleted on its primary into. Default "forgesync-archive".
 	ArchiveOrg string `yaml:"archive_org"`
@@ -369,6 +374,9 @@ func (c *Config) validate() error {
 		if u, err := url.Parse(c.Controller.URL); err != nil || !u.IsAbs() {
 			errs = append(errs, fmt.Errorf("controller.url %q: want an absolute URL", c.Controller.URL))
 		}
+	}
+	if c.Replication.Reactions && !c.Replication.Issues {
+		errs = append(errs, errors.New("replication.reactions needs replication.issues"))
 	}
 	if c.Health.Interval < time.Second {
 		errs = append(errs, errors.New("health.interval must be at least 1s"))

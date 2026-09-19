@@ -56,4 +56,7 @@ replication:
   # Issues and their comments, with the repositories' labels and
   # milestones, both directions (internal/issues).
   issues: true
+  # Reactions too: one API call per issue and per comment per node, which
+  # the test environment is small enough for.
+  reactions: true
   work_dir: /var/lib/forgesync/git

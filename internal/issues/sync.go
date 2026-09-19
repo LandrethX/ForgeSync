@@ -23,6 +23,12 @@ type API interface {
 		assignees []string) (forgejo.Issue, error)
 	SetIssueMilestone(ctx context.Context, owner, repo string, number, milestone int64) error
 	SetIssueAssignees(ctx context.Context, owner, repo string, number int64, logins []string) error
+	IssueReactions(ctx context.Context, owner, repo string, number int64, page, limit int) ([]forgejo.Reaction, error)
+	CommentReactions(ctx context.Context, owner, repo string, id int64, page, limit int) ([]forgejo.Reaction, error)
+	AddIssueReaction(ctx context.Context, owner, repo string, number int64, content string) error
+	RemoveIssueReaction(ctx context.Context, owner, repo string, number int64, content string) error
+	AddCommentReaction(ctx context.Context, owner, repo string, id int64, content string) error
+	RemoveCommentReaction(ctx context.Context, owner, repo string, id int64, content string) error
 	ListAssignees(ctx context.Context, owner, repo string) ([]forgejo.User, error)
 	ReplaceIssueLabels(ctx context.Context, owner, repo string, number int64, labels []int64) error
 	ListLabels(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.Label, error)
@@ -73,6 +79,10 @@ const ConflictKind = "issue_conflict"
 
 type Options struct {
 	Concurrency int // repositories in parallel
+	// Reactions also replicates the reactions on issues and comments.
+	// Forgejo has no bulk endpoint for them, so it costs one call per issue
+	// and per comment per node on every run; off by default.
+	Reactions bool
 	// EnsureUser makes an author exist on a node as on another, as for
 	// repository owners (replication.Engine.EnsureUser). nil: authors must
 	// exist already.
@@ -177,6 +187,10 @@ type snapshot struct {
 	// assignable are the logins the node lets an issue be assigned to:
 	// those with write access to the repository there.
 	assignable map[string]bool
+	// reactions and commentReactions are "<login>:<content>" sets, by the
+	// issue's and the comment's Forgejo id. Empty unless Options.Reactions.
+	reactions        map[int64]map[string]bool
+	commentReactions map[int64]map[string]bool
 }
 
 func (s *Syncer) read(ctx context.Context, n Node, owner, name string) (*snapshot, error) {
@@ -241,7 +255,84 @@ func (s *Syncer) read(ctx context.Context, n Node, owner, name string) (*snapsho
 			break
 		}
 	}
+	if s.opts.Reactions {
+		if err := s.readReactions(ctx, n, owner, name, sn); err != nil {
+			return nil, err
+		}
+	}
 	return sn, nil
+}
+
+// readReactions adds every issue's and comment's reactions to the snapshot.
+// Forgejo has no bulk endpoint for them, so this is one call each; they go
+// out a few at a time.
+func (s *Syncer) readReactions(ctx context.Context, n Node, owner, name string, sn *snapshot) error {
+	sn.reactions = make(map[int64]map[string]bool, len(sn.issues))
+	sn.commentReactions = make(map[int64]map[string]bool, len(sn.comments))
+	type job struct {
+		id      int64 // the issue's or the comment's Forgejo id
+		number  int64 // the issue's number, 0 for a comment
+		comment bool
+	}
+	jobs := make([]job, 0, len(sn.issues)+len(sn.comments))
+	for id, is := range sn.issues {
+		jobs = append(jobs, job{id: id, number: is.Number})
+	}
+	for id := range sn.comments {
+		jobs = append(jobs, job{id: id, comment: true})
+	}
+	workers := min(max(s.opts.Concurrency, 4), len(jobs))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var first error
+	next := make(chan job)
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range next {
+				set, err := s.reactionsOf(ctx, n, owner, name, j.id, j.number, j.comment)
+				mu.Lock()
+				switch {
+				case err != nil && first == nil:
+					first = err
+				case err == nil && j.comment:
+					sn.commentReactions[j.id] = set
+				case err == nil:
+					sn.reactions[j.id] = set
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, j := range jobs {
+		next <- j
+	}
+	close(next)
+	wg.Wait()
+	return first
+}
+
+func (s *Syncer) reactionsOf(ctx context.Context, n Node, owner, name string, id, number int64, comment bool) (map[string]bool, error) {
+	set := map[string]bool{}
+	for page := 1; ; page++ {
+		var list []forgejo.Reaction
+		var err error
+		if comment {
+			list, err = n.API.CommentReactions(ctx, owner, name, id, page, pageSize)
+		} else {
+			list, err = n.API.IssueReactions(ctx, owner, name, number, page, pageSize)
+		}
+		if err != nil {
+			return nil, err
+		}
+		for e := range reactionSet(list) {
+			set[e] = true
+		}
+		if len(list) < pageSize {
+			return set, nil
+		}
+	}
 }
 
 // run is one repository's replication pass.
@@ -744,6 +835,24 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 			return false, err
 		}
 	}
+	// Reactions last, so a copy made in this run gets them too.
+	if r.s.opts.Reactions {
+		have := map[string]map[string]bool{}
+		for n, c := range rec.Copies {
+			have[n] = r.snaps[n].reactions[c.ForgejoID]
+			if have[n] == nil {
+				have[n] = map[string]bool{} // a copy just made
+			}
+		}
+		rec.BaseReactions = r.syncReactions(ctx, ref, source, rec.BaseReactions, have,
+			func(ctx context.Context, n, login, content string, add bool) error {
+				api := r.s.nodes[n].As(login)
+				if add {
+					return api.AddIssueReaction(ctx, r.owner, r.name, rec.Copies[n].Number, content)
+				}
+				return api.RemoveIssueReaction(ctx, r.owner, r.name, rec.Copies[n].Number, content)
+			})
+	}
 	_, err = r.s.store.SaveIssue(ctx, *rec)
 	return false, err
 }
@@ -1008,6 +1117,23 @@ func (r *run) comment(ctx context.Context, c *store.CommentRecord, issue *store.
 		if _, err := r.s.store.SaveComment(ctx, *c); err != nil {
 			return err
 		}
+	}
+	if r.s.opts.Reactions {
+		have := map[string]map[string]bool{}
+		for n, id := range c.Copies {
+			have[n] = r.snaps[n].commentReactions[id]
+			if have[n] == nil {
+				have[n] = map[string]bool{} // a copy just made
+			}
+		}
+		c.BaseReactions = r.syncReactions(ctx, ref, source, c.BaseReactions, have,
+			func(ctx context.Context, n, login, content string, add bool) error {
+				api := r.s.nodes[n].As(login)
+				if add {
+					return api.AddCommentReaction(ctx, r.owner, r.name, c.Copies[n], content)
+				}
+				return api.RemoveCommentReaction(ctx, r.owner, r.name, c.Copies[n], content)
+			})
 	}
 	_, err := r.s.store.SaveComment(ctx, *c)
 	return err

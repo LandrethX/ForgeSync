@@ -951,21 +951,30 @@ func TestRepoItems(t *testing.T) {
 	// An issue's labels and milestone are remembered as item ids.
 	issue, err := s.SaveIssue(ctx, IssueRecord{RepositoryID: repo, OriginNode: "se", Author: "bob", CreatedAt: t0,
 		BaseTitle: "t", BaseState: "open", BaseLabels: label, BaseMilestone: milestone, BaseAssignees: "alice,bob",
-		Copies: map[string]IssueCopy{"se": {Number: 1, ForgejoID: 10}}})
+		BaseReactions: "alice:+1,bob:heart",
+		Copies:        map[string]IssueCopy{"se": {Number: 1, ForgejoID: 10}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	issues, _, _ := s.Issues(ctx, repo)
 	if len(issues) != 1 || issues[0].BaseLabels != label || issues[0].BaseMilestone != milestone ||
-		issues[0].BaseAssignees != "alice,bob" {
+		issues[0].BaseAssignees != "alice,bob" || issues[0].BaseReactions != "alice:+1,bob:heart" {
 		t.Errorf("issue = %+v", issues)
+	}
+	// A comment keeps its own reactions.
+	if _, err := s.SaveComment(ctx, CommentRecord{IssueID: issue, OriginNode: "se", Author: "bob", CreatedAt: t0,
+		BaseBody: "hi", BaseReactions: "carol:rocket", Copies: map[string]int64{"se": 99}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, comments, _ := s.Issues(ctx, repo); len(comments) != 1 || comments[0].BaseReactions != "carol:rocket" {
+		t.Errorf("comment = %+v", comments)
 	}
 	if _, err := s.SaveIssue(ctx, IssueRecord{ID: issue, BaseTitle: "t", BaseState: "open",
 		Copies: map[string]IssueCopy{"se": {Number: 1, ForgejoID: 10}}}); err != nil {
 		t.Fatal(err)
 	}
 	if issues, _, _ := s.Issues(ctx, repo); issues[0].BaseLabels != "" || issues[0].BaseMilestone != "" ||
-		issues[0].BaseAssignees != "" {
+		issues[0].BaseAssignees != "" || issues[0].BaseReactions != "" {
 		t.Errorf("labels not cleared: %+v", issues[0])
 	}
 

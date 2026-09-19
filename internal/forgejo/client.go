@@ -688,6 +688,55 @@ func (c *Client) DeleteIssueComment(ctx context.Context, owner, repo string, id 
 	return err
 }
 
+// Reaction is one person's reaction to an issue or a comment
+// (modules/structs/issue_reaction.go).
+type Reaction struct {
+	User    User      `json:"user"`
+	Content string    `json:"content"`
+	Created time.Time `json:"created_at"`
+}
+
+// IssueReactions returns one page of an issue's reactions.
+func (c *Client) IssueReactions(ctx context.Context, owner, repo string, number int64, page, limit int) ([]Reaction, error) {
+	return c.reactions(ctx, fmt.Sprintf("%s/issues/%d/reactions", repoPath(owner, repo), number), page, limit)
+}
+
+// CommentReactions returns one page of a comment's reactions.
+func (c *Client) CommentReactions(ctx context.Context, owner, repo string, id int64, page, limit int) ([]Reaction, error) {
+	return c.reactions(ctx, fmt.Sprintf("%s/issues/comments/%d/reactions", repoPath(owner, repo), id), page, limit)
+}
+
+func (c *Client) reactions(ctx context.Context, path string, page, limit int) ([]Reaction, error) {
+	var out []Reaction
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s?page=%d&limit=%d", path, page, limit), true, nil, &out)
+	return out, err
+}
+
+// AddIssueReaction reacts to an issue as the client's user (Sudo picks who).
+// Reacting again is not an error.
+func (c *Client) AddIssueReaction(ctx context.Context, owner, repo string, number int64, content string) error {
+	return c.do(ctx, http.MethodPost, fmt.Sprintf("%s/issues/%d/reactions", repoPath(owner, repo), number), true,
+		map[string]string{"content": content}, nil)
+}
+
+// RemoveIssueReaction takes that reaction away again.
+func (c *Client) RemoveIssueReaction(ctx context.Context, owner, repo string, number int64, content string) error {
+	return c.do(ctx, http.MethodDelete, fmt.Sprintf("%s/issues/%d/reactions", repoPath(owner, repo), number), true,
+		map[string]string{"content": content}, nil)
+}
+
+// AddCommentReaction reacts to a comment as the client's user.
+func (c *Client) AddCommentReaction(ctx context.Context, owner, repo string, id int64, content string) error {
+	return c.do(ctx, http.MethodPost, fmt.Sprintf("%s/issues/comments/%d/reactions", repoPath(owner, repo), id), true,
+		map[string]string{"content": content}, nil)
+}
+
+// RemoveCommentReaction takes that reaction away again.
+func (c *Client) RemoveCommentReaction(ctx context.Context, owner, repo string, id int64, content string) error {
+	return c.do(ctx, http.MethodDelete, fmt.Sprintf("%s/issues/comments/%d/reactions", repoPath(owner, repo), id), true,
+		map[string]string{"content": content}, nil)
+}
+
 // Label is a repository label (modules/structs/issue_label.go). Color comes
 // back without the leading #.
 type Label struct {

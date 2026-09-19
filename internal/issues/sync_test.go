@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -30,13 +31,21 @@ type fakeNode struct {
 	labels     map[int64]*forgejo.Label
 	milestones map[int64]*forgejo.Milestone
 	assignable map[string]bool // who the node would let an issue be assigned to
+	// reactions are "<login>:<content>" sets, by issue number and comment id.
+	reactions        map[int64]map[string]bool
+	commentReactions map[int64]map[string]bool
+	// refuses is a login the node won't let react, standing in for a person
+	// ForgeSync can't create there.
+	refuses string
 }
 
 func newFakeNode(name string) *fakeNode {
 	return &fakeNode{name: name, issues: map[int64]*forgejo.Issue{}, comments: map[int64]*forgejo.IssueComment{},
 		labels: map[int64]*forgejo.Label{}, milestones: map[int64]*forgejo.Milestone{},
-		assignable: map[string]bool{"alice": true, "bob": true, "carol": true},
-		nextID:     map[string]int64{"se": 1000, "dk": 2000, "de": 3000}[name], clock: time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)}
+		assignable:       map[string]bool{"alice": true, "bob": true, "carol": true},
+		reactions:        map[int64]map[string]bool{},
+		commentReactions: map[int64]map[string]bool{},
+		nextID:           map[string]int64{"se": 1000, "dk": 2000, "de": 3000}[name], clock: time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)}
 }
 
 func (f *fakeNode) tick() time.Time { f.clock = f.clock.Add(time.Second); return f.clock }
@@ -93,6 +102,20 @@ func (f *fakeNode) byTitle(title string) *forgejo.Issue {
 		}
 	}
 	return nil
+}
+
+// commentIDs is the ids of an issue's comments on the node, in order.
+func (f *fakeNode) commentIDs(number int64) []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var ids []int64
+	for _, c := range f.comments {
+		if c.IssueNumber() == number {
+			ids = append(ids, c.ID)
+		}
+	}
+	slices.Sort(ids)
+	return ids
 }
 
 func (f *fakeNode) commentsOn(number int64) []string {
@@ -190,6 +213,98 @@ func (a fakeAPI) ListAssignees(_ context.Context, _, _ string) ([]forgejo.User, 
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeNode) set(comment bool, id int64) map[string]bool {
+	m := f.reactions
+	if comment {
+		m = f.commentReactions
+	}
+	if m[id] == nil {
+		m[id] = map[string]bool{}
+	}
+	return m[id]
+}
+
+// react is a person reacting on the node.
+func (f *fakeNode) react(number int64, login, content string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.set(false, number)[login+":"+content] = true
+}
+
+// unreact is that person taking it back.
+func (f *fakeNode) unreact(number int64, login, content string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.set(false, number), login+":"+content)
+}
+
+// reactionsOn is an issue's reactions on the node, sorted.
+func (f *fakeNode) reactionsOn(number int64) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return reactionValue(f.set(false, number))
+}
+
+// commentReactionsOn is a comment's, by its id on the node.
+func (f *fakeNode) commentReactionsOn(id int64) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return reactionValue(f.set(true, id))
+}
+
+func (f *fakeNode) list(comment bool, id int64, page int) ([]forgejo.Reaction, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if page > 1 {
+		return nil, nil
+	}
+	var out []forgejo.Reaction
+	for e := range f.set(comment, id) {
+		login, content := who(e)
+		out = append(out, forgejo.Reaction{User: forgejo.User{Login: login}, Content: content})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].User.Login < out[j].User.Login })
+	return out, nil
+}
+
+func (a fakeAPI) change(comment bool, id int64, content string, add bool) error {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	if a.as == a.n.refuses {
+		return fmt.Errorf("%s isn't a user on %s", a.as, a.n.name)
+	}
+	what := "reaction"
+	if comment {
+		what = "comment reaction"
+	}
+	a.n.writes = append(a.n.writes, fmt.Sprintf("%s %d", what, id))
+	if add {
+		a.n.set(comment, id)[a.as+":"+content] = true
+	} else {
+		delete(a.n.set(comment, id), a.as+":"+content)
+	}
+	return nil
+}
+
+func (a fakeAPI) IssueReactions(_ context.Context, _, _ string, number int64, page, _ int) ([]forgejo.Reaction, error) {
+	return a.n.list(false, number, page)
+}
+func (a fakeAPI) CommentReactions(_ context.Context, _, _ string, id int64, page, _ int) ([]forgejo.Reaction, error) {
+	return a.n.list(true, id, page)
+}
+func (a fakeAPI) AddIssueReaction(_ context.Context, _, _ string, number int64, content string) error {
+	return a.change(false, number, content, true)
+}
+func (a fakeAPI) RemoveIssueReaction(_ context.Context, _, _ string, number int64, content string) error {
+	return a.change(false, number, content, false)
+}
+func (a fakeAPI) AddCommentReaction(_ context.Context, _, _ string, id int64, content string) error {
+	return a.change(true, id, content, true)
+}
+func (a fakeAPI) RemoveCommentReaction(_ context.Context, _, _ string, id int64, content string) error {
+	return a.change(true, id, content, false)
 }
 
 // assignees is an issue's assignees on the node, sorted.

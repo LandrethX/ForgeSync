@@ -25,23 +25,28 @@ type IssueRecord struct {
 	// BaseLabels is the sorted, comma-separated ids of its labels' items;
 	// BaseMilestone its milestone's item id or ""; BaseAssignees the sorted,
 	// comma-separated logins of its assignees.
-	BaseLabels    string               `json:"-"`
-	BaseMilestone string               `json:"-"`
-	BaseAssignees string               `json:"-"`
+	BaseLabels    string `json:"-"`
+	BaseMilestone string `json:"-"`
+	BaseAssignees string `json:"-"`
+	// BaseReactions is the sorted "<login>:<content>" pairs of its
+	// reactions, comma-separated.
+	BaseReactions string               `json:"-"`
 	DeletedAt     *time.Time           `json:"deleted_at,omitempty"` // deleted on the primary
 	Copies        map[string]IssueCopy `json:"copies"`
 }
 
 // CommentRecord is one replicated comment.
 type CommentRecord struct {
-	ID         string           `json:"id"`
-	IssueID    string           `json:"issue_id"`
-	OriginNode string           `json:"origin_node"`
-	Author     string           `json:"author"`
-	CreatedAt  time.Time        `json:"created_at"`
-	BaseBody   string           `json:"-"`
-	DeletedAt  *time.Time       `json:"deleted_at,omitempty"` // deleted on the primary
-	Copies     map[string]int64 `json:"copies"`               // node -> Forgejo comment id
+	ID         string    `json:"id"`
+	IssueID    string    `json:"issue_id"`
+	OriginNode string    `json:"origin_node"`
+	Author     string    `json:"author"`
+	CreatedAt  time.Time `json:"created_at"`
+	BaseBody   string    `json:"-"`
+	// BaseReactions is as on an issue: sorted "<login>:<content>" pairs.
+	BaseReactions string           `json:"-"`
+	DeletedAt     *time.Time       `json:"deleted_at,omitempty"` // deleted on the primary
+	Copies        map[string]int64 `json:"copies"`               // node -> Forgejo comment id
 }
 
 // Issues returns a repository's replicated issues and their comments.
@@ -51,7 +56,7 @@ func (s *Store) Issues(ctx context.Context, repositoryID string) ([]IssueRecord,
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT i.id::text, i.origin_node, i.author, i.created_at, i.base_title, i.base_body, i.base_state, i.deleted_at,
-			i.base_labels, i.base_milestone, i.base_assignees, c.node, c.number, c.forgejo_id
+			i.base_labels, i.base_milestone, i.base_assignees, i.base_reactions, c.node, c.number, c.forgejo_id
 		FROM issues i LEFT JOIN issue_copies c ON c.issue_id = i.id
 		WHERE i.repository_id = $1::uuid
 		ORDER BY i.created_at, i.id, c.node`, repositoryID)
@@ -64,7 +69,7 @@ func (s *Store) Issues(ctx context.Context, repositoryID string) ([]IssueRecord,
 		var node *string
 		var number, fid *int64
 		if err := rows.Scan(&r.ID, &r.OriginNode, &r.Author, &r.CreatedAt, &r.BaseTitle, &r.BaseBody, &r.BaseState, &r.DeletedAt,
-			&r.BaseLabels, &r.BaseMilestone, &r.BaseAssignees, &node, &number, &fid); err != nil {
+			&r.BaseLabels, &r.BaseMilestone, &r.BaseAssignees, &r.BaseReactions, &node, &number, &fid); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
@@ -82,7 +87,8 @@ func (s *Store) Issues(ctx context.Context, repositoryID string) ([]IssueRecord,
 	}
 
 	rows, err = s.pool.Query(ctx, `
-		SELECT m.id::text, m.issue_id::text, m.origin_node, m.author, m.created_at, m.base_body, m.deleted_at, c.node, c.forgejo_id
+		SELECT m.id::text, m.issue_id::text, m.origin_node, m.author, m.created_at, m.base_body, m.base_reactions,
+			m.deleted_at, c.node, c.forgejo_id
 		FROM issue_comments m JOIN issues i ON i.id = m.issue_id
 		LEFT JOIN issue_comment_copies c ON c.comment_id = m.id
 		WHERE i.repository_id = $1::uuid
@@ -96,7 +102,8 @@ func (s *Store) Issues(ctx context.Context, repositoryID string) ([]IssueRecord,
 		var c CommentRecord
 		var node *string
 		var fid *int64
-		if err := rows.Scan(&c.ID, &c.IssueID, &c.OriginNode, &c.Author, &c.CreatedAt, &c.BaseBody, &c.DeletedAt, &node, &fid); err != nil {
+		if err := rows.Scan(&c.ID, &c.IssueID, &c.OriginNode, &c.Author, &c.CreatedAt, &c.BaseBody, &c.BaseReactions,
+			&c.DeletedAt, &node, &fid); err != nil {
 			return nil, nil, err
 		}
 		if len(comments) == 0 || comments[len(comments)-1].ID != c.ID {
@@ -121,16 +128,17 @@ func (s *Store) SaveIssue(ctx context.Context, r IssueRecord) (string, error) {
 	if r.ID == "" {
 		err = tx.QueryRow(ctx, `
 			INSERT INTO issues (repository_id, origin_node, author, created_at, base_title, base_body, base_state, deleted_at,
-				base_labels, base_milestone, base_assignees)
-			VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id::text`,
+				base_labels, base_milestone, base_assignees, base_reactions)
+			VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id::text`,
 			r.RepositoryID, r.OriginNode, r.Author, r.CreatedAt, r.BaseTitle, r.BaseBody, r.BaseState, r.DeletedAt,
-			r.BaseLabels, r.BaseMilestone, r.BaseAssignees).Scan(&r.ID)
+			r.BaseLabels, r.BaseMilestone, r.BaseAssignees, r.BaseReactions).Scan(&r.ID)
 	} else {
 		_, err = tx.Exec(ctx, `
 			UPDATE issues SET base_title = $2, base_body = $3, base_state = $4, deleted_at = $5,
-				base_labels = $6, base_milestone = $7, base_assignees = $8, updated_at = now()
+				base_labels = $6, base_milestone = $7, base_assignees = $8, base_reactions = $9, updated_at = now()
 			WHERE id = $1::uuid`,
-			r.ID, r.BaseTitle, r.BaseBody, r.BaseState, r.DeletedAt, r.BaseLabels, r.BaseMilestone, r.BaseAssignees)
+			r.ID, r.BaseTitle, r.BaseBody, r.BaseState, r.DeletedAt, r.BaseLabels, r.BaseMilestone, r.BaseAssignees,
+			r.BaseReactions)
 	}
 	if err != nil {
 		return "", err
@@ -164,12 +172,12 @@ func (s *Store) SaveComment(ctx context.Context, c CommentRecord) (string, error
 	defer tx.Rollback(ctx)
 	if c.ID == "" {
 		err = tx.QueryRow(ctx, `
-			INSERT INTO issue_comments (issue_id, origin_node, author, created_at, base_body, deleted_at)
-			VALUES ($1::uuid, $2, $3, $4, $5, $6) RETURNING id::text`,
-			c.IssueID, c.OriginNode, c.Author, c.CreatedAt, c.BaseBody, c.DeletedAt).Scan(&c.ID)
+			INSERT INTO issue_comments (issue_id, origin_node, author, created_at, base_body, deleted_at, base_reactions)
+			VALUES ($1::uuid, $2, $3, $4, $5, $6, $7) RETURNING id::text`,
+			c.IssueID, c.OriginNode, c.Author, c.CreatedAt, c.BaseBody, c.DeletedAt, c.BaseReactions).Scan(&c.ID)
 	} else {
-		_, err = tx.Exec(ctx, `UPDATE issue_comments SET base_body = $2, deleted_at = $3 WHERE id = $1::uuid`,
-			c.ID, c.BaseBody, c.DeletedAt)
+		_, err = tx.Exec(ctx, `UPDATE issue_comments SET base_body = $2, deleted_at = $3, base_reactions = $4
+			WHERE id = $1::uuid`, c.ID, c.BaseBody, c.DeletedAt, c.BaseReactions)
 	}
 	if err != nil {
 		return "", err

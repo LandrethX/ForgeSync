@@ -16,6 +16,9 @@ developing ForgeSync, running on Docker Desktop for macOS.
 | `forgesync` | http://forgesync.test:8090 | The ForgeSync controller and admin UI, built from this repository |
 | `forgesync-b` | http://forgesync-b.test:8091 | A second controller sharing the database, on standby (`setup.sh --standby`) |
 
+This is the environment for trying things and for developing. To run ForgeSync properly,
+natively on Debian, see [../prod/README.md](../prod/README.md).
+
 Versions are pinned in `.env`: Forgejo 16 (current LTS) and Keycloak 26.7.4. Both images
 run natively on Apple Silicon.
 
@@ -53,6 +56,41 @@ The names must be the same everywhere, because SceneID's issuer URL and the redi
 checked exactly. Pass `PUBLIC_BIND=0.0.0.0` to every later `docker compose ... up` as well:
 a container recreated without it is published on localhost only. The test credentials are public (they're in this repository), so only do this on
 a network you trust.
+
+### Or address it by one host or IP, with no hosts file at all
+
+```sh
+PUBLIC_BIND=0.0.0.0 PUBLIC_HOST=10.0.0.5 ./setup.sh --all --standby
+```
+
+`PUBLIC_HOST` makes everything a browser sees use that name instead of the `*.test` ones:
+Keycloak's hostname, the nodes' `ROOT_URL` and their SceneID login sources, both
+controllers' issuer, redirect and webhook URLs, and the callbacks registered with the realm.
+It has to be one name everywhere — OIDC checks the issuer in the token against the one the
+controller was configured with — and the `*.test` aliases keep working inside the compose
+network, which is what container-to-container traffic uses either way. Pass the same
+`PUBLIC_HOST` to every later `docker compose ... up` and to the scripts below.
+
+## The other scripts
+
+```sh
+./check-dismissal.sh           # does conflict dismissal work, end to end?
+./scale.sh make 200            # 200 repositories on SE, to measure a round
+./scale.sh drop                # and away again
+```
+
+`check-dismissal.sh` makes a conflict ForgeSync can't settle (an Actions secret on one
+node, which it may not read let alone copy), dismisses it, and checks the four things that
+matter: the dashboard stops counting it, a fresh round leaves it dismissed, it comes back
+when what it says changes, and it clears when the difference goes away. It cleans up after
+itself, picks a repository whose Actions are on, and takes a few minutes because it waits
+for five scan rounds.
+
+`scale.sh` is for finding out what a round costs at a size you care about; the numbers from
+203 repositories on five nodes are in CLAUDE.md under "What it costs at scale". Deleting
+them exercises the archive flow on every other node, which is worth watching once.
+
+Both take `PUBLIC_HOST=<host or IP>` when the environment isn't on the `*.test` names.
 
 ## Usage
 

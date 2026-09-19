@@ -60,7 +60,11 @@ echo "wrote $out ($(du -h "$out" | cut -f1))"
 if [ -n "$verify" ]; then
   scratch="forgesync_verify_$stamp"
   admin=${url%/*}/postgres
-  psql --dbname="$admin" -qc "CREATE DATABASE \"$scratch\"" >/dev/null
+  if ! psql --dbname="$admin" -qc "CREATE DATABASE \"$scratch\"" 2>/dev/null; then
+    echo "can't verify: this role may not create a database." >&2
+    echo "Either grant it (ALTER ROLE forgesync CREATEDB) or verify with a role that can." >&2
+    exit 1
+  fi
   trap 'psql --dbname="$admin" -qc "DROP DATABASE IF EXISTS \"$scratch\"" >/dev/null || true' EXIT
   pg_restore --dbname="${url%/*}/$scratch" --no-owner "$out" >/dev/null
   counts=$(psql --dbname="${url%/*}/$scratch" -At -c "

@@ -337,25 +337,35 @@ func run(configPath string) error {
 	// reverse proxy the proxy talks HTTP to it, while a browser reaching
 	// it directly wants HTTPS, and an installation can have both.
 	var servers []*http.Server
-	if addr := cfg.HTTP.HTTPSListen(); addr != "" {
-		certs, err := newCertificates(cfg.HTTP.TLSCertFile, cfg.HTTP.TLSKeyFile)
-		if err != nil {
-			return err
-		}
-		// A certificate is renewed more often than a controller is
-		// restarted, so SIGHUP re-reads the pair in place.
-		hup := make(chan os.Signal, 1)
-		signal.Notify(hup, syscall.SIGHUP)
-		defer signal.Stop(hup)
-		go func() {
-			for range hup {
+	// SIGHUP re-reads the TLS certificate in place, because one is renewed
+	// far more often than a controller is restarted. The handler is always
+	// installed, TLS or not: without it Go's default would end the
+	// process, so `systemctl reload` on a controller behind a proxy would
+	// restart it and move leadership for nothing.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	var certs *certificates
+	go func() {
+		for range hup {
+			switch {
+			case certs == nil:
+				log.Info("reload: nothing to re-read (no certificate configured)")
+			default:
 				if err := certs.reload(); err != nil {
 					log.Error("re-reading the certificate failed; keeping the one in use", "error", err)
 					continue
 				}
 				log.Info("certificate re-read", "file", cfg.HTTP.TLSCertFile)
 			}
-		}()
+		}
+	}()
+	if addr := cfg.HTTP.HTTPSListen(); addr != "" {
+		var err error
+		certs, err = newCertificates(cfg.HTTP.TLSCertFile, cfg.HTTP.TLSKeyFile)
+		if err != nil {
+			return err
+		}
 		tlsSrv := &http.Server{ // the same handler and timeouts
 			Addr: addr, Handler: srv.Handler,
 			TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: certs.get},

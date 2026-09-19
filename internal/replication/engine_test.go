@@ -32,6 +32,9 @@ type memStore struct {
 	wikiRefs  map[string]map[string]string
 	// packageBase is what the nodes last agreed each owner's packages are.
 	packageBase map[string]string
+	// createdAccounts are the accounts ForgeSync made, "<node>:<login>",
+	// which never count as where someone registered.
+	createdAccounts []string
 	// onSave, if set, runs whenever a replica's state is saved.
 	onSave func()
 }
@@ -221,6 +224,7 @@ func (m *memStore) NoteCreatedAccount(_ context.Context, node, login string) err
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.audit = append(m.audit, "noted "+node+"/"+login)
+	m.createdAccounts = append(m.createdAccounts, node+":"+login)
 	return nil
 }
 func (m *memStore) SaveReplicaSync(_ context.Context, st store.ReplicaSync, refs map[string]string) error {

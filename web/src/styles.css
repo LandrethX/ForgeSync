@@ -702,6 +702,27 @@ td.details {
   margin-top: 0.25rem;
 }
 
+/* A form laid out one field under another: adding a user. */
+.stack {
+  display: grid;
+  gap: 0.9rem;
+  max-width: 34rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.field label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.field .small {
+  margin: 0;
+}
+
 .break-glass {
   margin-top: 0.75rem;
   border-top: 1px solid var(--border);

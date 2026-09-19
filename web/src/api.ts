@@ -154,6 +154,13 @@ export interface User {
   accounts: UserAccount[];
 }
 
+/** What creating an account did on each node. */
+export interface UserWrite {
+  login: string;
+  created: string[];
+  refused?: Record<string, string>;
+}
+
 export interface NodeWebhook {
   node: string;
   installed: boolean;
@@ -491,6 +498,15 @@ export const api = {
   webhooks: () => request<WebhookStatus>("GET", "/webhooks"),
   replicationSources: () =>
     request<ReplicationSources>("GET", "/replication/sources"),
+  addUser: (u: {
+    login: string;
+    subject: string;
+    full_name?: string;
+    email?: string;
+    home: string;
+  }) => request<UserWrite>("POST", "/users", u),
+  provisionUser: (id: string) =>
+    request<UserWrite>("POST", `/users/${encodeURIComponent(id)}/nodes`),
   users: (q?: string) =>
     request<{ total: number; items: User[] }>(
       "GET",

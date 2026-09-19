@@ -309,6 +309,7 @@ func run(configPath string) error {
 			Leader:              elector,
 			Inventory:           scanner,
 			Replication:         replicator,
+			Users:               userProvisioner(engine),
 			ReplicationFeatures: replicationFeatures(cfg),
 			DB:                  db,
 			Log:                 log,
@@ -427,4 +428,22 @@ func replicationFeatures(cfg *config.Config) []string {
 	add(r.BranchProtection, "branch protection")
 	add(r.Actions, "Actions variables")
 	return features
+}
+
+// userProvisioner is the engine, or nil when replication is off: without
+// node tokens ForgeSync can't create an account anywhere.
+func userProvisioner(engine *replication.Engine) api.UserProvisioner {
+	if engine == nil {
+		return nil
+	}
+	return userAdmin{engine}
+}
+
+// userAdmin adapts the engine's own types to the API's, so the API
+// package doesn't depend on the replication package's options.
+type userAdmin struct{ *replication.Engine }
+
+func (u userAdmin) CreateUser(ctx context.Context, login, subject, fullName, email, home string) ([]string, map[string]string, error) {
+	return u.Engine.CreateUser(ctx, replication.NewUser{
+		Login: login, Subject: subject, FullName: fullName, Email: email, Home: home})
 }

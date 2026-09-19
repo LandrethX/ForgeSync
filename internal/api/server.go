@@ -92,6 +92,9 @@ type Server struct {
 	Leader           Leadership
 	Inventory        Inventory
 	Replication      Replicator // nil when replication is off
+	// Users creates accounts on the nodes for Administrators; nil when
+	// replication is off, since then ForgeSync has no node tokens.
+	Users UserProvisioner
 	// ReplicationFeatures names what replication covers besides branches
 	// and tags ("issues", "releases", ...), in reading order.
 	ReplicationFeatures []string
@@ -177,6 +180,8 @@ func (s *Server) Handler() http.Handler {
 				r.With(requireRole(auth.Operator)).Post("/inventory/scan", s.scanNow)
 				r.With(requireRole(auth.Administrator)).Put("/repositories/{id}/primary", s.setPrimary)
 				r.With(requireRole(auth.Administrator)).Put("/users/{id}/home", s.setUserHome)
+				r.With(requireRole(auth.Administrator)).Post("/users", s.createUser)
+				r.With(requireRole(auth.Administrator)).Post("/users/{id}/nodes", s.provisionUser)
 				r.With(requireRole(auth.Operator)).Post("/repositories/{id}/replicate", s.replicateNow)
 			})
 			// The history shows who signed in from where: operators and up.

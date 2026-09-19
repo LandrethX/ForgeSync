@@ -976,3 +976,59 @@ func TestRepoItems(t *testing.T) {
 		t.Errorf("left after deleting: %+v", items)
 	}
 }
+
+func TestLeadership(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Nobody has ever led.
+	l, err := s.Leadership(ctx)
+	if err != nil || l.Holder != "" || l.Held() {
+		t.Fatalf("empty leadership = %+v, %v", l, err)
+	}
+
+	a, err := s.AcquireLease(ctx, "aaa", "forgesync-a", "http://a:8090", time.Minute)
+	if err != nil || a.Holder != "aaa" || !a.Held() || a.For() > time.Minute {
+		t.Fatalf("a = %+v, %v", a, err)
+	}
+	// The other controller doesn't get it while the lease is in force, and
+	// learns who has it.
+	b, err := s.AcquireLease(ctx, "bbb", "forgesync-b", "http://b:8091", time.Minute)
+	if err != nil || b.Holder != "aaa" || b.Name != "forgesync-a" || b.URL != "http://a:8090" {
+		t.Fatalf("b = %+v, %v", b, err)
+	}
+	// Renewing keeps the same leadership: acquired_at doesn't move.
+	again, err := s.AcquireLease(ctx, "aaa", "forgesync-a", "http://a:8090", time.Minute)
+	if err != nil || !again.AcquiredAt.Equal(a.AcquiredAt) || !again.RenewedAt.After(a.RenewedAt) {
+		t.Fatalf("renewed = %+v (was %+v), %v", again, a, err)
+	}
+
+	// Once it has run out, the other one takes over.
+	if _, err := s.AcquireLease(ctx, "aaa", "forgesync-a", "http://a:8090", -time.Second); err != nil {
+		t.Fatal(err)
+	}
+	b, err = s.AcquireLease(ctx, "bbb", "forgesync-b", "http://b:8091", time.Minute)
+	if err != nil || b.Holder != "bbb" || !b.Held() || !b.AcquiredAt.After(a.AcquiredAt) {
+		t.Fatalf("takeover = %+v, %v", b, err)
+	}
+	// Giving it up lets the other in at once.
+	if err := s.ReleaseLease(ctx, "bbb"); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := s.Leadership(ctx); l.Held() {
+		t.Errorf("still held after release: %+v", l)
+	}
+	a, err = s.AcquireLease(ctx, "aaa", "forgesync-a", "http://a:8090", time.Minute)
+	if err != nil || a.Holder != "aaa" || !a.Held() {
+		t.Fatalf("after release = %+v, %v", a, err)
+	}
+	// Releasing is only ever one's own lease.
+	if err := s.ReleaseLease(ctx, "bbb"); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := s.Leadership(ctx); !l.Held() || l.Holder != "aaa" {
+		t.Errorf("someone else's release took the lease away: %+v", l)
+	}
+}

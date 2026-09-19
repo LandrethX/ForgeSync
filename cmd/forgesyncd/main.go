@@ -26,6 +26,7 @@ import (
 	"scenegit.org/forgesync/internal/health"
 	"scenegit.org/forgesync/internal/inventory"
 	"scenegit.org/forgesync/internal/issues"
+	"scenegit.org/forgesync/internal/leader"
 	"scenegit.org/forgesync/internal/replication"
 	"scenegit.org/forgesync/internal/store"
 	"scenegit.org/forgesync/internal/webhook"
@@ -72,6 +73,16 @@ func run(configPath string) error {
 		log.Info("applied database migration", "migration", name)
 	}
 
+	// One controller acts at a time. On its own it simply holds the lease
+	// from the start; with a second one, whichever holds it does the work
+	// and the other stands by, ready to take over when it runs out.
+	elector := leader.New(db, leader.Options{
+		Holder: leader.NewHolderID(), Name: cfg.Controller.Name, URL: cfg.Controller.URL,
+		TTL: cfg.Controller.Lease, Renew: cfg.Controller.Renew,
+	}, log)
+	log.Info("controller", "name", cfg.Controller.Name, "url", cfg.Controller.URL,
+		"lease", cfg.Controller.Lease, "renew", cfg.Controller.Renew)
+
 	var records []store.NodeRecord
 	var infos []api.NodeInfo
 	var targets []health.Target
@@ -108,7 +119,7 @@ func run(configPath string) error {
 		Interval:         cfg.Health.Interval,
 		Timeout:          cfg.Health.Timeout,
 		FailureThreshold: cfg.Health.FailureThreshold,
-	}, db, log)
+	}, leaderRecorder{db, elector.Leading}, log)
 	var scanner *inventory.Scanner
 	var engine *replication.Engine
 	if cfg.Replication.Enabled {
@@ -192,20 +203,39 @@ func run(configPath string) error {
 		if issueSync != nil {
 			dispatch.Issues = issueSync
 		}
-		hooks = &webhook.Receiver{Secret: cfg.Webhooks.Secret, ServiceUsers: serviceUsers, Dispatch: dispatch,
-			Tracker: hookStatus, Log: log, Context: ctx}
+		// A standby doesn't act on what the nodes report: the hooks point
+		// at whichever controller is leading, and the leader's own scans
+		// pick up anything that arrived at the wrong one.
+		hooks = &webhook.Receiver{Secret: cfg.Webhooks.Secret, ServiceUsers: serviceUsers,
+			Dispatch: leaderDispatcher{dispatch, elector.Leading, log},
+			Tracker:  hookStatus, Log: log, Context: ctx}
 		log.Info("webhooks enabled", "url", cfg.Webhooks.URL, "events", webhook.Events)
 	}
 	monitorDone := make(chan struct{})
 	go func() {
 		var wg sync.WaitGroup
-		wg.Add(2)
+		wg.Add(3)
+		go func() { defer wg.Done(); elector.Run(ctx) }()
+		// The health monitor runs on both controllers, so the standby's
+		// pages are live too; only the leader writes what it finds (see
+		// leaderRecorder).
 		go func() { defer wg.Done(); monitor.Run(ctx) }()
-		go func() { defer wg.Done(); scanner.Run(ctx) }()
-		if installer != nil {
-			wg.Add(1)
-			go func() { defer wg.Done(); installer.Run(ctx) }()
-		}
+		// Everything that changes a node or decides anything runs only
+		// while this controller holds the lease, and stops the moment it
+		// doesn't.
+		go func() {
+			defer wg.Done()
+			elector.Supervise(ctx, func(lctx context.Context) {
+				var lwg sync.WaitGroup
+				lwg.Add(1)
+				go func() { defer lwg.Done(); scanner.Run(lctx) }()
+				if installer != nil {
+					lwg.Add(1)
+					go func() { defer lwg.Done(); installer.Run(lctx) }()
+				}
+				lwg.Wait()
+			})
+		}()
 		wg.Wait()
 		close(monitorDone)
 	}()
@@ -244,6 +274,7 @@ func run(configPath string) error {
 			AllowTokenSignIn: cfg.OIDC.AllowTokenSignIn,
 			Nodes:            infos,
 			Health:           monitor,
+			Leader:           elector,
 			Inventory:        scanner,
 			Replication:      replicator,
 			DB:               db,
@@ -291,6 +322,37 @@ func newLogger(c config.Log) *slog.Logger {
 		return slog.New(slog.NewJSONHandler(os.Stderr, opts))
 	}
 	return slog.New(slog.NewTextHandler(os.Stderr, opts))
+}
+
+// leaderRecorder keeps the node history one controller's story. Both watch
+// the nodes, so both can show them, but a state change is written once, by
+// whichever is acting.
+type leaderRecorder struct {
+	rec     health.Recorder
+	leading func() bool
+}
+
+func (l leaderRecorder) RecordNodeStatus(ctx context.Context, s health.Status, prev health.State) error {
+	if !l.leading() {
+		return nil
+	}
+	return l.rec.RecordNodeStatus(ctx, s, prev)
+}
+
+// leaderDispatcher drops what the nodes report unless this controller is
+// the one acting.
+type leaderDispatcher struct {
+	to      webhook.Dispatcher
+	leading func() bool
+	log     *slog.Logger
+}
+
+func (d leaderDispatcher) Changed(ctx context.Context, c webhook.Change) {
+	if !d.leading() {
+		d.log.Debug("webhook ignored: this controller is on standby", "repository", c.Repository, "node", c.Node)
+		return
+	}
+	d.to.Changed(ctx, c)
 }
 
 // statusOrNil keeps a nil tracker a nil interface, so the API reports

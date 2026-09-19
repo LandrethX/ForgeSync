@@ -5,6 +5,15 @@
 #
 # The browser reaches the UI as http://forgesync.test:8090; add that name to
 # /etc/hosts next to the others (see README.md).
+# Two controllers can share this database: whichever holds the leadership
+# lease does the work and the other stands by. setup.sh --standby starts a
+# second one (forgesync-b) from this file; see README.md.
+controller:
+  name: forgesync-a
+  url: http://forgesync.test:8090
+  # Short for the test environment, so a failover is quick to watch.
+  lease: 10s
+  renew: 3s
 log:
   level: info
   format: text

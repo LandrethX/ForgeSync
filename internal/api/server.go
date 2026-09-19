@@ -26,6 +26,7 @@ import (
 	"scenegit.org/forgesync/internal/auth"
 	"scenegit.org/forgesync/internal/buildinfo"
 	"scenegit.org/forgesync/internal/health"
+	"scenegit.org/forgesync/internal/leader"
 	"scenegit.org/forgesync/internal/store"
 	"scenegit.org/forgesync/internal/webhook"
 )
@@ -55,6 +56,12 @@ type DB interface {
 	Audit(ctx context.Context, actor, action, target string, details map[string]any) error
 }
 
+// Leadership is the controller's side of the leader election. It is nil
+// when ForgeSync runs as a single controller.
+type Leadership interface {
+	State() leader.State
+}
+
 // HealthSource is the node monitor.
 type HealthSource interface {
 	Snapshot() []health.Status
@@ -81,6 +88,7 @@ type Server struct {
 	AllowTokenSignIn bool
 	Nodes            []NodeInfo
 	Health           HealthSource
+	Leader           Leadership
 	Inventory        Inventory
 	Replication      Replicator // nil when replication is off
 	DB               DB
@@ -151,11 +159,15 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/conflicts", s.listConflicts)
 				r.Get("/conflicts/{id}", s.getConflict)
 			})
-			r.With(requireRole(auth.Operator)).Post("/conflicts/{id}/acknowledge", s.acknowledgeConflict)
-			r.With(requireRole(auth.Operator)).Post("/inventory/scan", s.scanNow)
-			r.With(requireRole(auth.Administrator)).Put("/repositories/{id}/primary", s.setPrimary)
-			r.With(requireRole(auth.Administrator)).Put("/users/{id}/home", s.setUserHome)
-			r.With(requireRole(auth.Operator)).Post("/repositories/{id}/replicate", s.replicateNow)
+			// Writes belong to the controller that's acting; see requireLeader.
+			r.Group(func(r chi.Router) {
+				r.Use(s.requireLeader)
+				r.With(requireRole(auth.Operator)).Post("/conflicts/{id}/acknowledge", s.acknowledgeConflict)
+				r.With(requireRole(auth.Operator)).Post("/inventory/scan", s.scanNow)
+				r.With(requireRole(auth.Administrator)).Put("/repositories/{id}/primary", s.setPrimary)
+				r.With(requireRole(auth.Administrator)).Put("/users/{id}/home", s.setUserHome)
+				r.With(requireRole(auth.Operator)).Post("/repositories/{id}/replicate", s.replicateNow)
+			})
 			// The history shows who signed in from where: operators and up.
 			r.Group(func(r chi.Router) {
 				r.Use(requireRole(auth.Operator))
@@ -234,15 +246,60 @@ func (s *Server) nodeTransitions(w http.ResponseWriter, r *http.Request) {
 
 // Overview is the dashboard summary.
 type Overview struct {
-	Version   string         `json:"version"`
-	Commit    string         `json:"commit"`
-	StartedAt time.Time      `json:"started_at"`
-	Role      string         `json:"role"`
-	Database  DatabaseStatus `json:"database"`
-	Nodes     map[string]int `json:"nodes"` // count per state, plus "total"
+	Version   string    `json:"version"`
+	Commit    string    `json:"commit"`
+	StartedAt time.Time `json:"started_at"`
+	// Role is single, leader or standby.
+	Role     string         `json:"role"`
+	Leader   *LeaderInfo    `json:"leader,omitempty"`
+	Database DatabaseStatus `json:"database"`
+	Nodes    map[string]int `json:"nodes"` // count per state, plus "total"
 	// OpenConflicts is -1 when it couldn't be counted.
 	OpenConflicts int                `json:"open_conflicts"`
 	Replication   ReplicationSummary `json:"replication"`
+}
+
+// LeaderInfo names the controller doing the work, for the other one's UI.
+type LeaderInfo struct {
+	Name  string    `json:"name,omitempty"`
+	URL   string    `json:"url,omitempty"`
+	Since time.Time `json:"since,omitzero"`
+	// Error is why leadership is unknown, if the database can't be reached.
+	Error string `json:"error,omitempty"`
+}
+
+// leadership is this controller's role and who holds the lease.
+func (s *Server) leadership() (role string, info *LeaderInfo) {
+	if s.Leader == nil {
+		return "single", nil
+	}
+	st := s.Leader.State()
+	role = "standby"
+	if st.Leading {
+		role = "leader"
+	}
+	return role, &LeaderInfo{Name: st.Name, URL: st.URL, Since: st.Since, Error: st.Error}
+}
+
+// requireLeader turns away anything that changes the installation unless
+// this controller is the one acting. The standby serves the same pages, so
+// people can see what's happening, but the work has one owner at a time.
+func (s *Server) requireLeader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.Leader == nil || s.Leader.State().Leading {
+			next.ServeHTTP(w, r)
+			return
+		}
+		_, info := s.leadership()
+		where := "another controller"
+		if info != nil && info.Name != "" {
+			where = info.Name
+		}
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"message": "this controller is on standby; " + where + " is in charge",
+			"leader":  info,
+		})
+	})
 }
 
 // ReplicationSummary counts replicas (of repositories with a primary) by state.
@@ -261,11 +318,10 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		Version:   buildinfo.Version,
 		Commit:    buildinfo.Commit,
 		StartedAt: s.StartedAt.UTC(),
-		// Leader election arrives with the HA phase; until then there is one controller.
-		Role:     "single",
-		Database: DatabaseStatus{OK: true},
-		Nodes:    map[string]int{"total": 0},
+		Database:  DatabaseStatus{OK: true},
+		Nodes:     map[string]int{"total": 0},
 	}
+	o.Role, o.Leader = s.leadership()
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	if err := s.DB.Ping(ctx); err != nil {

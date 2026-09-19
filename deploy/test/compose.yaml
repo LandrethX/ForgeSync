@@ -132,6 +132,45 @@ services:
       timeout: 5s
       retries: 30
 
+  forgesync-b:
+    # A second controller sharing the same database: it stands by until the
+    # leadership lease runs out, then takes over. setup.sh --standby starts
+    # it; without that profile the installation has one controller.
+    profiles: [standby]
+    build:
+      context: ../..
+      args:
+        VERSION: ${FORGESYNC_VERSION:-dev}
+        COMMIT: ${FORGESYNC_COMMIT:-unknown}
+    image: forgesync:test
+    # Test only: runs as root so it can read the token files bind-mounted
+    # from .tokens/ (they are 0600 and owned by whoever ran setup.sh).
+    user: "0:0"
+    restart: unless-stopped
+    depends_on:
+      forgesync-db:
+        condition: service_healthy
+      sceneid:
+        condition: service_healthy
+      forgejo-se:
+        condition: service_healthy
+      forgejo-dk:
+        condition: service_healthy
+    volumes:
+      - ./.work/forgesync-b.docker.yaml:/etc/forgesync/forgesync.yaml:ro
+      - ./.tokens:/etc/forgesync/tokens:ro
+      - forgesync-b-git:/var/lib/forgesync
+    ports:
+      - "${PUBLIC_BIND:-127.0.0.1}:8091:8091"
+    networks:
+      default:
+        aliases: [forgesync-b.test]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8091/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
   hooksink:
     # Records webhook deliveries for the Phase 0 probes (phase0/).
     image: python:3.13-alpine
@@ -252,6 +291,7 @@ services:
 
 volumes:
   forgesync-db:
+  forgesync-b-git:
   forgesync-git:
   forgejo-se:
   forgejo-dk:

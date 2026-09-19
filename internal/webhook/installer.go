@@ -3,6 +3,7 @@ package webhook
 import (
 	"context"
 	"log/slog"
+	neturl "net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -72,7 +73,6 @@ func (in *Installer) Ensure(ctx context.Context, t Target) {
 	}
 	secret := NodeSecret(in.Secret, t.Name)
 	want := HookURL(in.BaseURL, t.Name, secret)
-	ours := strings.TrimRight(in.BaseURL, "/") + "/" + t.Name + "?"
 	fail := func(err error) {
 		in.Log.Warn("checking the ForgeSync webhook failed", "node", t.Name, "error", err)
 		at := now().UTC()
@@ -90,7 +90,7 @@ func (in *Installer) Ensure(ctx context.Context, t Target) {
 		if url == "" {
 			url = h.URL
 		}
-		if !strings.HasPrefix(url, ours) && url != strings.TrimSuffix(ours, "?") {
+		if !isOurs(in.BaseURL, t.Name, url) {
 			continue // someone else's hook
 		}
 		if keep == 0 && url == want && h.Active && hasEvents(h.Events, Events) {
@@ -117,6 +117,22 @@ func (in *Installer) Ensure(ctx context.Context, t Target) {
 	}
 	at := now().UTC()
 	in.Tracker.update(t.Name, func(s *Status) { s.Installed, s.HookID, s.Error, s.CheckedAt = true, keep, "", &at })
+}
+
+// isOurs reports that a hook on the node is ForgeSync's own, whichever
+// controller installed it. The host is whoever was leading at the time, so
+// only the path counts: after a failover the new leader replaces the old
+// one's hook instead of adding a second.
+func isOurs(base, node, hookURL string) bool {
+	b, err := neturl.Parse(base)
+	if err != nil {
+		return false
+	}
+	u, err := neturl.Parse(hookURL)
+	if err != nil {
+		return false
+	}
+	return u.Path == strings.TrimRight(b.Path, "/")+"/"+node
 }
 
 // hasEvents reports whether a hook gets every event ForgeSync needs.

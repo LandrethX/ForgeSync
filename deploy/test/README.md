@@ -14,6 +14,7 @@ developing ForgeSync, running on Docker Desktop for macOS.
 | `forgesync-db` | localhost:5432 | PostgreSQL for ForgeSync's own state (user/db `forgesync`) |
 | `hooksink` | http://localhost:8099 | Records webhook deliveries for the Phase 0 tests |
 | `forgesync` | http://forgesync.test:8090 | The ForgeSync controller and admin UI, built from this repository |
+| `forgesync-b` | http://forgesync-b.test:8091 | A second controller sharing the database, on standby (`setup.sh --standby`) |
 
 Versions are pinned in `.env`: Forgejo 16 (current LTS) and Keycloak 26.7.4. Both images
 run natively on Apple Silicon.
@@ -116,6 +117,32 @@ docker compose --profile controller logs -f forgesync
 To run it from source instead (e.g. with `make web-dev` for hot reload), stop the container first
 (`docker compose --profile controller stop forgesync`), since both use port 8090. Then, from the repo
 root, `make web && make run` uses `forgesync.yaml` and serves the UI at http://127.0.0.1:8090.
+
+### A second controller, and failover
+
+`setup.sh --standby` also starts `forgesync-b` on :8091, sharing the same database. Only one
+controller acts: it holds the leadership lease in the database and renews it, and the other
+stands by. Its config is `.work/forgesync-b.docker.yaml`, derived from the first
+controller's with its own name, port and URLs. The lease here is 10s (production defaults to
+15s), so a failover is quick to watch.
+
+```sh
+PUBLIC_BIND=0.0.0.0 docker compose --profile controller --profile standby up -d --build
+curl -s -H "Authorization: Bearer $(cat .tokens/admin.token)" http://127.0.0.1:8090/api/v1/overview | jq .role
+curl -s -H "Authorization: Bearer $(cat .tokens/admin.token)" http://127.0.0.1:8091/api/v1/overview | jq .role
+```
+
+The standby serves every page, so you can watch what's happening, but turns away anything
+that changes the installation with 409 and the name of the controller in charge. To see a
+failover, stop the leader:
+
+```sh
+docker kill forgesync-test-forgesync-b-1       # a crash: the standby takes over when the lease runs out
+docker stop forgesync-test-forgesync-b-1       # a planned stop: it gives the lease up, so in about one renewal
+```
+
+The new leader reinstalls each node's webhook to point at itself, scans, and carries on. Add
+`forgesync-b.test` to `/etc/hosts` beside the other names to reach its UI by name.
 
 The CLI works against either:
 

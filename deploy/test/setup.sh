@@ -11,6 +11,7 @@
 # Usage: ./setup.sh           # nodes SE and DK
 #        ./setup.sh --three   # also node DE
 #        ./setup.sh --all     # SE, DK, DE, UK and US
+#        ./setup.sh --all --standby   # ... and a second controller on :8091
 #
 # To reach the environment from other machines (e.g. on a server), run it as
 # PUBLIC_BIND=0.0.0.0 ./setup.sh and add the hostnames on those machines too.
@@ -23,12 +24,15 @@ set -a; . ./.env; set +a
 
 NODES="se dk"
 PROFILE_ARGS=""
-case "${1:-}" in
-  --three) NODES="se dk de"; PROFILE_ARGS="--profile three" ;;
-  --all) NODES="se dk de uk us"; PROFILE_ARGS="--profile all" ;;
-  "") ;;
-  *) echo "usage: $0 [--three|--all]" >&2; exit 2 ;;
-esac
+STANDBY=""
+for arg in "$@"; do
+  case "$arg" in
+    --three) NODES="se dk de"; PROFILE_ARGS="--profile three" ;;
+    --all) NODES="se dk de uk us"; PROFILE_ARGS="--profile all" ;;
+    --standby) STANDBY=1 ;;
+    *) echo "usage: $0 [--three|--all] [--standby]" >&2; exit 2 ;;
+  esac
+done
 
 compose() { docker compose $PROFILE_ARGS "$@"; }
 port_of() { case "$1" in se) echo 3001;; dk) echo 3002;; de) echo 3003;; uk) echo 3004;; us) echo 3005;; esac; }
@@ -134,8 +138,18 @@ mkdir -p .work
       "$n" "$(site_of "$n")" "$n" "$(port_of "$n")" "$n" "${src:-0}"
   done
 } > .work/forgesync.docker.yaml
+# The standby is the same config with its own name, port and URLs: it shares
+# the database, so whichever holds the lease does the work.
+sed -e 's|^  name: forgesync-a$|  name: forgesync-b|' \
+    -e 's|forgesync\.test:8090|forgesync-b.test:8091|g' \
+    -e 's|^  listen: 0\.0\.0\.0:8090$|  listen: 0.0.0.0:8091|' \
+    .work/forgesync.docker.yaml > .work/forgesync-b.docker.yaml
 docker compose $PROFILE_ARGS --profile controller up -d --build --force-recreate --wait forgesync
 ok "controller running ($FORGESYNC_VERSION)"
+if [ -n "$STANDBY" ]; then
+  docker compose $PROFILE_ARGS --profile standby up -d --build --wait forgesync-b
+  ok "standby controller running on :8091 (forgesync-b)"
+fi
 
 echo "==> Smoke tests"
 disco="http://sceneid.test:8080/realms/sceneid/.well-known/openid-configuration"

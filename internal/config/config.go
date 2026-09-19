@@ -24,6 +24,7 @@ import (
 const EnvDatabaseURL = "FORGESYNC_DATABASE_URL"
 
 type Config struct {
+	Controller  Controller  `yaml:"controller"`
 	Log         Log         `yaml:"log"`
 	HTTP        HTTP        `yaml:"http"`
 	OIDC        OIDC        `yaml:"oidc"`
@@ -33,6 +34,25 @@ type Config struct {
 	Replication Replication `yaml:"replication"`
 	Webhooks    Webhooks    `yaml:"webhooks"`
 	Nodes       []Node      `yaml:"nodes"`
+}
+
+// Controller is this controller's own identity in a ForgeSync installation.
+// Two controllers can share a database: one holds the leadership lease and
+// does the work, the other stands by and takes over when the lease runs
+// out. Running a single controller needs none of this.
+type Controller struct {
+	// Name says which controller this is, in the UI and the log. Default:
+	// the host name.
+	Name string `yaml:"name"`
+	// URL is where people reach this controller, so the standby's UI can
+	// send them to the leader. Optional.
+	URL string `yaml:"url"`
+	// Lease is how long leadership lasts without a renewal: the longest a
+	// failover takes, and the longest a controller that has lost the
+	// database keeps acting. Default 15s.
+	Lease time.Duration `yaml:"lease"`
+	// Renew is how often the leader renews it. Default: a third of Lease.
+	Renew time.Duration `yaml:"renew"`
 }
 
 // Webhooks makes every node report changes to ForgeSync as they happen,
@@ -193,6 +213,19 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) applyDefaults() {
+	if c.Controller.Name == "" {
+		if host, err := os.Hostname(); err == nil {
+			c.Controller.Name = host
+		} else {
+			c.Controller.Name = "forgesync"
+		}
+	}
+	if c.Controller.Lease == 0 {
+		c.Controller.Lease = 15 * time.Second
+	}
+	if c.Controller.Renew == 0 {
+		c.Controller.Renew = c.Controller.Lease / 3
+	}
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
 	}
@@ -325,6 +358,17 @@ func (c *Config) validate() error {
 	}
 	if c.Database.URL == "" {
 		errs = append(errs, fmt.Errorf("database: set url, url_file or %s", EnvDatabaseURL))
+	}
+	if c.Controller.Lease < 2*time.Second {
+		errs = append(errs, errors.New("controller.lease must be at least 2s"))
+	}
+	if c.Controller.Renew <= 0 || c.Controller.Renew >= c.Controller.Lease {
+		errs = append(errs, errors.New("controller.renew must be positive and shorter than controller.lease"))
+	}
+	if c.Controller.URL != "" {
+		if u, err := url.Parse(c.Controller.URL); err != nil || !u.IsAbs() {
+			errs = append(errs, fmt.Errorf("controller.url %q: want an absolute URL", c.Controller.URL))
+		}
 	}
 	if c.Health.Interval < time.Second {
 		errs = append(errs, errors.New("health.interval must be at least 1s"))

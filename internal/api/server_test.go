@@ -14,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"scenegit.org/forgesync/internal/auth"
 	"scenegit.org/forgesync/internal/health"
+	"scenegit.org/forgesync/internal/leader"
 	"scenegit.org/forgesync/internal/store"
 )
 
@@ -533,4 +535,57 @@ func TestSessionsExpire(t *testing.T) {
 		}
 	}
 	t.Fatal("session outlived its absolute lifetime")
+}
+
+// fakeLeader is a controller's view of the election.
+type fakeLeader struct{ st leader.State }
+
+func (f *fakeLeader) State() leader.State { return f.st }
+
+func TestAStandbyServesThePagesButRefusesWrites(t *testing.T) {
+	f, admin := sessionAs(t, auth.Administrator)
+	f.srv.Leader = &fakeLeader{leader.State{Leading: false, Name: "forgesync-a", URL: "http://a:8090"}}
+
+	// Reading is the same on both controllers.
+	if rec := f.do(req{path: "/api/v1/nodes", cookie: admin}); rec.Code != 200 {
+		t.Errorf("GET nodes = %d %s", rec.Code, rec.Body)
+	}
+	rec := f.do(req{path: "/api/v1/overview", cookie: admin})
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"role":"standby"`) ||
+		!strings.Contains(rec.Body.String(), `"name":"forgesync-a"`) {
+		t.Errorf("overview = %d %s", rec.Code, rec.Body)
+	}
+
+	// Anything that changes the installation belongs to the leader.
+	for _, w := range []req{
+		{method: "POST", path: "/api/v1/inventory/scan", cookie: admin, csrf: true},
+		{method: "PUT", path: "/api/v1/repositories/11111111-1111-1111-1111-111111111111/primary",
+			body: `{"node":"se"}`, cookie: admin, csrf: true},
+		{method: "POST", path: "/api/v1/conflicts/1/acknowledge", body: `{}`, cookie: admin, csrf: true},
+	} {
+		rec := f.do(w)
+		if rec.Code != 409 || !strings.Contains(rec.Body.String(), "forgesync-a is in charge") {
+			t.Errorf("%s %s = %d %s", w.method, w.path, rec.Code, rec.Body)
+		}
+	}
+	if f.srv.Inventory.(*fakeInventory).triggered != 0 {
+		t.Error("the standby started a scan")
+	}
+
+	// Once it's leading, the same request goes through.
+	f.srv.Leader = &fakeLeader{leader.State{Leading: true, Name: "forgesync-b"}}
+	if rec := f.do(req{method: "POST", path: "/api/v1/inventory/scan", cookie: admin, csrf: true}); rec.Code != 202 {
+		t.Errorf("as leader = %d %s", rec.Code, rec.Body)
+	}
+	rec = f.do(req{path: "/api/v1/overview", cookie: admin})
+	if !strings.Contains(rec.Body.String(), `"role":"leader"`) {
+		t.Errorf("overview = %s", rec.Body)
+	}
+
+	// A single controller says so and never refuses.
+	f.srv.Leader = nil
+	rec = f.do(req{path: "/api/v1/overview", cookie: admin})
+	if !strings.Contains(rec.Body.String(), `"role":"single"`) || strings.Contains(rec.Body.String(), `"leader"`) {
+		t.Errorf("single = %s", rec.Body)
+	}
 }

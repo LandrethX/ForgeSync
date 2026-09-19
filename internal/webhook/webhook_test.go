@@ -204,6 +204,28 @@ func TestInstaller(t *testing.T) {
 	}
 }
 
+// After a failover the new leader's hook URL differs from the old one's
+// only in its host. It's ForgeSync's own hook all the same, so the new
+// leader takes it over instead of adding a second one beside it.
+func TestTheOtherControllersHookIsTakenOver(t *testing.T) {
+	const path = "/api/v1/hooks/forgejo"
+	oldBase := "http://forgesync-a.test:8090" + path
+	api := &fakeHooks{next: 300, hooks: []forgejo.Hook{
+		{ID: 301, Config: map[string]string{"url": HookURL(oldBase, "se", NodeSecret(master, "se"))}, Events: Events, Active: true},
+	}}
+	newBase := "http://forgesync-b.test:8091" + path
+	in := &Installer{Targets: []Target{{"se", api}}, BaseURL: newBase, Secret: master,
+		Tracker: NewTracker([]string{"se"}), Log: slog.New(slog.DiscardHandler)}
+
+	in.EnsureAll(context.Background())
+	if strings.Join(api.calls, ",") != "delete,create" {
+		t.Fatalf("calls = %v", api.calls)
+	}
+	if len(api.hooks) != 1 || api.hooks[0].Config["url"] != HookURL(newBase, "se", NodeSecret(master, "se")) {
+		t.Errorf("hooks = %+v", api.hooks)
+	}
+}
+
 type fakeLookup struct {
 	ids  map[string]string
 	prev map[string]string

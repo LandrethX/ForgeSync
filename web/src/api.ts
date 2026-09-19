@@ -280,7 +280,16 @@ export interface Overview {
   version: string;
   commit: string;
   started_at: string;
+  /** single, leader or standby. */
   role: string;
+  /** Who is acting, when two controllers share a database. */
+  leader?: {
+    name?: string;
+    url?: string;
+    since?: string;
+    /** Why leadership is unknown, if the database can't be reached. */
+    error?: string;
+  };
   database: { ok: boolean; error?: string };
   nodes: Record<string, number>;
   open_conflicts: number;

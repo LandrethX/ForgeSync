@@ -1,10 +1,37 @@
 import { useEffect, useMemo } from "react";
-import { api, type Node } from "../api";
+import { api, type Node, type Overview } from "../api";
 import { ErrorNote, PageHeader } from "../components/Layout";
 import { StatusBadge, StatusIcon, stateInfo } from "../components/StatusBadge";
 import { formatAgo, formatDateTime, formatDuration } from "../format";
 import { useLoad, useNodes, useNow } from "../hooks";
 import { Link } from "../router";
+
+/** How this controller describes itself: single, leading or standing by. */
+function controllerRole(role: string | undefined): string {
+  switch (role) {
+    case "single":
+      return "Single controller";
+    case "leader":
+      return "Leading";
+    case "standby":
+      return "On standby";
+    default:
+      return "–";
+  }
+}
+
+/** Who is doing the work, for a controller that isn't. */
+function controllerNote(o: Overview | undefined): string {
+  if (!o) return "";
+  if (o.role === "single")
+    return "One controller, holding the lease on its own";
+  if (o.role === "leader") return "This controller is doing the work";
+  if (o.leader?.error) return `Leadership unknown: ${o.leader.error}`;
+  if (o.leader?.name) {
+    return `${o.leader.name} is doing the work; this one takes over if it stops`;
+  }
+  return "Waiting to take over";
+}
 
 export function Dashboard() {
   const { nodes } = useNodes();
@@ -13,7 +40,10 @@ export function Dashboard() {
   const changes = useLoad(() => api.transitions(null, 8));
 
   // Reload the summaries whenever a node changes state (not on every check).
-  const stateKey = useMemo(() => (nodes ?? []).map((n) => `${n.name}:${n.state}`).join(","), [nodes]);
+  const stateKey = useMemo(
+    () => (nodes ?? []).map((n) => `${n.name}:${n.state}`).join(","),
+    [nodes],
+  );
   const { reload: reloadOverview } = overview;
   const { reload: reloadChanges } = changes;
   useEffect(() => {
@@ -25,7 +55,8 @@ export function Dashboard() {
 
   const total = nodes?.length ?? 0;
   const healthy = nodes?.filter((n) => n.state === "HEALTHY").length ?? 0;
-  const problems = nodes?.filter((n) => n.state !== "HEALTHY" && n.state !== "UNKNOWN") ?? [];
+  const problems =
+    nodes?.filter((n) => n.state !== "HEALTHY" && n.state !== "UNKNOWN") ?? [];
 
   return (
     <>
@@ -38,11 +69,20 @@ export function Dashboard() {
         </p>
         {problems.length > 0 ? (
           <p className="hero-detail">
-            <StatusIcon tone={problems.some((n) => n.state === "UNREACHABLE") ? "critical" : "warning"} />
+            <StatusIcon
+              tone={
+                problems.some((n) => n.state === "UNREACHABLE")
+                  ? "critical"
+                  : "warning"
+              }
+            />
             Needs attention: {problems.map((n) => n.name).join(", ")}
           </p>
         ) : (
-          nodes && total > 0 && <p className="hero-detail muted">All checked nodes are healthy.</p>
+          nodes &&
+          total > 0 && (
+            <p className="hero-detail muted">All checked nodes are healthy.</p>
+          )
         )}
       </section>
 
@@ -51,7 +91,9 @@ export function Dashboard() {
           <p className="tile-label">Database</p>
           {overview.data ? (
             <p className="tile-value">
-              <StatusIcon tone={overview.data.database.ok ? "good" : "critical"} />
+              <StatusIcon
+                tone={overview.data.database.ok ? "good" : "critical"}
+              />
               {overview.data.database.ok ? "Connected" : "Unreachable"}
             </p>
           ) : (
@@ -62,13 +104,17 @@ export function Dashboard() {
           <p className="tile-label">Open conflicts</p>
           {overview.data && overview.data.open_conflicts >= 0 ? (
             <p className="tile-value">
-              <StatusIcon tone={overview.data.open_conflicts > 0 ? "serious" : "good"} />
+              <StatusIcon
+                tone={overview.data.open_conflicts > 0 ? "serious" : "good"}
+              />
               <Link to="/conflicts">{overview.data.open_conflicts}</Link>
             </p>
           ) : (
             <p className="tile-value muted">–</p>
           )}
-          <p className="tile-note">Differences between nodes that need a person</p>
+          <p className="tile-note">
+            Differences between nodes that need a person
+          </p>
         </div>
         <div className="tile">
           <p className="tile-label">Replication</p>
@@ -84,13 +130,15 @@ export function Dashboard() {
         </div>
         <div className="tile">
           <p className="tile-label">Controller</p>
-          <p className="tile-value">{overview.data?.role === "single" ? "Single controller" : overview.data?.role ?? "–"}</p>
-          <p className="tile-note">Leader election comes with high availability</p>
+          <p className="tile-value">{controllerRole(overview.data?.role)}</p>
+          <p className="tile-note">{controllerNote(overview.data)}</p>
         </div>
         <div className="tile">
           <p className="tile-label">Running for</p>
           <p className="tile-value">
-            {overview.data ? formatDuration(now - Date.parse(overview.data.started_at)) : "–"}
+            {overview.data
+              ? formatDuration(now - Date.parse(overview.data.started_at))
+              : "–"}
           </p>
           {overview.data && (
             <p className="tile-note">
@@ -99,7 +147,9 @@ export function Dashboard() {
           )}
         </div>
       </section>
-      {overview.error && <ErrorNote message={`Couldn't load the summary: ${overview.error}`} />}
+      {overview.error && (
+        <ErrorNote message={`Couldn't load the summary: ${overview.error}`} />
+      )}
 
       <section aria-labelledby="nodes-heading">
         <div className="section-header">
@@ -122,7 +172,9 @@ export function Dashboard() {
           <h2 id="changes-heading">Recent state changes</h2>
         </div>
         {changes.error && <ErrorNote message={changes.error} />}
-        {changes.data && changes.data.length === 0 && <p className="muted">No state changes recorded yet.</p>}
+        {changes.data && changes.data.length === 0 && (
+          <p className="muted">No state changes recorded yet.</p>
+        )}
         {changes.data && changes.data.length > 0 && (
           <ol className="change-list">
             {changes.data.map((t) => (
@@ -130,11 +182,15 @@ export function Dashboard() {
                 <time dateTime={t.at} title={formatDateTime(t.at)}>
                   {formatAgo(t.at, now)}
                 </time>
-                <Link to={`/nodes/${encodeURIComponent(t.node)}`} className="change-node">
+                <Link
+                  to={`/nodes/${encodeURIComponent(t.node)}`}
+                  className="change-node"
+                >
                   {t.node}
                 </Link>
                 <span className="change-states">
-                  {stateInfo(t.from).label} <span aria-label="to">→</span> <StatusBadge state={t.to} />
+                  {stateInfo(t.from).label} <span aria-label="to">→</span>{" "}
+                  <StatusBadge state={t.to} />
                 </span>
                 {t.error && <span className="change-error">{t.error}</span>}
               </li>
@@ -147,19 +203,25 @@ export function Dashboard() {
 }
 
 function NodeCard({ node, now }: { node: Node; now: number }) {
-  const down = node.failing_since ? formatDuration(now - Date.parse(node.failing_since)) : undefined;
+  const down = node.failing_since
+    ? formatDuration(now - Date.parse(node.failing_since))
+    : undefined;
   return (
     <li className="node-card">
       <div className="node-card-head">
         <span className="node-card-name">
-          <Link to={`/nodes/${encodeURIComponent(node.name)}`}>{node.name}</Link>
+          <Link to={`/nodes/${encodeURIComponent(node.name)}`}>
+            {node.name}
+          </Link>
           {node.site && <span className="muted"> · {node.site}</span>}
         </span>
         <StatusBadge state={node.state} />
       </div>
       <dl className="facts">
         <dt>Last seen</dt>
-        <dd title={node.last_seen ? formatDateTime(node.last_seen) : undefined}>{formatAgo(node.last_seen, now)}</dd>
+        <dd title={node.last_seen ? formatDateTime(node.last_seen) : undefined}>
+          {formatAgo(node.last_seen, now)}
+        </dd>
         {down && node.state !== "HEALTHY" && (
           <>
             <dt>Not healthy for</dt>
@@ -169,15 +231,22 @@ function NodeCard({ node, now }: { node: Node; now: number }) {
         <dt>Version</dt>
         <dd>{node.version || "–"}</dd>
       </dl>
-      {node.last_error && node.state !== "HEALTHY" && <p className="node-card-error">{node.last_error}</p>}
+      {node.last_error && node.state !== "HEALTHY" && (
+        <p className="node-card-error">{node.last_error}</p>
+      )}
     </li>
   );
 }
 
-function ReplicationTile({ counts }: { counts: Partial<Record<string, number>> }) {
+function ReplicationTile({
+  counts,
+}: {
+  counts: Partial<Record<string, number>>;
+}) {
   const total = Object.values(counts).reduce((a: number, b) => a + (b ?? 0), 0);
   const synced = counts.synced ?? 0;
-  const problems = (counts.conflict ?? 0) + (counts.error ?? 0) + (counts.missing ?? 0);
+  const problems =
+    (counts.conflict ?? 0) + (counts.error ?? 0) + (counts.missing ?? 0);
   if (total === 0) {
     return (
       <>
@@ -189,7 +258,11 @@ function ReplicationTile({ counts }: { counts: Partial<Record<string, number>> }
   return (
     <>
       <p className="tile-value">
-        <StatusIcon tone={problems > 0 ? "serious" : synced === total ? "good" : "warning"} />
+        <StatusIcon
+          tone={
+            problems > 0 ? "serious" : synced === total ? "good" : "warning"
+          }
+        />
         {synced} of {total}
       </p>
       <p className="tile-note">

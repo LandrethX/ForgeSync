@@ -50,8 +50,18 @@ func (s *Store) SyncConflicts(ctx context.Context, found []FoundConflict, checke
 			WITH up AS (
 				INSERT INTO conflicts (repository_id, kind, ref, state, details, detected_at, last_seen_at)
 				VALUES ($1::uuid, $2, $3, 'open', $4, $5, $5)
-				ON CONFLICT (repository_id, kind, ref) WHERE state = 'open'
-				DO UPDATE SET details = EXCLUDED.details, last_seen_at = EXCLUDED.last_seen_at
+				ON CONFLICT (repository_id, kind, ref) WHERE state IN ('open', 'dismissed')
+				DO UPDATE SET details = EXCLUDED.details, last_seen_at = EXCLUDED.last_seen_at,
+					-- A dismissed conflict stays dismissed while it's the
+					-- same conflict. If what it says has changed -- another
+					-- node, another value -- the situation is new and it
+					-- comes back, because that's not what anyone dismissed.
+					state = CASE WHEN conflicts.state = 'dismissed' AND conflicts.details = EXCLUDED.details
+						THEN 'dismissed' ELSE 'open' END,
+					dismissed_at = CASE WHEN conflicts.state = 'dismissed' AND conflicts.details = EXCLUDED.details
+						THEN conflicts.dismissed_at END,
+					dismissed_by = CASE WHEN conflicts.state = 'dismissed' AND conflicts.details = EXCLUDED.details
+						THEN conflicts.dismissed_by ELSE '' END
 				RETURNING id, repository_id, (xmax = 0) AS inserted
 			)
 			SELECT up.id, r.full_name, up.inserted FROM up JOIN repositories r ON r.id = up.repository_id`,
@@ -69,7 +79,7 @@ func (s *Store) SyncConflicts(ctx context.Context, found []FoundConflict, checke
 		rows, err := tx.Query(ctx, `
 			WITH cl AS (
 				UPDATE conflicts SET state = 'cleared', cleared_at = $2
-				WHERE state = 'open' AND repository_id = ANY($1::uuid[]) AND last_seen_at < $2
+				WHERE state IN ('open', 'dismissed') AND repository_id = ANY($1::uuid[]) AND last_seen_at < $2
 					AND ($3::text[] IS NULL OR kind = ANY($3::text[]))
 				RETURNING id, repository_id, kind, ref
 			)
@@ -105,24 +115,30 @@ type Conflict struct {
 	ClearedAt      *time.Time     `json:"cleared_at,omitempty"`
 	AcknowledgedBy string         `json:"acknowledged_by,omitempty"`
 	AcknowledgedAt *time.Time     `json:"acknowledged_at,omitempty"`
-	Note           string         `json:"note,omitempty"`
+	// DismissedBy and DismissedAt are set when someone decided this one
+	// isn't ForgeSync's to resolve and shouldn't keep being counted.
+	DismissedBy string     `json:"dismissed_by,omitempty"`
+	DismissedAt *time.Time `json:"dismissed_at,omitempty"`
+	Note        string     `json:"note,omitempty"`
 }
 
 // ConflictFilter selects conflicts. Empty fields don't filter.
 type ConflictFilter struct {
-	State        string // "open", "cleared" or ""
+	State        string // "open", "dismissed", "cleared" or ""
 	RepositoryID string
 	Limit        int
 	Offset       int
 }
 
 const conflictColumns = `c.id, c.repository_id::text, r.full_name, coalesce(r.primary_node, ''), c.kind, c.ref,
-	c.state, c.details, c.detected_at, c.last_seen_at, c.cleared_at, c.acknowledged_by, c.acknowledged_at, c.note`
+	c.state, c.details, c.detected_at, c.last_seen_at, c.cleared_at, c.acknowledged_by, c.acknowledged_at,
+	c.dismissed_by, c.dismissed_at, c.note`
 
 func scanConflict(row pgx.CollectableRow) (Conflict, error) {
 	var c Conflict
 	err := row.Scan(&c.ID, &c.RepositoryID, &c.FullName, &c.PrimaryNode, &c.Kind, &c.Ref, &c.State, &c.Details,
-		&c.DetectedAt, &c.LastSeenAt, &c.ClearedAt, &c.AcknowledgedBy, &c.AcknowledgedAt, &c.Note)
+		&c.DetectedAt, &c.LastSeenAt, &c.ClearedAt, &c.AcknowledgedBy, &c.AcknowledgedAt,
+		&c.DismissedBy, &c.DismissedAt, &c.Note)
 	return c, err
 }
 
@@ -190,6 +206,39 @@ func (s *Store) AcknowledgeConflict(ctx context.Context, id int64, actor, note s
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE conflicts SET acknowledged_by = $2, acknowledged_at = $3, note = $4 WHERE id = $1`,
 		id, actor, at, note)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DismissConflict stops one being counted: it stays, with who dismissed
+// it and why, and comes back only if what it says changes or it happens
+// again after clearing. Some conflicts aren't ForgeSync's to resolve --
+// a secret it can't copy, a difference someone has decided to live with
+// -- and a number nobody can bring to zero is a number nobody reads.
+func (s *Store) DismissConflict(ctx context.Context, id int64, actor, note string, at time.Time) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE conflicts SET state = 'dismissed', dismissed_by = $2, dismissed_at = $3,
+			note = CASE WHEN $4 = '' THEN note ELSE $4 END
+		WHERE id = $1 AND state = 'open'`, id, actor, at, note)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ReopenConflict undoes that.
+func (s *Store) ReopenConflict(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE conflicts SET state = 'open', dismissed_by = '', dismissed_at = NULL
+		WHERE id = $1 AND state = 'dismissed'`, id)
 	if err != nil {
 		return err
 	}

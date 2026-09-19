@@ -8,7 +8,13 @@ import { useLoad, useNow } from "../hooks";
 import { Link } from "../router";
 
 const PAGE = 100;
-type Tab = "open" | "cleared";
+type Tab = "open" | "dismissed" | "cleared";
+
+const TAB_LABEL: Record<Tab, string> = {
+  open: "Open",
+  dismissed: "Dismissed",
+  cleared: "Cleared",
+};
 
 export function Conflicts() {
   const [tab, setTab] = useState<Tab>("open");
@@ -28,19 +34,20 @@ export function Conflicts() {
         Differences between nodes that ForgeSync won't settle by itself:
         diverged history, commits made on a replica, history rewritten on a
         primary. A conflict clears on its own once a later check finds the nodes
-        agree.
+        agree. One that isn't ForgeSync's to fix &mdash; a secret it can't copy,
+        a difference you've decided to live with &mdash; can be dismissed: it's
+        kept, with who dismissed it and why, but stops being counted.
       </p>
 
       <div className="segmented tabs" role="group" aria-label="Show">
-        {(["open", "cleared"] as Tab[]).map((t) => (
+        {(["open", "dismissed", "cleared"] as Tab[]).map((t) => (
           <button
             key={t}
             type="button"
             aria-pressed={tab === t}
             onClick={() => setTab(t)}
           >
-            {t === "open" ? "Open" : "Cleared"}{" "}
-            <span className="count">{counts[t] ?? 0}</span>
+            {TAB_LABEL[t]} <span className="count">{counts[t] ?? 0}</span>
           </button>
         ))}
       </div>
@@ -52,6 +59,8 @@ export function Conflicts() {
             <>
               <StatusIcon tone="good" /> No open conflicts.
             </>
+          ) : tab === "dismissed" ? (
+            "Nothing has been dismissed."
           ) : (
             "No conflicts have cleared yet."
           )}
@@ -81,7 +90,13 @@ export function Conflicts() {
                     <th scope="row">
                       <span className="presence">
                         <StatusIcon
-                          tone={c.state === "open" ? "serious" : "good"}
+                          tone={
+                            c.state === "open"
+                              ? "serious"
+                              : c.state === "dismissed"
+                                ? "neutral"
+                                : "good"
+                          }
                         />
                         <Link to={`/conflicts/${c.id}`}>
                           {conflictTitle(c)}

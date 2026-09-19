@@ -45,6 +45,30 @@ function wrap(role: Role, children: ReactNode) {
   );
 }
 
+describe("dismissing a conflict", () => {
+  it("offers it on an open one, and says so once it's dismissed", async () => {
+    const fetch = mockApi([diverged]);
+    render(wrap("operator", <ConflictDetail id={7} />));
+    const button = await screen.findByRole("button", {
+      name: "Dismiss this conflict",
+    });
+    await userEvent.click(button);
+    const call = fetch.mock.calls.find(
+      ([u]) => u === "/api/v1/conflicts/7/dismiss",
+    ) as unknown as [string, RequestInit];
+    expect(call[1].method).toBe("POST");
+  });
+
+  it("isn't offered to a viewer", async () => {
+    mockApi([diverged]);
+    render(wrap("viewer", <ConflictDetail id={7} />));
+    await screen.findByText(/Diverged history/);
+    expect(
+      screen.queryByRole("button", { name: "Dismiss this conflict" }),
+    ).toBeNull();
+  });
+});
+
 function mockApi(
   items: Conflict[],
   counts = { open: items.length, cleared: 3 },

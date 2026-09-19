@@ -31,6 +31,12 @@ export function describe(e: HistoryEvent): string {
       return d.break_glass
         ? "Signed in with the admin token (break-glass)"
         : "Signed in";
+    case "conflict.dismissed":
+      return d.note
+        ? `Conflict dismissed: ${str(d.note)}`
+        : "Conflict dismissed; it isn't counted any more";
+    case "conflict.reopened":
+      return "Dismissed conflict brought back";
     case "account.created":
       return `ForgeSync account added, as ${str(d.role)}`;
     case "account.updated":

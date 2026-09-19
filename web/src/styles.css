@@ -702,6 +702,18 @@ td.details {
   margin-top: 0.25rem;
 }
 
+/* Dismissing a conflict sits under the acknowledgement, set apart. */
+.dismiss {
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+}
+
+.dismiss h3 {
+  margin: 0 0 0.3rem;
+  font-size: 1rem;
+}
+
 /* A small tag next to a name: the controller meant to lead. */
 .chip {
   font-size: 0.75rem;

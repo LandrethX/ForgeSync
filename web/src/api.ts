@@ -266,7 +266,7 @@ export interface Conflict {
   primary_node: string;
   kind: ConflictKind;
   ref: string;
-  state: "open" | "cleared";
+  state: "open" | "dismissed" | "cleared";
   details: {
     branch?: string;
     tag?: string;
@@ -319,12 +319,15 @@ export interface Conflict {
   cleared_at?: string;
   acknowledged_by?: string;
   acknowledged_at?: string;
+  /** Who decided this one shouldn't keep being counted, and when. */
+  dismissed_by?: string;
+  dismissed_at?: string;
   note?: string;
 }
 
 export interface ConflictList {
   total: number;
-  counts: { open?: number; cleared?: number };
+  counts: { open?: number; dismissed?: number; cleared?: number };
   items: Conflict[];
 }
 
@@ -595,7 +598,7 @@ export const api = {
   scanNow: () =>
     request<{ queued: boolean; running: boolean }>("POST", "/inventory/scan"),
   conflicts: (opts: {
-    state: "open" | "cleared" | "all";
+    state: "open" | "dismissed" | "cleared" | "all";
     repository?: string;
     limit: number;
     offset: number;
@@ -611,6 +614,10 @@ export const api = {
   conflict: (id: number) => request<Conflict>("GET", `/conflicts/${id}`),
   acknowledgeConflict: (id: number, note: string) =>
     request<Conflict>("POST", `/conflicts/${id}/acknowledge`, { note }),
+  dismissConflict: (id: number, note: string) =>
+    request<Conflict>("POST", `/conflicts/${id}/dismiss`, { note }),
+  reopenConflict: (id: number) =>
+    request<Conflict>("POST", `/conflicts/${id}/reopen`),
   history: (f: HistoryFilter, limit: number, cursor?: string) => {
     const p = historyParams(f);
     p.set("limit", String(limit));

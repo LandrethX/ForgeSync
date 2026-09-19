@@ -1337,3 +1337,98 @@ func TestSessions(t *testing.T) {
 		t.Errorf("%d sessions left after the purge", left)
 	}
 }
+
+// A dismissed conflict stays out of the way while it's the same
+// conflict, comes back when what it says changes, and clears like any
+// other once the nodes agree.
+func TestDismissedConflicts(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncNodes(ctx, []NodeRecord{{Name: "se", URL: "http://se"}}); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
+	if err := s.RecordNodeScan(ctx, "se", t0, t0, []ScannedRepo{{FullName: "alice/demo"}}); err != nil {
+		t.Fatal(err)
+	}
+	recs, _ := s.Repositories(ctx)
+	id := recs[0].ID
+	secret := func(missing []string) []FoundConflict {
+		return []FoundConflict{{RepositoryID: id, Kind: "actions_secret_missing", Ref: "TOKEN",
+			Details: map[string]any{"secret": "TOKEN", "missing": missing}}}
+	}
+	if _, err := s.SyncConflicts(ctx, secret([]string{"dk"}), []string{id}, nil, t0); err != nil {
+		t.Fatal(err)
+	}
+	list, _, _, err := s.Conflicts(ctx, ConflictFilter{State: "open", Limit: 10})
+	if err != nil || len(list) != 1 {
+		t.Fatalf("conflicts = %+v, %v", list, err)
+	}
+	cid := list[0].ID
+
+	if err := s.DismissConflict(ctx, cid, "account:khav", "set by hand on each node", t0); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.OpenConflicts(ctx); n != 0 {
+		t.Fatalf("open conflicts after dismissing = %d", n)
+	}
+
+	// Found again, unchanged: it stays dismissed rather than coming back
+	// every round.
+	if _, err := s.SyncConflicts(ctx, secret([]string{"dk"}), []string{id}, nil, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.OpenConflicts(ctx); n != 0 {
+		t.Fatalf("a dismissed conflict came back unchanged: %d open", n)
+	}
+	one, err := s.ConflictByID(ctx, cid)
+	if err != nil || one.State != "dismissed" || one.DismissedBy != "account:khav" {
+		t.Fatalf("conflict = %+v, %v", one, err)
+	}
+
+	// What it says changes -- another node is missing the secret now --
+	// so it's a different situation and comes back.
+	if _, err := s.SyncConflicts(ctx, secret([]string{"dk", "de"}), []string{id}, nil, t0.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.OpenConflicts(ctx); n != 1 {
+		t.Fatalf("open conflicts after the details changed = %d", n)
+	}
+	one, _ = s.ConflictByID(ctx, cid)
+	if one.State != "open" || one.DismissedBy != "" {
+		t.Errorf("conflict = %+v", one)
+	}
+
+	// Dismissed and then gone: it clears like any other.
+	if err := s.DismissConflict(ctx, cid, "account:khav", "", t0.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SyncConflicts(ctx, nil, []string{id}, nil, t0.Add(4*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	one, _ = s.ConflictByID(ctx, cid)
+	if one.State != "cleared" {
+		t.Errorf("after the nodes agreed: %+v", one)
+	}
+
+	// Bringing one back is for when it turns out to matter.
+	if _, err := s.SyncConflicts(ctx, secret([]string{"dk"}), []string{id}, nil, t0.Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	list, _, _, _ = s.Conflicts(ctx, ConflictFilter{State: "open", Limit: 10})
+	if len(list) != 1 {
+		t.Fatalf("expected it open again: %+v", list)
+	}
+	if err := s.DismissConflict(ctx, list[0].ID, "account:khav", "", t0.Add(6*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReopenConflict(ctx, list[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.OpenConflicts(ctx); n != 1 {
+		t.Errorf("after bringing it back: %d open", n)
+	}
+}

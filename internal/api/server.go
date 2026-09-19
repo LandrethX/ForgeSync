@@ -47,6 +47,8 @@ type DB interface {
 	Conflicts(ctx context.Context, f store.ConflictFilter) ([]store.Conflict, int, map[string]int, error)
 	ConflictByID(ctx context.Context, id int64) (store.Conflict, error)
 	AcknowledgeConflict(ctx context.Context, id int64, actor, note string, at time.Time) error
+	DismissConflict(ctx context.Context, id int64, actor, note string, at time.Time) error
+	ReopenConflict(ctx context.Context, id int64) error
 	OpenConflicts(ctx context.Context) (int, error)
 	ReplicaSyncs(ctx context.Context, repositoryID string) ([]store.ReplicaSync, error)
 	ReplicationCounts(ctx context.Context) (map[string]int, error)
@@ -195,6 +197,15 @@ func (s *Server) Handler() http.Handler {
 			// where someone goes to promote it -- so it isn't behind
 			// requireLeader. It writes the choice and nothing else; the
 			// leader reads it and steps aside of its own accord.
+			// What someone writes about a conflict -- a note, a dismissal --
+			// is ForgeSync's own bookkeeping in the shared database and
+			// changes nothing on a node, so it works on either controller.
+			r.Group(func(r chi.Router) {
+				r.Use(requireRole(auth.Operator))
+				r.Post("/conflicts/{id}/acknowledge", s.acknowledgeConflict)
+				r.Post("/conflicts/{id}/dismiss", s.dismissConflict)
+				r.Post("/conflicts/{id}/reopen", s.reopenConflict)
+			})
 			r.Group(func(r chi.Router) {
 				r.Use(requireRole(auth.Administrator))
 				r.Put("/leadership", s.chooseLeader)
@@ -212,7 +223,6 @@ func (s *Server) Handler() http.Handler {
 			// Writes belong to the controller that's acting; see requireLeader.
 			r.Group(func(r chi.Router) {
 				r.Use(s.requireLeader)
-				r.With(requireRole(auth.Operator)).Post("/conflicts/{id}/acknowledge", s.acknowledgeConflict)
 				r.With(requireRole(auth.Operator)).Post("/inventory/scan", s.scanNow)
 				r.With(requireRole(auth.Administrator)).Put("/repositories/{id}/primary", s.setPrimary)
 				r.With(requireRole(auth.Administrator)).Put("/users/{id}/home", s.setUserHome)

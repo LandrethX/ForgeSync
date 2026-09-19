@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, hasRole, type Conflict } from "../api";
 import { ErrorNote, PageHeader } from "../components/Layout";
-import { StatusIcon } from "../components/StatusBadge";
+import { StatusIcon, type Tone } from "../components/StatusBadge";
 import {
   conflictExplanation,
   conflictFix,
@@ -10,8 +10,21 @@ import {
   relationText,
 } from "../conflictText";
 import { formatDateTime } from "../format";
-import { useLeadership, useLoad, useNodes, useSession } from "../hooks";
+import { useLoad, useNodes, useSession } from "../hooks";
 import { Link } from "../router";
+
+/** How a conflict's state reads, and how loudly. */
+const STATE_LABEL: Record<string, string> = {
+  open: "Open",
+  dismissed: "Dismissed",
+  cleared: "Cleared",
+};
+
+const STATE_TONE: Record<string, Tone> = {
+  open: "serious",
+  dismissed: "neutral",
+  cleared: "good",
+};
 
 export function ConflictDetail({ id }: { id: number }) {
   const conflict = useLoad(() => api.conflict(id), [id]);
@@ -40,8 +53,8 @@ export function ConflictDetail({ id }: { id: number }) {
       </p>
       <PageHeader title={conflictTitle(c)}>
         <span className="status-badge">
-          <StatusIcon tone={c.state === "open" ? "serious" : "good"} />
-          <span>{c.state === "open" ? "Open" : "Cleared"}</span>
+          <StatusIcon tone={STATE_TONE[c.state] ?? "good"} />
+          <span>{STATE_LABEL[c.state] ?? c.state}</span>
         </span>
       </PageHeader>
       <p className="page-intro">
@@ -179,6 +192,14 @@ export function ConflictDetail({ id }: { id: number }) {
               </dd>
             </>
           )}
+          {c.dismissed_at && (
+            <>
+              <dt>Dismissed</dt>
+              <dd>
+                {formatDateTime(c.dismissed_at)} by {c.dismissed_by}
+              </dd>
+            </>
+          )}
         </dl>
       </section>
     </>
@@ -199,26 +220,29 @@ function Acknowledgement({
   useEffect(() => setNote(conflict.note ?? ""), [conflict.note]);
 
   const canEdit = hasRole(session, "operator");
-  if (!canEdit && !conflict.acknowledged_by) return null;
+  if (!canEdit && !conflict.acknowledged_by && !conflict.dismissed_by)
+    return null;
 
-  const { readOnly, leaderName } = useLeadership();
-
-  async function submit(e: FormEvent) {
-    e.preventDefault();
+  async function run(what: () => Promise<unknown>, ok: string) {
     setBusy(true);
     setMessage(undefined);
     try {
-      await api.acknowledgeConflict(conflict.id, note);
-      setMessage({ ok: true, text: "Saved." });
+      await what();
+      setMessage({ ok: true, text: ok });
       onSaved();
     } catch (err) {
       setMessage({
         ok: false,
-        text: err instanceof ApiError ? err.message : "Saving failed.",
+        text: err instanceof ApiError ? err.message : "That didn't work.",
       });
     } finally {
       setBusy(false);
     }
+  }
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    await run(() => api.acknowledgeConflict(conflict.id, note), "Saved.");
   }
 
   return (
@@ -248,16 +272,7 @@ function Acknowledgement({
             placeholder="Who is fixing it, and how"
           />
           <div className="toolbar">
-            <button
-              type="submit"
-              className="button-primary"
-              disabled={busy || readOnly}
-              title={
-                readOnly
-                  ? `Only ${leaderName || "the controller in charge"} can acknowledge`
-                  : undefined
-              }
-            >
+            <button type="submit" className="button-primary" disabled={busy}>
               {busy
                 ? "Saving…"
                 : conflict.acknowledged_by
@@ -278,6 +293,55 @@ function Acknowledgement({
             the nodes.
           </p>
         </form>
+      )}
+      {canEdit && conflict.state === "open" && (
+        <div className="dismiss">
+          <h3>Not one for ForgeSync?</h3>
+          <p className="muted small">
+            Some differences aren&rsquo;t ForgeSync&rsquo;s to settle &mdash; a
+            secret it can&rsquo;t copy, a node you&rsquo;ve decided to leave as
+            it is. Dismissing keeps the conflict and the note, and stops it
+            being counted. It comes back if what it says changes, or if it
+            clears and happens again.
+          </p>
+          <button
+            type="button"
+            className="button-quiet"
+            disabled={busy}
+            onClick={() =>
+              run(
+                () => api.dismissConflict(conflict.id, note),
+                "Dismissed; it isn't counted any more.",
+              )
+            }
+          >
+            Dismiss this conflict
+          </button>
+        </div>
+      )}
+      {conflict.state === "dismissed" && (
+        <div className="dismiss">
+          <p>
+            <strong>{conflict.dismissed_by}</strong> dismissed this
+            {conflict.dismissed_at
+              ? ` on ${formatDateTime(conflict.dismissed_at)}`
+              : ""}
+            . It isn&rsquo;t counted; ForgeSync still checks it, and brings it
+            back if what it says changes.
+          </p>
+          {canEdit && (
+            <button
+              type="button"
+              className="button-quiet"
+              disabled={busy}
+              onClick={() =>
+                run(() => api.reopenConflict(conflict.id), "It's open again.")
+              }
+            >
+              Bring it back
+            </button>
+          )}
+        </div>
       )}
     </section>
   );

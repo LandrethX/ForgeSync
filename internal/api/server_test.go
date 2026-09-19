@@ -315,6 +315,35 @@ func (f *fakeDB) ReplicationCounts(context.Context) (map[string]int, error) {
 	}
 	return counts, nil
 }
+func (f *fakeDB) DismissConflict(_ context.Context, id int64, actor, note string, at time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.conflicts {
+		if f.conflicts[i].ID == id && f.conflicts[i].State == "open" {
+			f.conflicts[i].State = "dismissed"
+			f.conflicts[i].DismissedBy, f.conflicts[i].DismissedAt = actor, &at
+			if note != "" {
+				f.conflicts[i].Note = note
+			}
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
+func (f *fakeDB) ReopenConflict(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.conflicts {
+		if f.conflicts[i].ID == id && f.conflicts[i].State == "dismissed" {
+			f.conflicts[i].State = "open"
+			f.conflicts[i].DismissedBy, f.conflicts[i].DismissedAt = "", nil
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
 func (f *fakeDB) OpenConflicts(context.Context) (int, error) {
 	n := 0
 	for _, c := range f.conflicts {
@@ -740,7 +769,6 @@ func TestAStandbyServesThePagesButRefusesWrites(t *testing.T) {
 		{method: "POST", path: "/api/v1/inventory/scan", cookie: admin, csrf: true},
 		{method: "PUT", path: "/api/v1/repositories/11111111-1111-1111-1111-111111111111/primary",
 			body: `{"node":"se"}`, cookie: admin, csrf: true},
-		{method: "POST", path: "/api/v1/conflicts/1/acknowledge", body: `{}`, cookie: admin, csrf: true},
 	} {
 		rec := f.do(w)
 		if rec.Code != 409 || !strings.Contains(rec.Body.String(), "forgesync-a is in charge") {
@@ -749,6 +777,21 @@ func TestAStandbyServesThePagesButRefusesWrites(t *testing.T) {
 	}
 	if f.srv.Inventory.(*fakeInventory).triggered != 0 {
 		t.Error("the standby started a scan")
+	}
+
+	// But what someone writes about a conflict is ForgeSync's own
+	// bookkeeping in the shared database, so it works from either one:
+	// being on the standby is no reason to be unable to say "we know".
+	f.db.conflicts = []store.Conflict{{ID: 1, RepositoryID: "11111111-1111-1111-1111-111111111111",
+		FullName: "alice/demo", State: "open"}}
+	for _, w := range []req{
+		{method: "POST", path: "/api/v1/conflicts/1/acknowledge", body: `{"note":"looking"}`, cookie: admin, csrf: true},
+		{method: "POST", path: "/api/v1/conflicts/1/dismiss", body: `{}`, cookie: admin, csrf: true},
+		{method: "POST", path: "/api/v1/conflicts/1/reopen", cookie: admin, csrf: true},
+	} {
+		if rec := f.do(w); rec.Code != 200 {
+			t.Errorf("%s %s on a standby = %d %s", w.method, w.path, rec.Code, rec.Body)
+		}
 	}
 
 	// Once it's leading, the same request goes through.

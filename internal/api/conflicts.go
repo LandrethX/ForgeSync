@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -27,11 +28,12 @@ func (s *Server) listConflicts(w http.ResponseWriter, r *http.Request) {
 	switch st := r.URL.Query().Get("state"); st {
 	case "", "open":
 		f.State = "open"
-	case "cleared":
+	case "cleared", "dismissed":
 		f.State = st
 	case "all":
 	default:
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "state must be open, cleared or all"})
+		writeJSON(w, http.StatusBadRequest,
+			map[string]string{"message": "state must be open, dismissed, cleared or all"})
 		return
 	}
 	var err error
@@ -113,6 +115,86 @@ func (s *Server) acknowledgeConflict(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r.Context(), actor, "conflict.acknowledged", c.FullName,
 		map[string]any{"conflict_id": id, "kind": c.Kind, "ref": c.Ref, "note": note})
+	c, _ = s.DB.ConflictByID(r.Context(), id)
+	writeJSON(w, http.StatusOK, c)
+}
+
+// dismissConflict stops one being counted. Operators and up, and it
+// changes nothing on the nodes: some differences aren't ForgeSync's to
+// resolve -- an Actions secret it can't copy, a node someone has decided
+// to leave as it is -- and acknowledging them only added a note while
+// the dashboard kept counting. A dismissed conflict is kept, with who
+// dismissed it and why, and comes back if what it says changes.
+func (s *Server) dismissConflict(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.conflictID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Note string `json:"note"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16384)).Decode(&body); err != nil && err != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": `expected JSON {"note": "..."}`})
+		return
+	}
+	note := strings.TrimSpace(body.Note)
+	if utf8.RuneCountInString(note) > maxNote {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "the note can be at most 1000 characters"})
+		return
+	}
+	c, err := s.DB.ConflictByID(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "no such conflict"})
+		return
+	}
+	if err != nil {
+		s.serverError(w, "get conflict", err)
+		return
+	}
+	if c.State != "open" {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"message": "this conflict is " + c.State + ", so there's nothing to dismiss"})
+		return
+	}
+	actor := identity(r).Actor()
+	if err := s.DB.DismissConflict(r.Context(), id, actor, note, time.Now().UTC()); err != nil {
+		s.serverError(w, "dismiss conflict", err)
+		return
+	}
+	s.audit(r.Context(), actor, "conflict.dismissed", c.FullName,
+		map[string]any{"conflict_id": id, "kind": c.Kind, "ref": c.Ref, "note": note})
+	c, _ = s.DB.ConflictByID(r.Context(), id)
+	writeJSON(w, http.StatusOK, c)
+}
+
+// reopenConflict undoes a dismissal, for when it turns out to matter
+// after all.
+func (s *Server) reopenConflict(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.conflictID(w, r)
+	if !ok {
+		return
+	}
+	c, err := s.DB.ConflictByID(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "no such conflict"})
+		return
+	}
+	if err != nil {
+		s.serverError(w, "get conflict", err)
+		return
+	}
+	if c.State != "dismissed" {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"message": "this conflict is " + c.State + ", so there's nothing to bring back"})
+		return
+	}
+	actor := identity(r).Actor()
+	if err := s.DB.ReopenConflict(r.Context(), id); err != nil {
+		s.serverError(w, "reopen conflict", err)
+		return
+	}
+	s.audit(r.Context(), actor, "conflict.reopened", c.FullName,
+		map[string]any{"conflict_id": id, "kind": c.Kind, "ref": c.Ref})
 	c, _ = s.DB.ConflictByID(r.Context(), id)
 	writeJSON(w, http.StatusOK, c)
 }

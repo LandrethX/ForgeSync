@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, historyExportURL, type HistoryEvent, type HistoryFilter } from "../api";
+import {
+  api,
+  historyExportURL,
+  type HistoryEvent,
+  type HistoryFilter,
+} from "../api";
 import { ErrorNote, PageHeader } from "../components/Layout";
 import { CATEGORIES, categoryLabel, describe, targetLink } from "../eventText";
 import { formatAgo, formatDateTime } from "../format";
@@ -52,12 +57,20 @@ function writeFilters(f: Filters) {
     if (f.toDate) p.set("to", f.toDate);
   }
   const qs = p.toString();
-  window.history.replaceState(null, "", window.location.pathname + (qs ? `?${qs}` : ""));
+  window.history.replaceState(
+    null,
+    "",
+    window.location.pathname + (qs ? `?${qs}` : ""),
+  );
 }
 
 /** Turns the page's filters into the API's (times in UTC). */
 function toApiFilter(f: Filters, now: number): HistoryFilter {
-  const out: HistoryFilter = { categories: f.categories, actor: f.actor, q: f.q };
+  const out: HistoryFilter = {
+    categories: f.categories,
+    actor: f.actor,
+    q: f.q,
+  };
   const preset = RANGES.find((r) => r.key === f.range);
   if (preset?.ms) out.from = new Date(now - preset.ms).toISOString();
   if (f.range === "custom") {
@@ -78,7 +91,10 @@ export function History() {
   const effective = useMemo(() => ({ ...filters, q }), [filters, q]);
   // Preset ranges are relative to when the filter was set, not every render.
   const [anchor, setAnchor] = useState(() => Date.now());
-  const apiFilter = useMemo(() => toApiFilter(effective, anchor), [effective, anchor]);
+  const apiFilter = useMemo(
+    () => toApiFilter(effective, anchor),
+    [effective, anchor],
+  );
   const key = JSON.stringify(apiFilter);
 
   useEffect(() => writeFilters(filters), [filters]);
@@ -124,41 +140,76 @@ export function History() {
     }
   }
 
-  const filtered = filters.categories.length > 0 || filters.actor || filters.q || filters.range !== "all";
+  const filtered =
+    filters.categories.length > 0 ||
+    filters.actor ||
+    filters.q ||
+    filters.range !== "all";
 
   return (
     <>
       <PageHeader title="Events & audit">
         <div className="toolbar tight">
-          <button type="button" className="button-quiet" onClick={() => { setAnchor(Date.now()); first.reload(); }}>
+          <button
+            type="button"
+            className="button-quiet"
+            onClick={() => {
+              setAnchor(Date.now());
+              first.reload();
+            }}
+          >
             Refresh
           </button>
-          <a className="button-quiet button-link-inline" href={historyExportURL(apiFilter, "csv")} download>
+          <a
+            className="button-quiet button-link-inline"
+            href={historyExportURL(apiFilter, "csv")}
+            download
+          >
             Export CSV
           </a>
-          <a className="button-quiet button-link-inline" href={historyExportURL(apiFilter, "json")} download>
+          <a
+            className="button-quiet button-link-inline"
+            href={historyExportURL(apiFilter, "json")}
+            download
+          >
             Export JSON
           </a>
         </div>
       </PageHeader>
       <p className="muted page-intro">
-        Sign-ins, administrative actions, conflicts and node health changes, newest first. Exports use the filters
-        below and are themselves recorded here.
+        Sign-ins, administrative actions, conflicts and node health changes,
+        newest first. Exports use the filters below and are themselves recorded
+        here.
       </p>
 
       <div className="filters">
         <div className="segmented" role="group" aria-label="Categories">
           {CATEGORIES.map((c) => (
-            <button key={c.key} type="button" aria-pressed={filters.categories.includes(c.key)} onClick={() => toggleCategory(c.key)}>
+            <button
+              key={c.key}
+              type="button"
+              aria-pressed={filters.categories.includes(c.key)}
+              onClick={() => toggleCategory(c.key)}
+            >
               {c.label}
             </button>
           ))}
         </div>
         <div className="toolbar">
           <label htmlFor="h-q">Search</label>
-          <input id="h-q" type="search" placeholder="Name, repository, address…" value={filters.q} onChange={(e) => update({ q: e.target.value })} />
+          <input
+            id="h-q"
+            type="search"
+            placeholder="Name, repository, address…"
+            value={filters.q}
+            onChange={(e) => update({ q: e.target.value })}
+          />
           <label htmlFor="h-actor">Who</label>
-          <select id="h-actor" value={filters.actor} onChange={(e) => update({ actor: e.target.value })}>
+          <select
+            id="h-actor"
+            value={filters.actor}
+            onChange={(e) => update({ actor: e.target.value })}
+          >
             <option value="">Anyone</option>
             {(actors.data ?? []).map((a) => (
               <option key={a} value={a}>
@@ -167,7 +218,11 @@ export function History() {
             ))}
           </select>
           <label htmlFor="h-range">When</label>
-          <select id="h-range" value={filters.range} onChange={(e) => update({ range: e.target.value as Range })}>
+          <select
+            id="h-range"
+            value={filters.range}
+            onChange={(e) => update({ range: e.target.value as Range })}
+          >
             {RANGES.map((r) => (
               <option key={r.key} value={r.key}>
                 {r.label}
@@ -179,19 +234,38 @@ export function History() {
               <label htmlFor="h-from" className="sr-only">
                 From
               </label>
-              <input id="h-from" type="date" value={filters.fromDate} onChange={(e) => update({ fromDate: e.target.value })} />
+              <input
+                id="h-from"
+                type="date"
+                value={filters.fromDate}
+                onChange={(e) => update({ fromDate: e.target.value })}
+              />
               <span aria-hidden="true">–</span>
               <label htmlFor="h-to" className="sr-only">
                 To
               </label>
-              <input id="h-to" type="date" value={filters.toDate} onChange={(e) => update({ toDate: e.target.value })} />
+              <input
+                id="h-to"
+                type="date"
+                value={filters.toDate}
+                onChange={(e) => update({ toDate: e.target.value })}
+              />
             </>
           )}
           {filtered && (
             <button
               type="button"
               className="button-quiet"
-              onClick={() => update({ categories: [], actor: "", q: "", range: "all", fromDate: "", toDate: "" })}
+              onClick={() =>
+                update({
+                  categories: [],
+                  actor: "",
+                  q: "",
+                  range: "all",
+                  fromDate: "",
+                  toDate: "",
+                })
+              }
             >
               Clear filters
             </button>
@@ -200,7 +274,9 @@ export function History() {
       </div>
 
       {first.error && <ErrorNote message={first.error} />}
-      {first.data && events.length === 0 && <p className="muted">Nothing matches these filters.</p>}
+      {first.data && events.length === 0 && (
+        <p className="muted">Nothing matches these filters.</p>
+      )}
       {events.length > 0 && (
         <div className="table-wrap">
           <table className="history">
@@ -215,7 +291,8 @@ export function History() {
             <tbody>
               {events.map((e) => {
                 const link = targetLink(e);
-                const hasDetails = e.details && Object.keys(e.details).length > 0;
+                const hasDetails =
+                  e.details && Object.keys(e.details).length > 0;
                 return (
                   <tr key={e.id}>
                     <td className="num">
@@ -224,7 +301,10 @@ export function History() {
                       </time>
                     </td>
                     <td>
-                      <span className="category">{categoryLabel(e.category)}</span> {describe(e)}
+                      <span className="category">
+                        {categoryLabel(e.category)}
+                      </span>{" "}
+                      {describe(e)}
                       {hasDetails && (
                         <details className="event-details">
                           <summary>Details</summary>
@@ -233,7 +313,17 @@ export function History() {
                       )}
                     </td>
                     <td>{e.actor}</td>
-                    <td>{e.target ? link ? <Link to={link}>{e.target}</Link> : e.target : <span className="muted">–</span>}</td>
+                    <td>
+                      {e.target ? (
+                        link ? (
+                          <Link to={link}>{e.target}</Link>
+                        ) : (
+                          e.target
+                        )
+                      ) : (
+                        <span className="muted">–</span>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
@@ -243,7 +333,12 @@ export function History() {
       )}
       {moreError && <ErrorNote message={moreError} />}
       {cursor && (
-        <button type="button" className="button-quiet load-more" onClick={loadMore} disabled={loadingMore}>
+        <button
+          type="button"
+          className="button-quiet load-more"
+          onClick={loadMore}
+          disabled={loadingMore}
+        >
           {loadingMore ? "Loading…" : "Load older entries"}
         </button>
       )}

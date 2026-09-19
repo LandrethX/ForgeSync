@@ -1,13 +1,31 @@
 import { useEffect, useRef, useState } from "react";
 import { api, hasRole, type InventoryStatus, type RepoStatus } from "../api";
 import { ErrorNote, PageHeader } from "../components/Layout";
-import { PresenceLabel, REPO_STATUS, RepoStatusBadge } from "../components/StatusBadge";
+import {
+  PresenceLabel,
+  REPO_STATUS,
+  RepoStatusBadge,
+} from "../components/StatusBadge";
 import { formatAgo, formatDateTime, formatDuration } from "../format";
-import { useDebounced, useLoad, useNodes, useNow, useSession } from "../hooks";
+import {
+  useDebounced,
+  useLeadership,
+  useLoad,
+  useNodes,
+  useNow,
+  useSession,
+} from "../hooks";
 import { Link } from "../router";
 
 const PAGE = 100;
-const FILTERS: (RepoStatus | "")[] = ["", "missing", "differs", "unknown", "same", "deleted"];
+const FILTERS: (RepoStatus | "")[] = [
+  "",
+  "missing",
+  "differs",
+  "unknown",
+  "same",
+  "deleted",
+];
 
 export function Repositories() {
   const session = useSession();
@@ -20,11 +38,21 @@ export function Repositories() {
   useEffect(() => setOffset(0), [q, status]);
 
   const list = useLoad(
-    () => api.repositories({ q: q || undefined, status: status || undefined, limit: PAGE, offset }),
+    () =>
+      api.repositories({
+        q: q || undefined,
+        status: status || undefined,
+        limit: PAGE,
+        offset,
+      }),
     [q, status, offset],
   );
   const scan = useScanStatus(list.reload);
-  const nodeNames = nodes?.map((n) => n.name) ?? list.data?.items[0]?.nodes.map((v) => v.node) ?? [];
+  const nodeNames =
+    nodes?.map((n) => n.name) ??
+    list.data?.items[0]?.nodes.map((v) => v.node) ??
+    [];
+  const { readOnly, leaderName } = useLeadership();
   const counts = list.data?.counts ?? {};
   const all = Object.values(counts).reduce((a, b) => a + (b ?? 0), 0);
 
@@ -32,17 +60,33 @@ export function Repositories() {
     <>
       <PageHeader title="Repositories">
         {hasRole(session, "operator") && (
-          <button type="button" className="button-quiet" onClick={scan.start} disabled={scan.status?.running}>
+          <button
+            type="button"
+            className="button-quiet"
+            onClick={scan.start}
+            disabled={scan.status?.running || readOnly}
+            title={
+              readOnly
+                ? `Only ${leaderName || "the controller in charge"} can start a scan`
+                : undefined
+            }
+          >
             {scan.status?.running ? "Scanning…" : "Scan now"}
           </button>
         )}
       </PageHeader>
       <p className="muted page-intro">
         What each node has, found by scanning every node
-        {scan.status ? ` every ${formatDuration(scan.status.interval_seconds * 1000)}` : " regularly"}. This compares
-        the default branch on each node. With replication on, each repository is copied from its primary (by default
-        its owner's primary site) to the other nodes, and created there if it's missing.
+        {scan.status
+          ? ` every ${formatDuration(scan.status.interval_seconds * 1000)}`
+          : " regularly"}
+        . This compares the default branch on each node. With replication on,
+        each repository is copied from its primary (by default its owner's
+        primary site) to the other nodes, and created there if it's missing.
       </p>
+      {scan.startError && (
+        <ErrorNote message={`The scan wasn't started: ${scan.startError}`} />
+      )}
       <ScanSummary status={scan.status} error={scan.error} />
 
       <div className="toolbar">
@@ -62,7 +106,8 @@ export function Repositories() {
               aria-pressed={status === f}
               onClick={() => setStatus(f)}
             >
-              {f ? REPO_STATUS[f].label : "All"} <span className="count">{f ? (counts[f] ?? 0) : all}</span>
+              {f ? REPO_STATUS[f].label : "All"}{" "}
+              <span className="count">{f ? (counts[f] ?? 0) : all}</span>
             </button>
           ))}
         </div>
@@ -71,7 +116,9 @@ export function Repositories() {
       {list.error && <ErrorNote message={list.error} />}
       {list.data && list.data.items.length === 0 && (
         <p className="muted">
-          {all === 0 ? "No repositories found yet. The first scan may still be running." : "No repositories match."}
+          {all === 0
+            ? "No repositories found yet. The first scan may still be running."
+            : "No repositories match."}
         </p>
       )}
       {list.data && list.data.items.length > 0 && (
@@ -100,8 +147,12 @@ export function Repositories() {
                       <RepoStatusBadge status={r.status} />
                     </td>
                     <td>
-                      {r.primary_node || <span className="muted">Not set yet</span>}
-                      {r.primary_source === "manual" && <span className="muted"> (chosen)</span>}
+                      {r.primary_node || (
+                        <span className="muted">Not set yet</span>
+                      )}
+                      {r.primary_source === "manual" && (
+                        <span className="muted"> (chosen)</span>
+                      )}
                     </td>
                     {nodeNames.map((n) => {
                       const v = r.nodes.find((x) => x.node === n);
@@ -115,8 +166,16 @@ export function Repositories() {
                               : "Branch unreadable"
                           : undefined;
                       return (
-                        <td key={n} className={detail && rp?.head_sha ? "mono" : undefined}>
-                          <PresenceLabel presence={v?.presence ?? "unknown"} detail={detail} />
+                        <td
+                          key={n}
+                          className={
+                            detail && rp?.head_sha ? "mono" : undefined
+                          }
+                        >
+                          <PresenceLabel
+                            presence={v?.presence ?? "unknown"}
+                            detail={detail}
+                          />
                         </td>
                       );
                     })}
@@ -132,14 +191,27 @@ export function Repositories() {
   );
 }
 
-function Pager({ total, offset, onChange }: { total: number; offset: number; onChange: (o: number) => void }) {
+function Pager({
+  total,
+  offset,
+  onChange,
+}: {
+  total: number;
+  offset: number;
+  onChange: (o: number) => void;
+}) {
   if (total <= PAGE) return <p className="muted pager">{total} repositories</p>;
   return (
     <div className="pager">
       <span className="muted">
         {offset + 1}–{Math.min(offset + PAGE, total)} of {total}
       </span>
-      <button type="button" className="button-quiet" disabled={offset === 0} onClick={() => onChange(offset - PAGE)}>
+      <button
+        type="button"
+        className="button-quiet"
+        disabled={offset === 0}
+        onClick={() => onChange(offset - PAGE)}
+      >
         Previous
       </button>
       <button
@@ -158,6 +230,9 @@ function Pager({ total, offset, onChange }: { total: number; offset: number; onC
 function useScanStatus(onFinished: () => void) {
   const [status, setStatus] = useState<InventoryStatus>();
   const [error, setError] = useState<string>();
+  // Failing to read the status and being turned away when asking for a scan
+  // are different things, and used to be told as the same one.
+  const [startError, setStartError] = useState<string>();
   const wasRunning = useRef(false);
   const finishedRef = useRef(onFinished);
   finishedRef.current = onFinished;
@@ -171,7 +246,9 @@ function useScanStatus(onFinished: () => void) {
         if (wasRunning.current && !s.running) finishedRef.current();
         wasRunning.current = s.running;
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) =>
+        setError(e instanceof Error ? e.message : String(e)),
+      );
 
   useEffect(() => {
     refresh();
@@ -187,24 +264,36 @@ function useScanStatus(onFinished: () => void) {
         wasRunning.current = true;
         setStatus((s) => (s ? { ...s, running: true } : s));
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) =>
+        setStartError(e instanceof Error ? e.message : String(e)),
+      );
   };
-  return { status, error, start };
+  return { status, error, startError, start };
 }
 
-function ScanSummary({ status, error }: { status?: InventoryStatus; error?: string }) {
+function ScanSummary({
+  status,
+  error,
+}: {
+  status?: InventoryStatus;
+  error?: string;
+}) {
   const now = useNow(5000);
-  if (error) return <ErrorNote message={`Couldn't load the scan status: ${error}`} />;
+  if (error)
+    return <ErrorNote message={`Couldn't load the scan status: ${error}`} />;
   if (!status) return null;
   return (
     <ul className="scan-summary" aria-label="Latest scan per node">
-      {status.nodes.length === 0 && <li className="muted">No node has been scanned yet.</li>}
+      {status.nodes.length === 0 && (
+        <li className="muted">No node has been scanned yet.</li>
+      )}
       {status.nodes.map((n) => (
         <li key={n.node}>
           <strong>{n.node}</strong>{" "}
           {n.ok ? (
             <span title={formatDateTime(n.finished_at)}>
-              {n.repositories} repositories, scanned {formatAgo(n.finished_at, now).toLowerCase()}
+              {n.repositories} repositories, scanned{" "}
+              {formatAgo(n.finished_at, now).toLowerCase()}
             </span>
           ) : (
             <span>

@@ -15,7 +15,8 @@ export function Nodes() {
     <>
       <PageHeader title="Nodes" />
       <p className="muted page-intro">
-        Nodes come from the controller's config file. Their health is checked on the configured interval and updates here live.
+        Nodes come from the controller's config file. Their health is checked on
+        the configured interval and updates here live.
         {showHooks &&
           " Each node reports changes to ForgeSync through a system webhook, so replication starts within seconds; the regular scan is a safety net."}
       </p>
@@ -40,22 +41,41 @@ export function Nodes() {
               {nodes.map((n) => (
                 <tr key={n.name}>
                   <th scope="row">
-                    <Link to={`/nodes/${encodeURIComponent(n.name)}`}>{n.name}</Link>
+                    <Link to={`/nodes/${encodeURIComponent(n.name)}`}>
+                      {n.name}
+                    </Link>
                   </th>
                   <td>{n.site || "–"}</td>
                   <td>
                     <StatusBadge state={n.state} />
                   </td>
                   <td>{n.version || "–"}</td>
-                  <td className="num" title={n.last_seen ? formatDateTime(n.last_seen) : undefined}>
+                  <td
+                    className="num"
+                    title={
+                      n.last_seen ? formatDateTime(n.last_seen) : undefined
+                    }
+                  >
                     {formatAgo(n.last_seen, now)}
                   </td>
-                  <td className="num" title={n.last_checked ? formatDateTime(n.last_checked) : undefined}>
-                    {n.state === "UNKNOWN" ? "–" : formatAgo(n.last_checked, now)}
+                  <td
+                    className="num"
+                    title={
+                      n.last_checked
+                        ? formatDateTime(n.last_checked)
+                        : undefined
+                    }
+                  >
+                    {n.state === "UNKNOWN"
+                      ? "–"
+                      : formatAgo(n.last_checked, now)}
                   </td>
                   {showHooks && (
                     <td>
-                      <WebhookCell hook={hooks.data?.nodes.find((h) => h.node === n.name)} now={now} />
+                      <WebhookCell
+                        hook={hooks.data?.nodes.find((h) => h.node === n.name)}
+                        now={now}
+                      />
                     </td>
                   )}
                   <td>

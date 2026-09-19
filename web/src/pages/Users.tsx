@@ -2,7 +2,13 @@ import { useEffect, useState } from "react";
 import { ApiError, api, hasRole, type User } from "../api";
 import { ErrorNote, PageHeader } from "../components/Layout";
 import { formatDateTime } from "../format";
-import { useDebounced, useLoad, useNodes, useSession } from "../hooks";
+import {
+  useDebounced,
+  useLeadership,
+  useLoad,
+  useNodes,
+  useSession,
+} from "../hooks";
 
 const SOURCE_TEXT: Record<User["home_source"], string> = {
   "": "Not set yet",
@@ -15,23 +21,41 @@ export function Users() {
   const [query, setQuery] = useState("");
   const q = useDebounced(query.trim(), 250);
   const list = useLoad(() => api.users(q || undefined), [q]);
-  const nodeNames = nodes?.map((n) => n.name) ?? [...new Set(list.data?.items.flatMap((u) => u.accounts.map((a) => a.node)))].sort();
+  const nodeNames =
+    nodes?.map((n) => n.name) ??
+    [
+      ...new Set(
+        list.data?.items.flatMap((u) => u.accounts.map((a) => a.node)),
+      ),
+    ].sort();
 
   return (
     <>
       <PageHeader title="Users" />
       <p className="muted page-intro">
-        SceneID users found on the nodes. Each has a primary site: by default where they registered, meaning the node
-        their account was created on first. Their repositories take it as their primary. ForgeSync creates their account
-        on another node when one of their repositories is copied there; they're linked to it on their first sign-in.
+        SceneID users found on the nodes. Each has a primary site: by default
+        where they registered, meaning the node their account was created on
+        first. Their repositories take it as their primary. ForgeSync creates
+        their account on another node when one of their repositories is copied
+        there; they're linked to it on their first sign-in.
       </p>
       <div className="toolbar">
         <label htmlFor="user-search">Search</label>
-        <input id="user-search" type="search" placeholder="login" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <input
+          id="user-search"
+          type="search"
+          placeholder="login"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
       </div>
       {list.error && <ErrorNote message={list.error} />}
       {list.data && list.data.items.length === 0 && (
-        <p className="muted">{q ? "No users match." : "No SceneID users found yet. The first scan may still be running."}</p>
+        <p className="muted">
+          {q
+            ? "No users match."
+            : "No SceneID users found yet. The first scan may still be running."}
+        </p>
       )}
       {list.data && list.data.items.length > 0 && (
         <div className="table-wrap">
@@ -52,12 +76,23 @@ export function Users() {
                 <tr key={u.id}>
                   <th scope="row">{u.login}</th>
                   <td>
-                    <HomeCell user={u} nodeNames={nodeNames} onSaved={list.reload} />
+                    <HomeCell
+                      user={u}
+                      nodeNames={nodeNames}
+                      onSaved={list.reload}
+                    />
                   </td>
                   {nodeNames.map((n) => {
                     const a = u.accounts.find((x) => x.node === n && x.present);
                     return (
-                      <td key={n} title={a?.forgejo_created_at ? `Created ${formatDateTime(a.forgejo_created_at)}` : undefined}>
+                      <td
+                        key={n}
+                        title={
+                          a?.forgejo_created_at
+                            ? `Created ${formatDateTime(a.forgejo_created_at)}`
+                            : undefined
+                        }
+                      >
                         {!a ? (
                           <span className="muted">No account</span>
                         ) : a.created_by_forgesync ? (
@@ -79,7 +114,15 @@ export function Users() {
   );
 }
 
-function HomeCell({ user, nodeNames, onSaved }: { user: User; nodeNames: string[]; onSaved: () => void }) {
+function HomeCell({
+  user,
+  nodeNames,
+  onSaved,
+}: {
+  user: User;
+  nodeNames: string[];
+  onSaved: () => void;
+}) {
   const session = useSession();
   const [choice, setChoice] = useState(user.home_node);
   const [busy, setBusy] = useState(false);
@@ -94,6 +137,8 @@ function HomeCell({ user, nodeNames, onSaved }: { user: User; nodeNames: string[
       </>
     );
   }
+  const { readOnly, leaderName } = useLeadership();
+
   async function save() {
     setBusy(true);
     setError(undefined);
@@ -112,7 +157,11 @@ function HomeCell({ user, nodeNames, onSaved }: { user: User; nodeNames: string[
       <label htmlFor={id} className="sr-only">
         Primary site for {user.login}
       </label>
-      <select id={id} value={choice} onChange={(e) => setChoice(e.target.value)}>
+      <select
+        id={id}
+        value={choice}
+        onChange={(e) => setChoice(e.target.value)}
+      >
         {!user.home_node && <option value="">Not set yet</option>}
         {nodeNames.map((n) => (
           <option key={n} value={n}>
@@ -121,7 +170,17 @@ function HomeCell({ user, nodeNames, onSaved }: { user: User; nodeNames: string[
         ))}
       </select>
       {choice !== user.home_node && choice && (
-        <button type="button" className="button-primary" onClick={save} disabled={busy}>
+        <button
+          type="button"
+          className="button-primary"
+          onClick={save}
+          disabled={busy || readOnly}
+          title={
+            readOnly
+              ? `Only ${leaderName || "the controller in charge"} can change this`
+              : undefined
+          }
+        >
           {busy ? "Saving…" : "Save"}
         </button>
       )}

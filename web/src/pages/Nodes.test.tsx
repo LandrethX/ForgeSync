@@ -29,7 +29,9 @@ const nodes: Node[] = [
 describe("Nodes", () => {
   it("waits for the first health check", () => {
     render(
-      <NodeStreamContext.Provider value={{ nodes: undefined, connection: "connecting" }}>
+      <NodeStreamContext.Provider
+        value={{ nodes: undefined, connection: "connecting" }}
+      >
         <Nodes />
       </NodeStreamContext.Provider>,
     );
@@ -46,7 +48,9 @@ describe("Nodes", () => {
     expect(rows).toHaveLength(2);
 
     const dk = within(rows[0]!);
-    expect(dk.getByRole("link", { name: "dk" }).getAttribute("href")).toBe("/nodes/dk");
+    expect(dk.getByRole("link", { name: "dk" }).getAttribute("href")).toBe(
+      "/nodes/dk",
+    );
     expect(dk.getByText("Unreachable")).toBeTruthy();
     expect(dk.getByText("Never")).toBeTruthy();
 
@@ -61,17 +65,31 @@ describe("Nodes with webhooks", () => {
     const { vi } = await import("vitest");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        new Response(
-          JSON.stringify({
-            enabled: true,
-            nodes: [
-              { node: "dk", installed: false, error: "connection refused", deliveries: 0, rejected: 0 },
-              { node: "se", installed: true, hook_id: 3, deliveries: 12, rejected: 1, last_delivery_at: new Date().toISOString() },
-            ],
-          }),
-          { status: 200 },
-        ),
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              enabled: true,
+              nodes: [
+                {
+                  node: "dk",
+                  installed: false,
+                  error: "connection refused",
+                  deliveries: 0,
+                  rejected: 0,
+                },
+                {
+                  node: "se",
+                  installed: true,
+                  hook_id: 3,
+                  deliveries: 12,
+                  rejected: 1,
+                  last_delivery_at: new Date().toISOString(),
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
       ),
     );
     render(
@@ -79,7 +97,9 @@ describe("Nodes with webhooks", () => {
         <Nodes />
       </NodeStreamContext.Provider>,
     );
-    expect(await screen.findByRole("columnheader", { name: "Webhook" })).toBeTruthy();
+    expect(
+      await screen.findByRole("columnheader", { name: "Webhook" }),
+    ).toBeTruthy();
     const rows = screen.getAllByRole("row").slice(1);
     expect(within(rows[0]!).getByText("Not installed")).toBeTruthy();
     expect(within(rows[1]!).getByText("Installed")).toBeTruthy();

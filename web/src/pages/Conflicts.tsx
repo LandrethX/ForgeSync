@@ -14,7 +14,10 @@ export function Conflicts() {
   const [tab, setTab] = useState<Tab>("open");
   const [offset, setOffset] = useState(0);
   useEffect(() => setOffset(0), [tab]);
-  const list = useLoad(() => api.conflicts({ state: tab, limit: PAGE, offset }), [tab, offset]);
+  const list = useLoad(
+    () => api.conflicts({ state: tab, limit: PAGE, offset }),
+    [tab, offset],
+  );
   const now = useNow(10000);
   const counts = list.data?.counts ?? {};
 
@@ -22,14 +25,22 @@ export function Conflicts() {
     <>
       <PageHeader title="Conflicts" />
       <p className="muted page-intro">
-        Differences between nodes that ForgeSync won't settle by itself: diverged history, commits made on a replica,
-        history rewritten on a primary. A conflict clears on its own once a later check finds the nodes agree.
+        Differences between nodes that ForgeSync won't settle by itself:
+        diverged history, commits made on a replica, history rewritten on a
+        primary. A conflict clears on its own once a later check finds the nodes
+        agree.
       </p>
 
       <div className="segmented tabs" role="group" aria-label="Show">
         {(["open", "cleared"] as Tab[]).map((t) => (
-          <button key={t} type="button" aria-pressed={tab === t} onClick={() => setTab(t)}>
-            {t === "open" ? "Open" : "Cleared"} <span className="count">{counts[t] ?? 0}</span>
+          <button
+            key={t}
+            type="button"
+            aria-pressed={tab === t}
+            onClick={() => setTab(t)}
+          >
+            {t === "open" ? "Open" : "Cleared"}{" "}
+            <span className="count">{counts[t] ?? 0}</span>
           </button>
         ))}
       </div>
@@ -61,26 +72,42 @@ export function Conflicts() {
             </thead>
             <tbody>
               {list.data.items.map((c) => {
-                const when = tab === "open" ? c.detected_at : (c.cleared_at ?? c.last_seen_at);
+                const when =
+                  tab === "open"
+                    ? c.detected_at
+                    : (c.cleared_at ?? c.last_seen_at);
                 return (
                   <tr key={c.id}>
                     <th scope="row">
                       <span className="presence">
-                        <StatusIcon tone={c.state === "open" ? "serious" : "good"} />
-                        <Link to={`/conflicts/${c.id}`}>{conflictTitle(c)}</Link>
+                        <StatusIcon
+                          tone={c.state === "open" ? "serious" : "good"}
+                        />
+                        <Link to={`/conflicts/${c.id}`}>
+                          {conflictTitle(c)}
+                        </Link>
                       </span>
                     </th>
                     <td>
-                      <Link to={`/repositories/${c.repository_id}`}>{c.full_name}</Link>
+                      <Link to={`/repositories/${c.repository_id}`}>
+                        {c.full_name}
+                      </Link>
                     </td>
                     <td className="mono">
                       {conflictSides(c).map(([node, v]) => (
                         <div key={node}>
-                          {node}: {c.kind === "default_branch_mismatch" ? v : v ? v.slice(0, 7) : "–"}
+                          {node}:{" "}
+                          {c.kind === "default_branch_mismatch"
+                            ? v
+                            : v
+                              ? v.slice(0, 7)
+                              : "–"}
                         </div>
                       ))}
                     </td>
-                    <td>{c.primary_node || <span className="muted">Not set</span>}</td>
+                    <td>
+                      {c.primary_node || <span className="muted">Not set</span>}
+                    </td>
                     <td className="num" title={formatDateTime(when)}>
                       {formatAgo(when, now)}
                     </td>
@@ -104,9 +131,15 @@ export function Conflicts() {
       {list.data && list.data.total > PAGE && (
         <div className="pager">
           <span className="muted">
-            {offset + 1}–{Math.min(offset + PAGE, list.data.total)} of {list.data.total}
+            {offset + 1}–{Math.min(offset + PAGE, list.data.total)} of{" "}
+            {list.data.total}
           </span>
-          <button type="button" className="button-quiet" disabled={offset === 0} onClick={() => setOffset(offset - PAGE)}>
+          <button
+            type="button"
+            className="button-quiet"
+            disabled={offset === 0}
+            onClick={() => setOffset(offset - PAGE)}
+          >
             Previous
           </button>
           <button

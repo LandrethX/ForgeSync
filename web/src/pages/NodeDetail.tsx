@@ -23,7 +23,8 @@ export function NodeDetail({ name }: { name: string }) {
       <>
         <PageHeader title="Node not found" />
         <p>
-          There's no node called <strong>{name}</strong>. <Link to="/nodes">Back to nodes</Link>
+          There's no node called <strong>{name}</strong>.{" "}
+          <Link to="/nodes">Back to nodes</Link>
         </p>
       </>
     );
@@ -34,8 +35,12 @@ export function NodeDetail({ name }: { name: string }) {
       <p className="breadcrumb">
         <Link to="/nodes">Nodes</Link> / {name}
       </p>
-      <PageHeader title={name}>{node && <StatusBadge state={node.state} />}</PageHeader>
-      {node && <p className="muted page-intro">{stateInfo(node.state).description}</p>}
+      <PageHeader title={name}>
+        {node && <StatusBadge state={node.state} />}
+      </PageHeader>
+      {node && (
+        <p className="muted page-intro">{stateInfo(node.state).description}</p>
+      )}
 
       {node && (
         <dl className="facts facts-wide">
@@ -50,11 +55,19 @@ export function NodeDetail({ name }: { name: string }) {
           <dt>Forgejo version</dt>
           <dd>{node.version || "–"}</dd>
           <dt>Last checked</dt>
-          <dd title={node.last_checked ? formatDateTime(node.last_checked) : undefined}>
+          <dd
+            title={
+              node.last_checked ? formatDateTime(node.last_checked) : undefined
+            }
+          >
             {node.state === "UNKNOWN" ? "–" : formatAgo(node.last_checked, now)}
           </dd>
           <dt>Last seen</dt>
-          <dd title={node.last_seen ? formatDateTime(node.last_seen) : undefined}>{formatAgo(node.last_seen, now)}</dd>
+          <dd
+            title={node.last_seen ? formatDateTime(node.last_seen) : undefined}
+          >
+            {formatAgo(node.last_seen, now)}
+          </dd>
           {node.failing_since && (
             <>
               <dt>Not healthy for</dt>
@@ -81,7 +94,9 @@ export function NodeDetail({ name }: { name: string }) {
       <section aria-labelledby="history-heading">
         <h2 id="history-heading">State history</h2>
         {history.error && <ErrorNote message={history.error} />}
-        {history.data && history.data.length === 0 && <p className="muted">No state changes recorded yet.</p>}
+        {history.data && history.data.length === 0 && (
+          <p className="muted">No state changes recorded yet.</p>
+        )}
         {history.data && history.data.length > 0 && (
           <div className="table-wrap">
             <table>

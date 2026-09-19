@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, hasRole, SIGNED_OUT_EVENT, type Session } from "./api";
 import { Layout, PageHeader } from "./components/Layout";
-import { NodeStreamContext, SessionContext, useNodeStream } from "./hooks";
+import {
+  LeadershipContext,
+  NodeStreamContext,
+  SessionContext,
+  useLeadershipPoll,
+  useNodeStream,
+} from "./hooks";
 import { ConflictDetail } from "./pages/ConflictDetail";
 import { Conflicts } from "./pages/Conflicts";
 import { Dashboard } from "./pages/Dashboard";
@@ -27,7 +33,13 @@ export function App() {
         setSession(s);
         setAuth("signed-in");
       })
-      .catch((e: unknown) => setAuth(e instanceof ApiError && e.status === 401 ? "signed-out" : "unavailable"));
+      .catch((e: unknown) =>
+        setAuth(
+          e instanceof ApiError && e.status === 401
+            ? "signed-out"
+            : "unavailable",
+        ),
+      );
   }, []);
 
   const signedIn = (s: Session) => {
@@ -68,19 +80,34 @@ export function App() {
     case "signed-out":
       return <Login onSignedIn={signedIn} />;
     case "signed-in":
-      return session ? <SignedIn session={session} onSignOut={signOut} /> : null;
+      return session ? (
+        <SignedIn session={session} onSignOut={signOut} />
+      ) : null;
   }
 }
 
-function SignedIn({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
+function SignedIn({
+  session,
+  onSignOut,
+}: {
+  session: Session;
+  onSignOut: () => void;
+}) {
   const stream = useNodeStream();
+  const leadership = useLeadershipPoll();
   return (
     <SessionContext.Provider value={session}>
-      <NodeStreamContext.Provider value={stream}>
-        <Layout connection={stream.connection} session={session} onSignOut={onSignOut}>
-          <Routes session={session} />
-        </Layout>
-      </NodeStreamContext.Provider>
+      <LeadershipContext.Provider value={leadership}>
+        <NodeStreamContext.Provider value={stream}>
+          <Layout
+            connection={stream.connection}
+            session={session}
+            onSignOut={onSignOut}
+          >
+            <Routes session={session} />
+          </Layout>
+        </NodeStreamContext.Provider>
+      </LeadershipContext.Provider>
     </SessionContext.Provider>
   );
 }
@@ -102,14 +129,18 @@ function Routes({ session }: { session: Session }) {
   if (match("/users", path)) return <Users />;
   if (match("/conflicts", path)) return <Conflicts />;
   const conflict = match("/conflicts/:id", path);
-  if (conflict?.id && /^\d+$/.test(conflict.id)) return <ConflictDetail id={Number(conflict.id)} />;
+  if (conflict?.id && /^\d+$/.test(conflict.id))
+    return <ConflictDetail id={Number(conflict.id)} />;
   if (match("/audit", path)) {
     return hasRole(session, "operator") ? (
       <History />
     ) : (
       <>
         <PageHeader title="Events & audit" />
-        <p>The event and audit history needs the operator role. Ask an administrator if you need it.</p>
+        <p>
+          The event and audit history needs the operator role. Ask an
+          administrator if you need it.
+        </p>
       </>
     );
   }

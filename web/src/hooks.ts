@@ -1,5 +1,18 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { api, ApiError, SIGNED_OUT_EVENT, type Node, type Session } from "./api";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import {
+  api,
+  ApiError,
+  SIGNED_OUT_EVENT,
+  type Node,
+  type Session,
+} from "./api";
 
 /** Current time, re-rendering every `intervalMs` so relative times stay fresh. */
 export function useNow(intervalMs = 1000): number {
@@ -19,7 +32,10 @@ export interface Loaded<T> {
 }
 
 /** Runs `load` on mount and whenever `key` changes; keeps the last data while reloading. */
-export function useLoad<T>(load: () => Promise<T>, key: unknown[] = []): Loaded<T> {
+export function useLoad<T>(
+  load: () => Promise<T>,
+  key: unknown[] = [],
+): Loaded<T> {
   const [data, setData] = useState<T>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(true);
@@ -60,7 +76,10 @@ export interface NodeStream {
   connection: Connection;
 }
 
-export const NodeStreamContext = createContext<NodeStream>({ nodes: undefined, connection: "connecting" });
+export const NodeStreamContext = createContext<NodeStream>({
+  nodes: undefined,
+  connection: "connecting",
+});
 
 export function useNodes(): NodeStream {
   return useContext(NodeStreamContext);
@@ -100,6 +119,56 @@ export function useNodeStream(): NodeStream {
   }, []);
 
   return { nodes, connection };
+}
+
+/** Which controller this is, and who is in charge if it isn't this one. */
+export type Leadership = {
+  /** single, leader or standby; undefined until it's known. */
+  role?: string;
+  leaderName?: string;
+  leaderURL?: string;
+  /** True once it's known that this controller can't be written to. */
+  readOnly: boolean;
+};
+
+export const LeadershipContext = createContext<Leadership>({ readOnly: false });
+
+/**
+ * A standby serves every page but turns away anything that changes the
+ * installation, so the whole app needs to know which one it is talking to.
+ */
+export function useLeadership(): Leadership {
+  return useContext(LeadershipContext);
+}
+
+/** Asks the controller which it is, and keeps asking: leadership moves. */
+export function useLeadershipPoll(): Leadership {
+  const [state, setState] = useState<Leadership>({ readOnly: false });
+  useEffect(() => {
+    let live = true;
+    const refresh = () =>
+      api
+        .overview()
+        .then((o) => {
+          if (!live) return;
+          setState({
+            role: o.role,
+            leaderName: o.leader?.name,
+            leaderURL: o.leader?.url,
+            readOnly: o.role === "standby",
+          });
+        })
+        .catch(() => {
+          // Leave it as it was: a hiccup shouldn't make the app look broken.
+        });
+    refresh();
+    const id = window.setInterval(refresh, 15000);
+    return () => {
+      live = false;
+      window.clearInterval(id);
+    };
+  }, []);
+  return state;
 }
 
 export const SessionContext = createContext<Session | undefined>(undefined);

@@ -20,13 +20,24 @@ const alice: User = {
 };
 
 function session(role: Role): Session {
-  return { subject: "x", username: "u", name: "U", role, source: "sceneid", expires_at: "2026-09-18T18:00:00Z" };
+  return {
+    subject: "x",
+    username: "u",
+    name: "U",
+    role,
+    source: "sceneid",
+    expires_at: "2026-09-18T18:00:00Z",
+  };
 }
 
 function wrap(role: Role, children: ReactNode) {
   return (
     <SessionContext.Provider value={session(role)}>
-      <NodeStreamContext.Provider value={{ nodes: undefined, connection: "live" }}>{children}</NodeStreamContext.Provider>
+      <NodeStreamContext.Provider
+        value={{ nodes: undefined, connection: "live" }}
+      >
+        {children}
+      </NodeStreamContext.Provider>
     </SessionContext.Provider>
   );
 }
@@ -35,8 +46,10 @@ function mockApi() {
   const fn = vi.fn(async (url: string) => {
     const path = url.replace(/^\/api\/v1/, "");
     let body: unknown = {};
-    if (path.startsWith("/users") && !path.endsWith("/home")) body = { total: 1, items: [alice] };
-    else if (path === `/users/${alice.id}/home`) body = { home_node: "se", previous: "dk" };
+    if (path.startsWith("/users") && !path.endsWith("/home"))
+      body = { total: 1, items: [alice] };
+    else if (path === `/users/${alice.id}/home`)
+      body = { home_node: "se", previous: "dk" };
     return new Response(JSON.stringify(body), { status: 200 });
   });
   vi.stubGlobal("fetch", fn);
@@ -49,7 +62,9 @@ describe("Users", () => {
   it("shows each user's primary site and where they have accounts", async () => {
     mockApi();
     render(wrap("viewer", <Users />));
-    const row = (await screen.findByRole("rowheader", { name: "alice" })).closest("tr")!;
+    const row = (
+      await screen.findByRole("rowheader", { name: "alice" })
+    ).closest("tr")!;
     expect(within(row).getByText("dk")).toBeTruthy();
     expect(within(row).getByText(/Where they registered/)).toBeTruthy();
     expect(within(row).getByText("Registered")).toBeTruthy();
@@ -63,7 +78,9 @@ describe("Users", () => {
     const select = await screen.findByLabelText("Primary site for alice");
     await userEvent.selectOptions(select, "se");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    const call = fetch.mock.calls.find(([u]) => u === `/api/v1/users/${alice.id}/home`) as unknown as [string, RequestInit];
+    const call = fetch.mock.calls.find(
+      ([u]) => u === `/api/v1/users/${alice.id}/home`,
+    ) as unknown as [string, RequestInit];
     expect(call[1].method).toBe("PUT");
     expect(call[1].body).toBe('{"node":"se"}');
   });

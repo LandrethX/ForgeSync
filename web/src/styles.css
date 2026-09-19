@@ -129,7 +129,7 @@ code,
 .shell {
   display: grid;
   grid-template-columns: 200px 1fr;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto 1fr;
   min-height: 100vh;
 }
 
@@ -607,6 +607,25 @@ td.details {
   max-width: 24rem;
   overflow-wrap: anywhere;
   color: var(--text-2);
+}
+
+/* A standby serves the same pages; this says so before anyone clicks. It
+   sits under the header and spans both columns of the shell grid. */
+.standby-banner {
+  grid-column: 1 / -1;
+  padding: 0.6rem 1.25rem;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 0.9rem;
+}
+
+.standby-banner strong {
+  color: var(--text);
+}
+
+.standby-banner a {
+  color: var(--link);
 }
 
 /* ---------------------------------------------------------------- login */

@@ -10,7 +10,7 @@ import {
   relationText,
 } from "../conflictText";
 import { formatDateTime } from "../format";
-import { useLoad, useNodes, useSession } from "../hooks";
+import { useLeadership, useLoad, useNodes, useSession } from "../hooks";
 import { Link } from "../router";
 
 export function ConflictDetail({ id }: { id: number }) {
@@ -201,6 +201,8 @@ function Acknowledgement({
   const canEdit = hasRole(session, "operator");
   if (!canEdit && !conflict.acknowledged_by) return null;
 
+  const { readOnly, leaderName } = useLeadership();
+
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -246,7 +248,16 @@ function Acknowledgement({
             placeholder="Who is fixing it, and how"
           />
           <div className="toolbar">
-            <button type="submit" className="button-primary" disabled={busy}>
+            <button
+              type="submit"
+              className="button-primary"
+              disabled={busy || readOnly}
+              title={
+                readOnly
+                  ? `Only ${leaderName || "the controller in charge"} can acknowledge`
+                  : undefined
+              }
+            >
               {busy
                 ? "Saving…"
                 : conflict.acknowledged_by

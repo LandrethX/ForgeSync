@@ -1,0 +1,143 @@
+# Alerts for ForgeSync. Copy into your Prometheus rule files and change
+# the thresholds to match your own intervals -- the comment on each rule
+# says which setting it follows.
+#
+# These are written for a pair of controllers scraped as one job, so the
+# leadership rules aggregate across instances rather than looking at one.
+# Without that, the standby would page you for not leading, which is its
+# job.
+groups:
+  - name: forgesync
+    rules:
+      # --- Is anything actually syncing? ------------------------------
+
+      - alert: ForgeSyncNobodyLeading
+        # The controllers are up but none holds the lease: no scanning,
+        # no replication, and the pages look perfectly healthy. This is
+        # the one to wake someone for.
+        expr: sum(forgesync_leader) == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: No ForgeSync controller is doing the work
+          description: >-
+            Every controller reports itself a standby. Check
+            forgesync_database_up: a controller that can't renew its lease
+            steps down on purpose, so the database is the usual cause.
+
+      - alert: ForgeSyncTwoLeaders
+        # The lease makes this impossible, so if it happens the lease is
+        # not doing what it's supposed to -- two clocks a long way apart,
+        # or two installations pointed at one set of nodes.
+        expr: sum(forgesync_leader) > 1
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: Two ForgeSync controllers think they are leading
+          description: >-
+            Check that both controllers share one database, and that their
+            clocks agree.
+
+      - alert: ForgeSyncControllerDown
+        # The scrape itself failed. With a pair, one being down is not an
+        # emergency -- the other takes over -- but it shouldn't stay that
+        # way.
+        expr: up{job="forgesync"} == 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "ForgeSync controller {{ $labels.instance }} isn't answering"
+
+      - alert: ForgeSyncDatabaseUnreachable
+        expr: forgesync_database_up == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "ForgeSync can't reach its database from {{ $labels.instance }}"
+          description: >-
+            Nothing is replicated while this lasts. The controller stops
+            acting before its lease runs out, so nothing acts on stale
+            information.
+
+      # --- Are the nodes there? ---------------------------------------
+
+      - alert: ForgeSyncNodeUnhealthy
+        # health.failure_threshold x health.interval decides how quickly
+        # ForgeSync itself gives up on a node; this waits longer, so a
+        # restart of a Forgejo node doesn't page anyone.
+        expr: min by (node) (forgesync_node_healthy) == 0
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Forgejo node {{ $labels.node }} has been unhealthy for 10 minutes"
+          description: >-
+            Nothing is replicated to or from it while this lasts. Its
+            repositories are left as they are, not overwritten.
+
+      # --- Is the safety net still running? ---------------------------
+
+      - alert: ForgeSyncScanStale
+        # Three times the default inventory.interval of 30m. A scan that
+        # stops is a sync that stops, and nothing else here shows it:
+        # webhooks keep the fast path alive while whole repositories
+        # quietly drift.
+        expr: time() - max by (node) (forgesync_scan_last_success_timestamp_seconds) > 5400
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Node {{ $labels.node }} hasn't been scanned through for 90 minutes"
+          description: >-
+            Check the controller's log for the round's duration: a round
+            that outgrows inventory.interval never finishes one.
+
+      - alert: ForgeSyncWebhookMissing
+        # Without it, changes wait for the next scan instead of arriving
+        # in seconds. The leader reinstalls its own webhook, so this
+        # usually means the node is refusing it.
+        expr: min by (node) (forgesync_webhook_installed) == 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "ForgeSync's webhook is missing on {{ $labels.node }}"
+          description: >-
+            Replication for that node falls back to the periodic scan.
+            Check [webhook] ALLOWED_HOST_LIST on the node.
+
+      - alert: ForgeSyncWebhookRejected
+        # A rejected delivery is a bad signature: the node's copy of the
+        # secret and the controller's have diverged.
+        expr: increase(forgesync_webhook_rejected_total[15m]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.node }} is sending webhooks ForgeSync refuses"
+          description: >-
+            The signatures don't match. Usually the webhook secret was
+            changed on one side only.
+
+      # --- Is the work getting done? ----------------------------------
+
+      - alert: ForgeSyncReplicasNotInStep
+        # Anything that isn't "synced" is waiting for a person (conflict,
+        # missing) or for a retry (error, waiting). A few minutes is
+        # normal; half an hour is not.
+        expr: sum by (state) (forgesync_replicas{state!="synced"}) > 0
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value }} replicas have been {{ $labels.state }} for 30 minutes"
+          description: >-
+            Open the repositories page and filter by that state; each one
+            says why.
+
+      - alert: ForgeSyncConflictsUnattended
+        # ForgeSync won't settle these by itself, by design. This fires
+        # when nobody has looked for a day -- dismissing a conflict that
+        # isn't ForgeSync's to fix stops it counting.
+        expr: forgesync_conflicts_open > 0
+        for: 24h
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value }} conflicts have been open for a day"
+          description: >-
+            Someone has to decide these. One that can never be fixed --
+            a secret ForgeSync may not read, say -- can be dismissed.

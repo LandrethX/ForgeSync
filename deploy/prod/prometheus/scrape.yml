@@ -1,0 +1,16 @@
+# The scrape job for a pair of ForgeSync controllers.
+#
+# /metrics needs the Viewer role, so the scraper sends the admin token as
+# a bearer token: the same token as the CLI uses. Put it in a file
+# Prometheus can read and nobody else can.
+scrape_configs:
+  - job_name: forgesync
+    scheme: https                     # http if something else terminates TLS
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/forgesync.token
+    static_configs:
+      - targets:
+          - forgesync-a.example.org:8443
+          - forgesync-b.example.org:8443

@@ -64,5 +64,8 @@ database too, so a failover doesn't sign anyone out.
 | `deploy/prod/backup.sh` | A dump of ForgeSync's database; `--verify` restores it into a scratch database and counts what came back. |
 | `phase0/run-all.sh` | The probes that established what stock Forgejo does and doesn't allow (`phase0/README.md`). |
 
+`deploy/prod/prometheus/` has a scrape job and alert rules for the metrics the controller
+exposes.
+
 Every script takes `PUBLIC_HOST=<host or IP>` when the environment isn't reachable under the
 `*.test` names.

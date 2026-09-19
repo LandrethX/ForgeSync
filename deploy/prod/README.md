@@ -194,6 +194,23 @@ token as a bearer token. What to alert on, in order:
 A round logs its own duration; `log.level: debug` adds a line per part, which is how you
 find out what to change when a round outgrows `inventory.interval`.
 
+`prometheus/` has the scrape job and ten alert rules to start from:
+
+```sh
+cp prometheus/forgesync.rules.yml /etc/prometheus/rules/
+cp /etc/forgesync/secrets/admin.token /etc/prometheus/forgesync.token   # the scraper signs in with it
+# then merge prometheus/scrape.yml into your prometheus.yml
+```
+
+The rules aggregate across both controllers rather than looking at one, because a standby
+correctly reports that it isn't leading -- an alert per instance would page you for that.
+The thresholds follow the settings they're about, named in a comment on each rule; the scan
+one assumes `inventory.interval: 30m` and wants changing with it.
+
+They were checked with `promtool` and then against this installation: all ten load and
+evaluate, and stopping a node made `ForgeSyncNodeUnhealthy` fire with the node's name in it
+and resolve when it came back.
+
 ## 11. Backups
 
 The database is the only thing that can't be rebuilt: what each repository's primary is,

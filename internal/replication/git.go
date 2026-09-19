@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -222,6 +224,16 @@ func notFound(stderr string) bool {
 // prompts. Credentials go in an HTTP header set through the environment, so
 // they never appear in the process list.
 func (g *Git) run(ctx context.Context, dir string, auth *Remote, args ...string) (string, string, error) {
+	return g.runWith(ctx, dir, "", auth, args...)
+}
+
+// runStdin runs git with input on its standard input, for the batch
+// commands that take a list of objects.
+func (g *Git) runStdin(ctx context.Context, dir, stdin string, args ...string) (string, string, error) {
+	return g.runWith(ctx, dir, stdin, nil, args...)
+}
+
+func (g *Git) runWith(ctx context.Context, dir, stdin string, auth *Remote, args ...string) (string, string, error) {
 	timeout := g.Timeout
 	if timeout == 0 {
 		timeout = 10 * time.Minute
@@ -259,6 +271,9 @@ func (g *Git) run(ctx context.Context, dir string, auth *Remote, args ...string)
 		env = append(env, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, kv[0]), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, kv[1]))
 	}
 	cmd.Env = env
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -270,4 +285,124 @@ func (g *Git) run(ctx context.Context, dir string, auth *Remote, args ...string)
 		err = fmt.Errorf("git %s: %w: %s", args[0], err, msg)
 	}
 	return stdout.String(), stderr.String(), err
+}
+
+// Pointer is one Git LFS object referenced by a pointer file in the
+// repository: the file in git holds the oid and the size, and the bytes
+// themselves live in the node's LFS store.
+type Pointer struct {
+	OID  string // sha256, as the pointer file spells it
+	Size int64
+}
+
+// pointerMax is the largest blob that can be a pointer file. A pointer is
+// three short lines; the spec allows a few extra ones, never this many.
+const pointerMax = 1024
+
+// Pointers returns the LFS objects referenced anywhere under the given ref
+// patterns in the cache (git glob patterns, e.g. refs/heads/*).
+//
+// Every candidate is read, not guessed: rev-list lists the objects those
+// refs reach, keeping only blobs small enough to be a pointer file, and
+// each one is then read and parsed. A file that merely looks small isn't
+// counted, and a real pointer is never missed because it sits in an old
+// commit or on a branch nobody has checked out.
+func (g *Git) Pointers(ctx context.Context, dir string, patterns []string) ([]Pointer, error) {
+	args := []string{"rev-list", "--objects", "--no-object-names",
+		fmt.Sprintf("--filter=blob:limit=%d", pointerMax)}
+	for _, p := range patterns {
+		args = append(args, "--glob="+p)
+	}
+	out, _, err := g.run(ctx, dir, nil, args...)
+	if err != nil {
+		return nil, err
+	}
+	ids := strings.Fields(out)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	// rev-list lists commits and trees too; ask which of them are blobs.
+	check, _, err := g.runStdin(ctx, dir, strings.Join(ids, "\n")+"\n",
+		"cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)")
+	if err != nil {
+		return nil, err
+	}
+	var blobs []string
+	for _, line := range strings.Split(check, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 3 && f[1] == "blob" {
+			if size, err := strconv.ParseInt(f[2], 10, 64); err == nil && size > 0 && size <= pointerMax {
+				blobs = append(blobs, f[0])
+			}
+		}
+	}
+	if len(blobs) == 0 {
+		return nil, nil
+	}
+	body, _, err := g.runStdin(ctx, dir, strings.Join(blobs, "\n")+"\n", "cat-file", "--batch")
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out2 []Pointer
+	for _, content := range batchContents(body) {
+		p, ok := parsePointer(content)
+		if !ok || seen[p.OID] {
+			continue
+		}
+		seen[p.OID] = true
+		out2 = append(out2, p)
+	}
+	sort.Slice(out2, func(i, j int) bool { return out2[i].OID < out2[j].OID })
+	return out2, nil
+}
+
+// batchContents splits `cat-file --batch` output into the objects' bytes.
+// Each object comes as "<oid> <type> <size>\n" followed by exactly size
+// bytes and a newline.
+func batchContents(out string) []string {
+	var contents []string
+	for rest := out; rest != ""; {
+		header, body, ok := strings.Cut(rest, "\n")
+		if !ok {
+			break
+		}
+		f := strings.Fields(header)
+		if len(f) != 3 {
+			break
+		}
+		size, err := strconv.Atoi(f[2])
+		if err != nil || size > len(body) {
+			break
+		}
+		contents = append(contents, body[:size])
+		rest = strings.TrimPrefix(body[size:], "\n")
+	}
+	return contents
+}
+
+// parsePointer reads a Git LFS pointer file. The format is fixed: the
+// version line first, then the sha256 oid and the size.
+func parsePointer(content string) (Pointer, bool) {
+	if !strings.HasPrefix(content, "version https://git-lfs.github.com/spec/v1") {
+		return Pointer{}, false
+	}
+	var p Pointer
+	for _, line := range strings.Split(content, "\n") {
+		switch key, value, _ := strings.Cut(strings.TrimSpace(line), " "); key {
+		case "oid":
+			hash, oid, ok := strings.Cut(value, ":")
+			if !ok || hash != "sha256" || len(oid) != 64 {
+				return Pointer{}, false
+			}
+			p.OID = oid
+		case "size":
+			n, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || n < 0 {
+				return Pointer{}, false
+			}
+			p.Size = n
+		}
+	}
+	return p, p.OID != ""
 }

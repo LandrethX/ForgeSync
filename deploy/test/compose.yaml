@@ -46,6 +46,9 @@ x-forgejo-env: &forgejo-env
   GITEA__oauth2_client__ACCOUNT_LINKING: auto
   GITEA__oauth2_client__OPENID_CONNECT_SCOPES: profile email
   GITEA__oauth2_client__REGISTER_EMAIL_CONFIRM: "false"
+  # Git LFS: the objects large files are kept in. ForgeSync replicates
+  # them (replication.lfs), which needs the LFS server on every node.
+  GITEA__server__LFS_START_SERVER: "true"
   # Test only: let webhooks and mirrors target private/local addresses.
   GITEA__webhook__ALLOWED_HOST_LIST: "*"
   GITEA__migrations__ALLOW_LOCALNETWORKS: "true"

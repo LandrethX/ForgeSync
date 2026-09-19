@@ -161,6 +161,12 @@ type Replication struct {
 	// the API so Forgejo makes the repository, which is then replaced by
 	// the primary's history. Off by default.
 	Wiki bool `yaml:"wiki"`
+	// LFS copies the Git LFS objects a repository's pointer files name to
+	// every node that has the repository, so a replica can be checked out
+	// at all. Objects are only ever added, never deleted. LFSMaxBytes
+	// bounds one object; 0 (the default) means no limit. Off by default.
+	LFS         bool  `yaml:"lfs"`
+	LFSMaxBytes int64 `yaml:"lfs_max_bytes"`
 	// Actions keeps a repository's Actions variables the same on every
 	// node, and reports a node that hasn't got a secret the others have.
 	// A secret's value is never given back by Forgejo, so nothing can copy

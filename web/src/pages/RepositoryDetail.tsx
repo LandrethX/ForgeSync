@@ -461,7 +461,7 @@ function ReplicationPanel({
   const now = useNow(5000);
   const [message, setMessage] = useState<{ ok: boolean; text: string }>();
   const [polling, setPolling] = useState(false);
-  const { readOnly, leaderName } = useLeadership();
+  const { readOnly, leaderName, features } = useLeadership();
   const repl = repo.replication;
 
   // After "Replicate now", reload a few times so the result shows up.
@@ -614,10 +614,23 @@ function ReplicationPanel({
         </p>
       )}
       <p className="muted small">
-        Only fast-forwards, new refs and deletions of what ForgeSync wrote
-        itself are copied. Anything else becomes a conflict. Missing
-        repositories aren't created on replicas yet.
+        Branches and tags are copied from the primary: only fast-forwards, new
+        refs and deletions of what ForgeSync wrote itself. Anything else becomes
+        a conflict for a person. A replica that hasn't got the repository is
+        created, with its owner.
       </p>
+      {features && features.length > 0 && (
+        <p className="muted small">
+          Kept the same on every node: {listText(features)}. Whatever isn't
+          listed is left as each node has it.
+        </p>
+      )}
     </section>
   );
+}
+
+/** "a, b and c" -- the same reading order the controller sent. */
+function listText(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }

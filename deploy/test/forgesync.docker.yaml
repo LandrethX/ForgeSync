@@ -81,6 +81,9 @@ replication:
   wiki: true
   # Actions variables, and a report of any node missing a secret.
   actions: true
+  # The Git LFS objects the pointer files name, so a replica can be
+  # checked out. Needs LFS_START_SERVER on the Forgejo nodes.
+  lfs: true
   # ForgeSync's guard on the replicas: people work on the primary, and a
   # guard someone removes is put back (Phase 0 p02).
   protect_replicas: true

@@ -22,6 +22,16 @@ const (
 	AuthError   State = "AUTH_ERROR"  // reachable, but the token is rejected or belongs to the wrong account
 )
 
+// Valid reports whether s is one of the states, so a value read back from
+// the database (or an older version's) can't become the current state.
+func (s State) Valid() bool {
+	switch s {
+	case Unknown, Healthy, Degraded, Suspect, Unreachable, AuthError:
+		return true
+	}
+	return false
+}
+
 // Status is the current view of one node.
 type Status struct {
 	Node                string     `json:"node"`

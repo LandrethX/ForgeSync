@@ -129,6 +129,8 @@ export type Leadership = {
   leaderURL?: string;
   /** True once it's known that this controller can't be written to. */
   readOnly: boolean;
+  /** What replication covers here, from the controller's own config. */
+  features?: string[];
 };
 
 export const LeadershipContext = createContext<Leadership>({ readOnly: false });
@@ -156,6 +158,7 @@ export function useLeadershipPoll(): Leadership {
             leaderName: o.leader?.name,
             leaderURL: o.leader?.url,
             readOnly: o.role === "standby",
+            features: o.replication?.features,
           });
         })
         .catch(() => {

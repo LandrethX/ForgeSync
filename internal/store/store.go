@@ -93,6 +93,28 @@ func (s *Store) RecordNodeStatus(ctx context.Context, st health.Status, prev hea
 	return tx.Commit(ctx)
 }
 
+// NodeStates returns the state each node was last seen in. A controller
+// starting up takes these as its starting point, so a restart isn't
+// recorded as every node changing from UNKNOWN to HEALTHY: the history is
+// meant to show what the nodes did, not what ForgeSync did.
+func (s *Store) NodeStates(ctx context.Context) (map[string]health.State, error) {
+	rows, err := s.pool.Query(ctx, `SELECT node, state FROM node_status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]health.State{}
+	for rows.Next() {
+		var node string
+		var state health.State
+		if err := rows.Scan(&node, &state); err != nil {
+			return nil, err
+		}
+		out[node] = state
+	}
+	return out, rows.Err()
+}
+
 // Transition is one change of a node's health state.
 type Transition struct {
 	ID    int64        `json:"id"`

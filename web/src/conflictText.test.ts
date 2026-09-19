@@ -23,6 +23,29 @@ function conflict(over: Partial<Conflict>): Conflict {
   };
 }
 
+describe("LFS conflicts", () => {
+  it("says how many objects a node is short of, and what that means", () => {
+    const c = conflict({
+      kind: "lfs_incomplete",
+      ref: "dk",
+      details: { node: "dk", objects: 3, oids: ["aa", "bb"] },
+    });
+    expect(conflictTitle(c)).toBe("3 LFS objects missing on dk");
+    expect(conflictExplanation(c)).toMatch(/clone from dk would fail/);
+    expect(conflictFix(c)).toMatch(/LFS_START_SERVER/);
+  });
+
+  it("says plainly when the node couldn't be asked at all", () => {
+    const c = conflict({
+      kind: "lfs_incomplete",
+      ref: "us",
+      details: { node: "us", error: "404 Not Found" },
+    });
+    expect(conflictTitle(c)).toBe("LFS objects can't be checked on us");
+    expect(conflictExplanation(c)).toMatch(/404 Not Found/);
+  });
+});
+
 describe("Actions conflicts", () => {
   it("names the variable and shows what each node has", () => {
     const c = conflict({

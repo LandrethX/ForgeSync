@@ -121,6 +121,15 @@ func run(configPath string) error {
 		Timeout:          cfg.Health.Timeout,
 		FailureThreshold: cfg.Health.FailureThreshold,
 	}, leaderRecorder{db, elector.Leading}, log)
+	// Start from where the nodes were left, so restarting a controller
+	// isn't recorded as every node going from UNKNOWN to HEALTHY. Without
+	// this the history fills up with ForgeSync's own restarts and a real
+	// change is lost among them.
+	if states, err := db.NodeStates(ctx); err != nil {
+		log.Warn("reading the nodes' last known state failed; starting from unknown", "error", err)
+	} else {
+		monitor.Restore(states)
+	}
 	var scanner *inventory.Scanner
 	var engine *replication.Engine
 	if cfg.Replication.Enabled {
@@ -142,6 +151,8 @@ func run(configPath string) error {
 			Releases:         cfg.Replication.Releases,
 			Wiki:             cfg.Replication.Wiki,
 			Actions:          cfg.Replication.Actions,
+			LFS:              cfg.Replication.LFS,
+			LFSMax:           cfg.Replication.LFSMaxBytes,
 			AssetMax:         cfg.Replication.AttachmentMaxBytes,
 			BackupFor:        time.Duration(cfg.Replication.BackupDays) * 24 * time.Hour,
 			ArchiveOrg:       cfg.Replication.ArchiveOrg,
@@ -158,7 +169,7 @@ func run(configPath string) error {
 			"collaborators", cfg.Replication.Collaborators, "organizations", cfg.Replication.Organizations,
 			"protect_replicas", cfg.Replication.ProtectReplicas,
 			"branch_protection", cfg.Replication.BranchProtection, "metadata", cfg.Replication.Metadata, "releases", cfg.Replication.Releases, "wiki", cfg.Replication.Wiki,
-			"actions", cfg.Replication.Actions)
+			"actions", cfg.Replication.Actions, "lfs", cfg.Replication.LFS)
 	}
 	// Renames and primaries are assigned after scans and after webhooks;
 	// one at a time.
@@ -288,21 +299,22 @@ func run(configPath string) error {
 	srv := &http.Server{
 		Addr: cfg.HTTP.Listen,
 		Handler: (&api.Server{
-			AdminToken:       cfg.HTTP.AdminToken,
-			OIDC:             oidcFlow,
-			AllowTokenSignIn: cfg.OIDC.AllowTokenSignIn,
-			Nodes:            infos,
-			Health:           monitor,
-			Leader:           elector,
-			Inventory:        scanner,
-			Replication:      replicator,
-			DB:               db,
-			Log:              log,
-			StartedAt:        startedAt,
-			SecureCookies:    *cfg.HTTP.SecureCookies,
-			Frontend:         webui.Handler(),
-			Webhooks:         hooks,
-			WebhookStatus:    statusOrNil(hookStatus),
+			AdminToken:          cfg.HTTP.AdminToken,
+			OIDC:                oidcFlow,
+			AllowTokenSignIn:    cfg.OIDC.AllowTokenSignIn,
+			Nodes:               infos,
+			Health:              monitor,
+			Leader:              elector,
+			Inventory:           scanner,
+			Replication:         replicator,
+			ReplicationFeatures: replicationFeatures(cfg),
+			DB:                  db,
+			Log:                 log,
+			StartedAt:           startedAt,
+			SecureCookies:       *cfg.HTTP.SecureCookies,
+			Frontend:            webui.Handler(),
+			Webhooks:            hooks,
+			WebhookStatus:       statusOrNil(hookStatus),
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -381,4 +393,35 @@ func statusOrNil(t *webhook.Tracker) interface{ Snapshot() []webhook.Status } {
 		return nil
 	}
 	return t
+}
+
+// replicationFeatures names what this controller keeps the same besides
+// branches and tags, for the UI. It's built from the configuration rather
+// than from a list in the UI, so a page can never claim something this
+// controller isn't doing.
+func replicationFeatures(cfg *config.Config) []string {
+	r := cfg.Replication
+	if !r.Enabled {
+		return nil
+	}
+	features := []string{"branches and tags"}
+	add := func(on bool, name string) {
+		if on {
+			features = append(features, name)
+		}
+	}
+	add(r.LFS, "LFS objects")
+	add(r.Wiki, "the wiki")
+	add(r.Releases, "releases and their files")
+	add(r.Issues, "issues and comments")
+	add(r.PullRequests, "pull requests")
+	add(r.Reviews, "reviews")
+	add(r.Reactions, "reactions")
+	add(r.Attachments, "attachments")
+	add(r.Metadata, "settings and topics")
+	add(r.Collaborators, "collaborators")
+	add(r.Organizations, "organizations and teams")
+	add(r.BranchProtection, "branch protection")
+	add(r.Actions, "Actions variables")
+	return features
 }

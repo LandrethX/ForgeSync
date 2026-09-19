@@ -91,12 +91,15 @@ type Server struct {
 	Leader           Leadership
 	Inventory        Inventory
 	Replication      Replicator // nil when replication is off
-	DB               DB
-	Log              *slog.Logger
-	StartedAt        time.Time
-	Sessions         *Sessions
-	SecureCookies    bool
-	Frontend         http.Handler // nil serves nothing outside the API
+	// ReplicationFeatures names what replication covers besides branches
+	// and tags ("issues", "releases", ...), in reading order.
+	ReplicationFeatures []string
+	DB                  DB
+	Log                 *slog.Logger
+	StartedAt           time.Time
+	Sessions            *Sessions
+	SecureCookies       bool
+	Frontend            http.Handler // nil serves nothing outside the API
 	// Webhooks receives Forgejo's deliveries at /api/v1/hooks/forgejo/{node};
 	// it checks their signatures itself. nil when webhooks are off.
 	Webhooks http.Handler
@@ -302,10 +305,13 @@ func (s *Server) requireLeader(next http.Handler) http.Handler {
 	})
 }
 
-// ReplicationSummary counts replicas (of repositories with a primary) by state.
+// ReplicationSummary counts replicas (of repositories with a primary) by
+// state, and says what this controller keeps the same besides the refs, so
+// the UI can tell people what replication means here rather than guessing.
 type ReplicationSummary struct {
-	Enabled bool           `json:"enabled"`
-	Counts  map[string]int `json:"counts"`
+	Enabled  bool           `json:"enabled"`
+	Counts   map[string]int `json:"counts"`
+	Features []string       `json:"features,omitempty"`
 }
 
 type DatabaseStatus struct {
@@ -334,7 +340,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	} else {
 		o.OpenConflicts = n
 	}
-	o.Replication = ReplicationSummary{Enabled: s.Replication != nil, Counts: map[string]int{}}
+	o.Replication = ReplicationSummary{Enabled: s.Replication != nil, Counts: map[string]int{}, Features: s.ReplicationFeatures}
 	if s.Replication != nil {
 		if counts, err := s.DB.ReplicationCounts(ctx); err != nil {
 			s.Log.Warn("counting replication states failed", "error", err)

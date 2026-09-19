@@ -2,7 +2,11 @@ package replication
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
@@ -10,7 +14,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"scenegit.org/forgesync/internal/forgejo"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -20,6 +26,12 @@ type gitNode struct {
 	t    *testing.T
 	root string
 	srv  *httptest.Server
+
+	// lfs is this node's LFS store: oid -> the object's bytes. lfsOff
+	// makes the node answer as one with LFS turned off.
+	lfsMu  sync.Mutex
+	lfs    map[string][]byte
+	lfsOff bool
 }
 
 const testUser, testToken = "forgesync", "node-token"
@@ -30,7 +42,7 @@ func newGitNode(t *testing.T) *gitNode {
 	if err != nil {
 		t.Skip("git not installed")
 	}
-	n := &gitNode{t: t, root: t.TempDir()}
+	n := &gitNode{t: t, root: t.TempDir(), lfs: map[string][]byte{}}
 	backend := &cgi.Handler{
 		Path: gitPath,
 		Args: []string{"http-backend"},
@@ -41,6 +53,10 @@ func newGitNode(t *testing.T) *gitNode {
 		if r.Header.Get("Authorization") != want {
 			w.Header().Set("WWW-Authenticate", `Basic realm="forgejo"`)
 			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if i := strings.Index(r.URL.Path, "/info/lfs/"); i >= 0 {
+			n.serveLFS(w, r, r.URL.Path[i+len("/info/lfs"):])
 			return
 		}
 		name := strings.TrimPrefix(r.URL.Path, "/")
@@ -153,4 +169,115 @@ func bg() context.Context { return context.Background() }
 // apiRepo is alice/demo as the fake API describes it.
 func (n *gitNode) apiRepo() forgejo.Repository {
 	return forgejo.Repository{FullName: "alice/demo", Name: "demo", Owner: forgejo.User{Login: "alice"}, DefaultBranch: "main"}
+}
+
+// serveLFS answers the Git LFS batch API the way a Forgejo node does: a
+// batch request says what to do with each object, and the hrefs it gives
+// back are this same server. Only what ForgeSync uses is implemented.
+func (n *gitNode) serveLFS(w http.ResponseWriter, r *http.Request, path string) {
+	if n.lfsOff {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+	base := strings.TrimSuffix(n.srv.URL+r.URL.Path[:strings.Index(r.URL.Path, "/info/lfs/")+len("/info/lfs")], "/")
+	switch {
+	case path == "/objects/batch" && r.Method == http.MethodPost:
+		var req struct {
+			Operation string `json:"operation"`
+			Objects   []struct {
+				OID  string `json:"oid"`
+				Size int64  `json:"size"`
+			} `json:"objects"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		type action struct {
+			Href string `json:"href"`
+		}
+		type object struct {
+			OID     string            `json:"oid"`
+			Size    int64             `json:"size"`
+			Actions map[string]action `json:"actions,omitempty"`
+			Error   *struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error,omitempty"`
+		}
+		var out struct {
+			Transfer string   `json:"transfer"`
+			Objects  []object `json:"objects"`
+		}
+		out.Transfer = "basic"
+		for _, o := range req.Objects {
+			n.lfsMu.Lock()
+			_, here := n.lfs[o.OID]
+			n.lfsMu.Unlock()
+			obj := object{OID: o.OID, Size: o.Size}
+			switch {
+			case req.Operation == "upload" && !here:
+				// Only what's missing comes back with something to do.
+				obj.Actions = map[string]action{"upload": {Href: base + "/objects/" + o.OID}}
+			case req.Operation == "download" && here:
+				obj.Actions = map[string]action{"download": {Href: base + "/objects/" + o.OID}}
+			case req.Operation == "download":
+				obj.Error = &struct {
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+				}{Code: 404, Message: "object does not exist"}
+			}
+			out.Objects = append(out.Objects, obj)
+		}
+		w.Header().Set("Content-Type", "application/vnd.git-lfs+json")
+		json.NewEncoder(w).Encode(out)
+	case strings.HasPrefix(path, "/objects/") && r.Method == http.MethodPut:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		n.lfsMu.Lock()
+		n.lfs[strings.TrimPrefix(path, "/objects/")] = body
+		n.lfsMu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	case strings.HasPrefix(path, "/objects/") && r.Method == http.MethodGet:
+		n.lfsMu.Lock()
+		body, ok := n.lfs[strings.TrimPrefix(path, "/objects/")]
+		n.lfsMu.Unlock()
+		if !ok {
+			http.Error(w, "Not found", http.StatusNotFound)
+			return
+		}
+		w.Write(body)
+	default:
+		http.Error(w, "Not found", http.StatusNotFound)
+	}
+}
+
+// putLFS puts an object in this node's LFS store, as a push with git-lfs
+// would, and returns its oid.
+func (n *gitNode) putLFS(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	oid := hex.EncodeToString(sum[:])
+	n.lfsMu.Lock()
+	defer n.lfsMu.Unlock()
+	n.lfs[oid] = []byte(content)
+	return oid
+}
+
+// hasLFS reports whether the node's LFS store holds that content.
+func (n *gitNode) hasLFS(content string) bool {
+	sum := sha256.Sum256([]byte(content))
+	n.lfsMu.Lock()
+	defer n.lfsMu.Unlock()
+	body, ok := n.lfs[hex.EncodeToString(sum[:])]
+	return ok && string(body) == content
+}
+
+// pointerFor is the pointer file git carries for that content.
+func pointerFor(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return "version https://git-lfs.github.com/spec/v1\noid sha256:" + hex.EncodeToString(sum[:]) +
+		"\nsize " + strconv.Itoa(len(content)) + "\n"
 }

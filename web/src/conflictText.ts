@@ -12,6 +12,7 @@ export const KIND_LABEL: Record<Conflict["kind"], string> = {
   repo_metadata: "Setting changed differently",
   actions_variable_conflict: "Variable changed differently",
   actions_secret_missing: "Secret missing on a node",
+  lfs_incomplete: "LFS objects missing on a node",
 };
 
 /**
@@ -68,6 +69,12 @@ export function conflictTitle(c: Conflict): string {
     return where
       ? `Secret ${secret} is missing on ${where}`
       : `${label}: ${secret}`;
+  }
+  if (c.kind === "lfs_incomplete") {
+    const node = c.details.node ?? c.ref;
+    return c.details.objects
+      ? `${c.details.objects} LFS object${c.details.objects === 1 ? "" : "s"} missing on ${node}`
+      : `LFS objects can't be checked on ${node}`;
   }
   if (c.kind === "repo_metadata") {
     return `${label}: ${c.details.field ?? c.ref}`;
@@ -132,6 +139,13 @@ export function conflictExplanation(c: Conflict): string | undefined {
       const who = missing.length > 0 ? nodeList(missing) : "A node";
       const has = missing.length > 1 ? "haven't" : "hasn't";
       return `${who} ${has} got the Actions secret ${c.details.secret ?? c.ref}, which the other nodes have. Forgejo never gives a secret's value back, so ForgeSync can't copy one; a workflow that needs it would fail there.`;
+    }
+    case "lfs_incomplete": {
+      const node = c.details.node ?? c.ref;
+      if (c.details.error) {
+        return `ForgeSync couldn't ask ${node} which LFS objects it has: ${c.details.error}. A repository with LFS files can't be checked out there until this works.`;
+      }
+      return `${node} is missing ${c.details.objects ?? "some"} of the LFS objects the other nodes have. The pointer files are in git, so a clone from ${node} would fail to fetch those files. ForgeSync copies objects by itself, so something is refusing them.`;
     }
     case "repo_metadata":
       return `The repository's ${c.details.field ?? "setting"} was set differently on different nodes since they last agreed. ForgeSync doesn't pick one, so none of them was changed.`;
@@ -214,6 +228,8 @@ export function conflictFix(c: Conflict): string {
       return `Set the variable ${c.details.variable ?? c.ref} on one of the nodes so it matches another; ForgeSync then copies that value everywhere.`;
     case "actions_secret_missing":
       return `Set the secret ${c.details.secret ?? c.ref} in the repository's Actions settings on ${nodeList(c.details.missing ?? []) || "the node that hasn't got it"}, with the same value as on the other nodes. Only someone who knows the value can do this.`;
+    case "lfs_incomplete":
+      return `Check that LFS is turned on for ${c.details.node ?? c.ref} ([server] LFS_START_SERVER) and that the repository's own LFS setting is on there. ForgeSync tries again every run; nothing is ever deleted, so a fixed node fills in by itself.`;
     case "repo_metadata":
       return `Set the ${c.details.field ?? "setting"} on one of the nodes so it matches another; ForgeSync then copies that everywhere. The default branch isn't settled here -- replication follows the primary's -- and a repository private on any node is made private on all of them.`;
     case "org_metadata":

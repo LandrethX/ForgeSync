@@ -68,6 +68,22 @@ func NewMonitor(targets []Target, opts Options, rec Recorder, log *slog.Logger) 
 	return m
 }
 
+// Restore sets the state each node was last known to be in, so a
+// controller that has just started doesn't record every node changing from
+// UNKNOWN. Anything it doesn't name stays UNKNOWN. Call it before Run.
+func (m *Monitor) Restore(states map[string]State) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for name, state := range states {
+		s, ok := m.status[name]
+		if !ok || !state.Valid() {
+			continue
+		}
+		s.State = state
+		m.status[name] = s
+	}
+}
+
 // Run checks every node immediately and then on each interval until ctx ends.
 func (m *Monitor) Run(ctx context.Context) {
 	var wg sync.WaitGroup

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -111,6 +112,11 @@ type Options struct {
 	// Wiki replicates each repository's wiki, which is a second git
 	// repository, from its primary to the replicas (wiki.go).
 	Wiki bool
+	// LFS copies the Git LFS objects a repository's pointer files name, so
+	// every node that has the repository can check it out (lfs.go). LFSMax
+	// is the largest object it carries; 0 means no limit.
+	LFS    bool
+	LFSMax int64
 	// Actions keeps a repository's Actions variables the same on every
 	// node, and says which nodes are missing a secret the others have --
 	// Forgejo never gives a secret's value back, so no one can copy one
@@ -138,7 +144,11 @@ type Engine struct {
 	health HealthSource
 	opts   Options
 	log    *slog.Logger
-	now    func() time.Time
+	// http fetches and sends LFS objects (lfs.go). Its timeout is per
+	// request, and a large object can take a while, so it has none: the
+	// run's context bounds it.
+	http *http.Client
+	now  func() time.Time
 
 	mu      sync.Mutex
 	running map[string]bool // repository id -> a run is in progress
@@ -158,7 +168,11 @@ func NewEngine(nodes []Node, git *Git, st Store, h HealthSource, opts Options, l
 	if opts.AssetMax <= 0 {
 		opts.AssetMax = 16 << 20
 	}
-	e := &Engine{nodes: map[string]Node{}, git: git, store: st, health: h, opts: opts, log: log, now: time.Now, running: map[string]bool{}, again: map[string]bool{}}
+	e := &Engine{nodes: map[string]Node{}, git: git, store: st, health: h, opts: opts, log: log, now: time.Now,
+		running: map[string]bool{}, again: map[string]bool{},
+		// No timeout: an LFS object can be large, and the run's context
+		// already ends the work when leadership or the process does.
+		http: &http.Client{}}
 	for _, n := range nodes {
 		e.nodes[n.Name] = n
 		e.order = append(e.order, n.Name)
@@ -501,6 +515,9 @@ func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again
 	}
 	if e.opts.Actions && !again {
 		e.syncActions(ctx, rec, healthy)
+	}
+	if e.opts.LFS && !again {
+		e.syncLFS(ctx, dir, rec, healthy)
 	}
 	if !again {
 		// The owner's rules first, so the guard isn't mistaken for one.

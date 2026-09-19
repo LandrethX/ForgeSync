@@ -191,3 +191,44 @@ func TestMonitorRunDetectsOutageAndRecovery(t *testing.T) {
 		}
 	}
 }
+
+// A controller that restarts shouldn't fill the history with its own
+// restart: the nodes' last known states are the starting point, so a node
+// that was healthy and still is records nothing.
+func TestRestoreMeansARestartRecordsNothing(t *testing.T) {
+	srv := httptest.NewServer(fakeForgejo{healthz: 200, userCode: 200, login: "forgesync", admin: true})
+	defer srv.Close()
+	c, _ := forgejo.New(srv.URL, "tok", nil)
+	rec := &fakeRecorder{}
+	m := NewMonitor([]Target{{Name: "se", ServiceUser: "forgesync", Client: c}},
+		Options{Interval: time.Hour, Timeout: 2 * time.Second, FailureThreshold: 3}, rec, slog.New(slog.DiscardHandler))
+	// A state from an older version, and a node this controller doesn't
+	// watch, are both ignored rather than adopted.
+	m.Restore(map[string]State{"se": Healthy, "dk": Healthy, "us": "NONSENSE"})
+
+	if s := m.CheckOnce(context.Background(), m.targets[0]); s.State != Healthy {
+		t.Fatalf("state = %s (error: %s)", s.State, s.LastError)
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.transitions) != 0 {
+		t.Fatalf("a restart recorded %v", rec.transitions)
+	}
+}
+
+// Without that, the same restart looks like a change, which is what used
+// to fill a node's history with UNKNOWN -> HEALTHY.
+func TestWithoutRestoreTheFirstCheckIsAChange(t *testing.T) {
+	srv := httptest.NewServer(fakeForgejo{healthz: 200, userCode: 200, login: "forgesync", admin: true})
+	defer srv.Close()
+	c, _ := forgejo.New(srv.URL, "tok", nil)
+	rec := &fakeRecorder{}
+	m := NewMonitor([]Target{{Name: "se", ServiceUser: "forgesync", Client: c}},
+		Options{Interval: time.Hour, Timeout: 2 * time.Second, FailureThreshold: 3}, rec, slog.New(slog.DiscardHandler))
+	m.CheckOnce(context.Background(), m.targets[0])
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.transitions) != 1 || rec.transitions[0] != "UNKNOWN->HEALTHY" {
+		t.Fatalf("recorded %v", rec.transitions)
+	}
+}

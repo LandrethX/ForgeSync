@@ -218,7 +218,8 @@ export type ConflictKind =
   | "org_metadata"
   | "repo_metadata"
   | "actions_variable_conflict"
-  | "actions_secret_missing";
+  | "actions_secret_missing"
+  | "lfs_incomplete";
 
 export interface Handoff {
   pr_number: number;
@@ -274,6 +275,11 @@ export interface Conflict {
     /** actions_secret_missing: the secret, and the nodes that haven't got it. */
     secret?: string;
     missing?: string[];
+    /** lfs_incomplete: how many LFS objects the node is short of and some of them,
+     * or why it couldn't be asked. The node is in `node`, as for a deleted issue. */
+    objects?: number;
+    oids?: string[];
+    error?: string;
   };
   detected_at: string;
   last_seen_at: string;
@@ -309,6 +315,8 @@ export interface Overview {
   replication: {
     enabled: boolean;
     counts: Partial<Record<ReplicaState, number>>;
+    /** What replication covers here, besides branches and tags. */
+    features?: string[];
   };
 }
 

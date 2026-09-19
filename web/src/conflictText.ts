@@ -102,6 +102,9 @@ export function conflictExplanation(c: Conflict): string | undefined {
         }
         return `The ${item.field} of ${what} was changed to different values on different nodes since they last agreed. ForgeSync doesn't pick one.`;
       }
+      if (c.details.blocked && c.details.blocked.length > 0) {
+        return `ForgeSync can't give every node the same assignees (${c.details.blocked.join("; ")}), so it has left them all as they are.`;
+      }
       switch (c.details.field) {
         case "deleted":
           return `The issue was deleted on ${primary}, but changed on ${c.details.node ?? "another node"} since. ForgeSync kept that copy and won't copy it back.`;
@@ -111,6 +114,8 @@ export function conflictExplanation(c: Conflict): string | undefined {
           return "The issue's labels were set differently on different nodes since they last agreed. ForgeSync doesn't pick one.";
         case "milestone":
           return "The issue was put in different milestones on different nodes since they last agreed. ForgeSync doesn't pick one.";
+        case "assignees":
+          return "The issue was assigned to different people on different nodes since they last agreed. ForgeSync doesn't pick one.";
         default:
           return `The ${c.details.field ?? "issue"} was changed to different values on different nodes since they last agreed. ForgeSync doesn't pick one.`;
       }
@@ -142,13 +147,20 @@ export function conflictFix(c: Conflict): string {
         }
         return `Set the ${item.field} of ${itemName(c, item.kind)} on one of the nodes so it matches another; ForgeSync then copies that value everywhere.`;
       }
+      if (c.details.blocked && c.details.blocked.length > 0) {
+        return "Forgejo only assigns people who can write to the repository, and ForgeSync doesn't replicate collaborators yet. Give them that access on the node that's named, or take them off the issue; ForgeSync then copies the assignees everywhere.";
+      }
       if (
         c.details.field === "deleted" ||
         c.details.field === "comment deleted"
       ) {
         return `Delete it on ${c.details.node ?? "that node"} too if it should go. To keep it, create it again on ${primary} with the same author and title (or text); ForgeSync then treats it as normal again.`;
       }
-      if (c.details.field === "labels" || c.details.field === "milestone") {
+      if (
+        c.details.field === "labels" ||
+        c.details.field === "milestone" ||
+        c.details.field === "assignees"
+      ) {
         return `Set the issue's ${c.details.field} on one of the nodes so it matches another; ForgeSync then copies that everywhere.`;
       }
       return `Edit the ${c.details.field ?? "field"} on one of the nodes so it matches another; ForgeSync then copies that value everywhere.`;

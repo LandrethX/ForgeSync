@@ -231,6 +231,22 @@ describe("label and milestone conflict text", () => {
       "create it again on se with the same title",
     );
 
+    // Assignees a node won't take: the reason, and what to do about it.
+    const blocked: Conflict = {
+      ...label,
+      ref: "#3 assignees",
+      details: {
+        field: "assignees",
+        values: { se: "bob", dk: "" },
+        blocked: ["de: bob can't be given an issue there"],
+        primary: "se",
+      },
+    };
+    expect(conflictExplanation(blocked)).toContain(
+      "can't give every node the same assignees (de: bob can't be given an issue there)",
+    );
+    expect(conflictFix(blocked)).toContain("Give them that access");
+
     // An issue's own labels stay an issue conflict.
     const onIssue: Conflict = {
       ...label,

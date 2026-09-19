@@ -270,3 +270,119 @@ func TestItemKeptForItsOwnerStaysOnTheIssues(t *testing.T) {
 		t.Errorf("items left: %+v", st.items)
 	}
 }
+
+func TestIssueAssignees(t *testing.T) {
+	s, st, f, _ := setup(t)
+	f["se"].open("alice", "needs someone")
+	f["se"].setAssignees(1, "alice")
+	s.run(t)
+	for _, n := range []string{"se", "dk", "de"} {
+		if got := f[n].assignees(1); got != "alice" {
+			t.Fatalf("%s #1: %q", n, got)
+		}
+	}
+	writes(f)
+	s.run(t)
+	if n := writes(f); n != 0 {
+		t.Errorf("a settled run wrote %d times", n)
+	}
+
+	// Another one added on a replica: everywhere.
+	f["dk"].setAssignees(1, "alice", "bob")
+	s.run(t)
+	for _, n := range []string{"se", "dk", "de"} {
+		if got := f[n].assignees(1); got != "alice,bob" {
+			t.Errorf("%s #1 after dk: %q", n, got)
+		}
+	}
+	// Cleared on the primary: everywhere.
+	f["se"].setAssignees(1)
+	s.run(t)
+	for _, n := range []string{"se", "dk", "de"} {
+		if got := f[n].assignees(1); got != "" {
+			t.Errorf("%s #1 after clearing: %q", n, got)
+		}
+	}
+	if len(st.found) != 0 {
+		t.Fatalf("conflicts: %+v", st.found)
+	}
+
+	// Two nodes assign differently: a conflict, and nothing is written.
+	f["se"].setAssignees(1, "alice")
+	f["de"].setAssignees(1, "carol")
+	s.run(t)
+	if len(st.found) != 1 || st.found[0].Ref != "#1 assignees" {
+		t.Fatalf("conflicts = %+v", st.found)
+	}
+	if vals := st.found[0].Details["values"].(map[string]string); vals["se"] != "alice" || vals["de"] != "carol" || vals["dk"] != "" {
+		t.Errorf("values = %v", vals)
+	}
+	if got := f["dk"].assignees(1); got != "" {
+		t.Errorf("dk was written during a conflict: %q", got)
+	}
+}
+
+// Forgejo only assigns people with write access, and ForgeSync doesn't
+// replicate collaborators yet, so a node can be unable to hold an assignee.
+// It stays a conflict for a person, and nothing is written anywhere: the
+// node that's behind must not win a later comparison.
+func TestAnAssigneeANodeWontTake(t *testing.T) {
+	s, st, f, _ := setup(t)
+	delete(f["de"].assignable, "bob")
+	f["se"].open("alice", "needs bob")
+	f["se"].setAssignees(1, "bob")
+	s.run(t)
+	if len(st.found) != 1 || st.found[0].Ref != "#1 assignees" {
+		t.Fatalf("conflicts = %+v", st.found)
+	}
+	if blocked := st.found[0].Details["blocked"].([]string); len(blocked) != 1 || blocked[0] != "de: bob can't be given an issue there" {
+		t.Errorf("blocked = %v", blocked)
+	}
+	// A copy is made to match the primary where the node will take it; de's
+	// is made without bob, and nothing takes him off the others.
+	if got, other := f["se"].assignees(1), f["dk"].assignees(1); got != "bob" || other != "bob" {
+		t.Errorf("se %q dk %q", got, other)
+	}
+	if got := f["de"].assignees(1); got != "" {
+		t.Errorf("de #1: %q", got)
+	}
+	// However often it runs, de's emptiness never wins.
+	for i := 0; i < 3; i++ {
+		s.run(t)
+	}
+	if got, other := f["se"].assignees(1), f["dk"].assignees(1); got != "bob" || other != "bob" {
+		t.Fatalf("bob was lost: se %q dk %q", got, other)
+	}
+
+	// Given access there, the next run settles it everywhere.
+	f["de"].assignable["bob"] = true
+	s.run(t)
+	for _, n := range []string{"se", "dk", "de"} {
+		if got := f[n].assignees(1); got != "bob" {
+			t.Errorf("%s #1: %q", n, got)
+		}
+	}
+	if len(st.found) != 0 {
+		t.Errorf("conflicts left: %+v", st.found)
+	}
+}
+
+// A copy made on a node that won't take the assignees is made without them,
+// and that doesn't take them off the others.
+func TestACopyIsMadeWithoutAssigneesTheNodeWontTake(t *testing.T) {
+	s, _, f, _ := setup(t)
+	delete(f["de"].assignable, "carol")
+	f["se"].open("alice", "for carol")
+	f["se"].setAssignees(1, "carol")
+	s.run(t)
+	if got := f["dk"].assignees(1); got != "carol" {
+		t.Errorf("dk #1: %q", got)
+	}
+	if got := f["de"].assignees(1); got != "" {
+		t.Errorf("de #1 should have been made without them: %q", got)
+	}
+	s.run(t)
+	if got := f["se"].assignees(1); got != "carol" {
+		t.Errorf("se lost carol: %q", got)
+	}
+}

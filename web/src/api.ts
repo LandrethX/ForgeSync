@@ -247,8 +247,9 @@ export interface Conflict {
     primary?: string;
     /** Pull requests on the primary where the owner decides (diverged branches). */
     handoffs?: Handoff[];
-    /** issue_conflict: the field (title, body, state, labels, milestone, comment, deleted,
-     * comment deleted), or "<label|milestone> <field>" for a label or milestone of its own. */
+    /** issue_conflict: the field (title, body, state, labels, milestone, assignees, comment,
+     * deleted, comment deleted), or "<label|milestone> <field>" for a label or milestone of
+     * its own. */
     field?: string;
     /** issue_conflict: each node's value of the field. */
     values?: Record<string, string>;
@@ -258,6 +259,8 @@ export interface Conflict {
     node?: string;
     /** issue_conflict (label or milestone): its name on the nodes that agree. */
     item?: string;
+    /** issue_conflict (assignees): "<node>: <why>" for each node that can't hold the value. */
+    blocked?: string[];
   };
   detected_at: string;
   last_seen_at: string;

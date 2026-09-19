@@ -549,6 +549,7 @@ type Issue struct {
 	Milestone   *struct {
 		ID int64 `json:"id"`
 	} `json:"milestone"`
+	Assignees []User `json:"assignees"`
 }
 
 // IssueComment is a comment on an issue or pull request.
@@ -586,8 +587,9 @@ func (c *Client) ListRepoComments(ctx context.Context, owner, repo string, page,
 }
 
 // CreateIssue opens an issue (already closed if closed is set) with these
-// labels and milestone (0: none).
-func (c *Client) CreateIssue(ctx context.Context, owner, repo, title, body string, closed bool, labels []int64, milestone int64) (Issue, error) {
+// labels, milestone (0: none) and assignees.
+func (c *Client) CreateIssue(ctx context.Context, owner, repo, title, body string, closed bool, labels []int64, milestone int64,
+	assignees []string) (Issue, error) {
 	var is Issue
 	opt := map[string]any{"title": title, "body": body, "closed": closed}
 	if len(labels) > 0 {
@@ -595,6 +597,9 @@ func (c *Client) CreateIssue(ctx context.Context, owner, repo, title, body strin
 	}
 	if milestone != 0 {
 		opt["milestone"] = milestone
+	}
+	if len(assignees) > 0 {
+		opt["assignees"] = assignees
 	}
 	err := c.do(ctx, http.MethodPost, repoPath(owner, repo)+"/issues", true, opt, &is)
 	return is, err
@@ -604,6 +609,26 @@ func (c *Client) CreateIssue(ctx context.Context, owner, repo, title, body strin
 func (c *Client) SetIssueMilestone(ctx context.Context, owner, repo string, number, milestone int64) error {
 	return c.do(ctx, http.MethodPatch, fmt.Sprintf("%s/issues/%d", repoPath(owner, repo), number), true,
 		map[string]int64{"milestone": milestone}, nil)
+}
+
+// SetIssueAssignees sets an issue's assignees to exactly these logins; an
+// empty list clears them. Forgejo refuses a user without write access to
+// the repository, and clears the old assignees before adding the new ones,
+// so callers check first (see ListAssignees).
+func (c *Client) SetIssueAssignees(ctx context.Context, owner, repo string, number int64, logins []string) error {
+	if logins == nil {
+		logins = []string{}
+	}
+	return c.do(ctx, http.MethodPatch, fmt.Sprintf("%s/issues/%d", repoPath(owner, repo), number), true,
+		map[string]any{"assignees": logins}, nil)
+}
+
+// ListAssignees returns the users who can be assigned issues in the
+// repository: those with write access.
+func (c *Client) ListAssignees(ctx context.Context, owner, repo string) ([]User, error) {
+	var out []User
+	err := c.do(ctx, http.MethodGet, repoPath(owner, repo)+"/assignees", true, nil, &out)
+	return out, err
 }
 
 // ReplaceIssueLabels sets an issue's labels to exactly these.

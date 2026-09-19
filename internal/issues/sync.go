@@ -19,8 +19,11 @@ import (
 type API interface {
 	ListIssues(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.Issue, error)
 	ListRepoComments(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.IssueComment, error)
-	CreateIssue(ctx context.Context, owner, repo, title, body string, closed bool, labels []int64, milestone int64) (forgejo.Issue, error)
+	CreateIssue(ctx context.Context, owner, repo, title, body string, closed bool, labels []int64, milestone int64,
+		assignees []string) (forgejo.Issue, error)
 	SetIssueMilestone(ctx context.Context, owner, repo string, number, milestone int64) error
+	SetIssueAssignees(ctx context.Context, owner, repo string, number int64, logins []string) error
+	ListAssignees(ctx context.Context, owner, repo string) ([]forgejo.User, error)
 	ReplaceIssueLabels(ctx context.Context, owner, repo string, number int64, labels []int64) error
 	ListLabels(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.Label, error)
 	CreateLabel(ctx context.Context, owner, repo string, l forgejo.Label) (forgejo.Label, error)
@@ -171,11 +174,21 @@ type snapshot struct {
 	byNumber map[int64]forgejo.Issue                // issues only, by number
 	comments map[int64]forgejo.IssueComment         // on issues, by Forgejo id
 	items    map[string]map[int64]map[string]string // kind -> Forgejo id -> fields
+	// assignable are the logins the node lets an issue be assigned to:
+	// those with write access to the repository there.
+	assignable map[string]bool
 }
 
 func (s *Syncer) read(ctx context.Context, n Node, owner, name string) (*snapshot, error) {
 	sn := &snapshot{issues: map[int64]forgejo.Issue{}, byNumber: map[int64]forgejo.Issue{}, comments: map[int64]forgejo.IssueComment{},
-		items: map[string]map[int64]map[string]string{"label": {}, "milestone": {}}}
+		items: map[string]map[int64]map[string]string{"label": {}, "milestone": {}}, assignable: map[string]bool{}}
+	who, err := n.API.ListAssignees(ctx, owner, name)
+	if err != nil {
+		return nil, err
+	}
+	for _, u := range who {
+		sn.assignable[u.Login] = true
+	}
 	for page := 1; ; page++ {
 		list, err := n.API.ListLabels(ctx, owner, name, page, pageSize)
 		if err != nil {
@@ -254,6 +267,74 @@ type run struct {
 // labelsValue is an issue's labels on a node, as merge sees them there.
 func (r *run) labelsValue(node string, is forgejo.Issue) string {
 	return r.labels.labelsValue(node, is, r.kept[node])
+}
+
+// assigneesValue is an issue's assignees as merge sees them: their logins,
+// sorted. A login means the same person on every node, since SceneID's sub
+// is the global user key, so there's nothing to translate.
+func assigneesValue(_ string, is forgejo.Issue) string {
+	logins := make([]string, 0, len(is.Assignees))
+	for _, u := range is.Assignees {
+		logins = append(logins, u.Login)
+	}
+	sort.Strings(logins)
+	return strings.Join(logins, ",")
+}
+
+// refused lists, as "<node>: <reason>", the nodes that couldn't hold this
+// value. Nothing is written while one can't, and that includes a node
+// without a copy of the issue yet: its copy is made without the value, so
+// the base mustn't move past it either.
+func (r *run) refused(refuse func(node, value string) string, value string) []string {
+	if refuse == nil {
+		return nil
+	}
+	var out []string
+	for _, n := range r.nodes {
+		if why := refuse(n, value); why != "" {
+			out = append(out, n+": "+why)
+		}
+	}
+	return out
+}
+
+// refuseAssignees says why a node wouldn't take these assignees.
+func (r *run) refuseAssignees(node, value string) string {
+	var missing []string
+	for _, login := range split(value) {
+		if !r.snaps[node].assignable[login] {
+			missing = append(missing, login)
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return strings.Join(missing, ", ") + " can't be given an issue there"
+}
+
+// split is a merged list value as its parts; "" is no parts.
+func split(value string) []string {
+	if value == "" {
+		return nil
+	}
+	return strings.Split(value, ",")
+}
+
+// canAssign reports that the node would take every assignee in value.
+// Forgejo only assigns people with write access to the repository, and
+// ForgeSync doesn't replicate collaborators yet, so a node can be unable to
+// hold what another node has. It's never given a value it can't hold, and
+// its own value is then not read as anyone's decision either (see skip).
+func (r *run) canAssign(node, value string) bool {
+	if value == "" {
+		return true
+	}
+	for _, login := range split(value) {
+		if !r.snaps[node].assignable[login] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Syncer) runOnce(ctx context.Context, id string) error {
@@ -493,18 +574,21 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 		base *string
 		get  func(node string, is forgejo.Issue) string
 		set  func(ctx context.Context, node string, number int64, value string, is forgejo.Issue) error
-		// items: the value names labels or milestones, so a node whose copy
-		// of one is being recreated can't be compared in this run.
-		items bool
-		// hold leaves a node's value alone: neither compared nor written.
-		// An issue holds one milestone, so a node keeping one for its owner
-		// can't take part without losing it; labels are a set, and
-		// labelsValue and labelFIDs keep a held one there on their own.
-		hold func(node string, is forgejo.Issue) bool
+		// skip leaves a node out of the comparison: what it has there isn't
+		// anyone's decision, so it mustn't win. A skipped node is still
+		// written with the agreed value instead, so it catches up.
+		skip func(node string, is forgejo.Issue) bool
+		// keep leaves a node alone altogether: not compared, not written.
+		keep func(node string, is forgejo.Issue) bool
+		// refuse says why a node couldn't hold a value at all. One that
+		// can't makes the field a conflict for a person; nothing is written
+		// and the base doesn't move, so the node that's behind agrees with
+		// the base and never wins a later comparison.
+		refuse func(node, value string) string
 	}{
-		{"title", &rec.BaseTitle, func(_ string, i forgejo.Issue) string { return i.Title }, nil, false, nil},
-		{"body", &rec.BaseBody, func(_ string, i forgejo.Issue) string { return i.Body }, nil, false, nil},
-		{"state", &rec.BaseState, func(_ string, i forgejo.Issue) string { return i.State }, nil, false, nil},
+		{"title", &rec.BaseTitle, func(_ string, i forgejo.Issue) string { return i.Title }, nil, nil, nil, nil},
+		{"body", &rec.BaseBody, func(_ string, i forgejo.Issue) string { return i.Body }, nil, nil, nil, nil},
+		{"state", &rec.BaseState, func(_ string, i forgejo.Issue) string { return i.State }, nil, nil, nil, nil},
 		{"labels", &rec.BaseLabels, r.labelsValue,
 			func(ctx context.Context, n string, number int64, v string, is forgejo.Issue) error {
 				fids, ok := r.labels.labelFIDs(n, v, &is, r.kept[n])
@@ -512,7 +596,8 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 					return errNotThereYet
 				}
 				return r.s.nodes[n].API.ReplaceIssueLabels(ctx, r.owner, r.name, number, fids)
-			}, true, nil},
+			},
+			func(n string, _ forgejo.Issue) bool { return r.restored[n] }, nil, nil},
 		{"milestone", &rec.BaseMilestone, r.milestones.milestoneValue,
 			func(ctx context.Context, n string, number int64, v string, _ forgejo.Issue) error {
 				fid, ok := r.milestones.milestoneFID(n, v)
@@ -520,21 +605,34 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 					return errNotThereYet
 				}
 				return r.s.nodes[n].API.SetIssueMilestone(ctx, r.owner, r.name, number, fid)
-			}, true,
-			func(n string, is forgejo.Issue) bool { return r.kept[n][r.milestones.milestoneValue(n, is)] }},
+			},
+			// An issue holds one milestone, so a node keeping one for its
+			// owner can't take part without losing it. Labels are a set, and
+			// labelsValue and labelFIDs keep a held one there on their own.
+			func(n string, _ forgejo.Issue) bool { return r.restored[n] },
+			func(n string, is forgejo.Issue) bool { return r.kept[n][r.milestones.milestoneValue(n, is)] },
+			nil},
+		{"assignees", &rec.BaseAssignees, assigneesValue,
+			func(ctx context.Context, n string, number int64, v string, _ forgejo.Issue) error {
+				return r.s.nodes[n].API.SetIssueAssignees(ctx, r.owner, r.name, number, split(v))
+			},
+			nil, nil, r.refuseAssignees},
 	}
 	want := map[string]string{} // for new copies
 	for _, f := range fields {
 		vals := map[string]string{}
+		skipped := map[string]bool{}
 		for n, is := range present {
-			if f.hold != nil && f.hold(n, is) {
+			if f.keep != nil && f.keep(n, is) {
 				continue // the owner's to settle; leave the node as it is
 			}
-			if f.items && r.restored[n] {
-				continue // a copy coming back, not someone's change
+			if f.skip != nil && f.skip(n, is) {
+				skipped[n] = true
+				continue
 			}
 			vals[n] = f.get(n, is)
 		}
+		stuck := r.refused(f.refuse, *f.base) // already out of reach
 		value, writes, conflict := merge(vals, *f.base)
 		if conflict {
 			r.conflict(ref+" "+f.name, map[string]any{"field": f.name, "values": clip(r.readable(f.name, vals)),
@@ -546,21 +644,26 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 			}
 			continue
 		}
-		want[f.name] = value
-		// A node whose label or milestone was just recreated lost it from
-		// its issues; give it the agreed value back instead of reading its
-		// loss as a change.
-		if f.items {
-			for n, is := range present {
-				if f.hold != nil && f.hold(n, is) {
-					continue
-				}
-				if r.restored[n] && f.get(n, is) != value {
-					writes = append(writes, n)
-				}
+		if cant := append(stuck, r.refused(f.refuse, value)...); len(cant) > 0 {
+			sort.Strings(cant)
+			r.conflict(ref+" "+f.name, map[string]any{"field": f.name, "values": clip(vals),
+				"issue": numbers(*rec), "author": rec.Author, "blocked": clipList(cant)})
+			if is, ok := present[r.primary]; ok {
+				want[f.name] = f.get(r.primary, is)
+			} else {
+				want[f.name] = *f.base
 			}
-			sort.Strings(writes)
+			continue
 		}
+		want[f.name] = value
+		// A node left out of the comparison still catches up: its label came
+		// back, and putting it on the issue again is ForgeSync's own doing.
+		for n := range skipped {
+			if f.get(n, present[n]) != value {
+				writes = append(writes, n)
+			}
+		}
+		sort.Strings(writes)
 		for _, n := range writes {
 			set := f.set
 			if set == nil {
@@ -616,8 +719,18 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 			r.complete = false
 			continue
 		}
+		// Assignees only where they'd be taken; elsewhere the copy is made
+		// without them, and the node stays out of that comparison.
+		var assignees []string
+		if r.canAssign(n, want["assignees"]) {
+			assignees = split(want["assignees"])
+		} else {
+			r.s.log.Info("issues: a copy is made without assignees the node won't take",
+				"repository", r.rec.FullName, "node", n, "issue", ref, "assignees", want["assignees"])
+			r.complete = false
+		}
 		is, err := r.s.nodes[n].As(rec.Author).CreateIssue(ctx, r.owner, r.name, want["title"], want["body"], want["state"] == "closed",
-			labelIDs, milestone)
+			labelIDs, milestone, assignees)
 		if err != nil {
 			r.s.log.Warn("issues: creating a copy failed", "repository", r.rec.FullName, "node", n, "issue", ref, "error", err)
 			r.complete = false
@@ -945,6 +1058,14 @@ func numbers(rec store.IssueRecord) map[string]int64 {
 		out[n] = c.Number
 	}
 	return out
+}
+
+// clipList keeps conflict details small.
+func clipList(v []string) []string {
+	if len(v) > 10 {
+		return v[:10]
+	}
+	return v
 }
 
 // clip shortens values for conflict details.

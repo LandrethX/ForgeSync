@@ -29,12 +29,14 @@ type fakeNode struct {
 	writes     []string
 	labels     map[int64]*forgejo.Label
 	milestones map[int64]*forgejo.Milestone
+	assignable map[string]bool // who the node would let an issue be assigned to
 }
 
 func newFakeNode(name string) *fakeNode {
 	return &fakeNode{name: name, issues: map[int64]*forgejo.Issue{}, comments: map[int64]*forgejo.IssueComment{},
 		labels: map[int64]*forgejo.Label{}, milestones: map[int64]*forgejo.Milestone{},
-		nextID: map[string]int64{"se": 1000, "dk": 2000, "de": 3000}[name], clock: time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)}
+		assignable: map[string]bool{"alice": true, "bob": true, "carol": true},
+		nextID:     map[string]int64{"se": 1000, "dk": 2000, "de": 3000}[name], clock: time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)}
 }
 
 func (f *fakeNode) tick() time.Time { f.clock = f.clock.Add(time.Second); return f.clock }
@@ -144,14 +146,71 @@ func (a fakeAPI) ListRepoComments(_ context.Context, _, _ string, page, limit in
 	}
 	return all[start:min(start+limit, len(all))], nil
 }
-func (a fakeAPI) CreateIssue(_ context.Context, _, _, title, body string, closed bool, labels []int64, milestone int64) (forgejo.Issue, error) {
+func (a fakeAPI) CreateIssue(_ context.Context, _, _, title, body string, closed bool, labels []int64, milestone int64,
+	assignees []string) (forgejo.Issue, error) {
 	a.n.mu.Lock()
 	defer a.n.mu.Unlock()
 	a.n.writes = append(a.n.writes, "create "+title+" as "+a.as)
 	is := a.n.create(a.as, title, body, closed)
 	a.n.setLabels(is, labels)
 	a.n.setMilestone(is, milestone)
+	if err := a.n.assign(is, assignees); err != nil {
+		return forgejo.Issue{}, err
+	}
 	return *is, nil
+}
+
+// assign is Forgejo replacing an issue's assignees: it refuses anyone
+// without write access, after having removed the others.
+func (f *fakeNode) assign(is *forgejo.Issue, logins []string) error {
+	is.Assignees = nil
+	for _, login := range logins {
+		if !f.assignable[login] {
+			return fmt.Errorf("%s does not have access to the repository", login)
+		}
+		is.Assignees = append(is.Assignees, forgejo.User{Login: login})
+	}
+	return nil
+}
+
+func (a fakeAPI) SetIssueAssignees(_ context.Context, _, _ string, number int64, logins []string) error {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	a.n.writes = append(a.n.writes, fmt.Sprintf("assignees #%d", number))
+	return a.n.assign(a.n.issues[number], logins)
+}
+
+func (a fakeAPI) ListAssignees(_ context.Context, _, _ string) ([]forgejo.User, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	var out []forgejo.User
+	for login, ok := range a.n.assignable {
+		if ok {
+			out = append(out, forgejo.User{Login: login})
+		}
+	}
+	return out, nil
+}
+
+// assignees is an issue's assignees on the node, sorted.
+func (f *fakeNode) assignees(number int64) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, u := range f.issues[number].Assignees {
+		out = append(out, u.Login)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
+}
+
+// setAssignees is a person assigning an issue on the node.
+func (f *fakeNode) setAssignees(number int64, logins ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.assign(f.issues[number], logins); err != nil {
+		panic(err)
+	}
 }
 
 func (f *fakeNode) setLabels(is *forgejo.Issue, ids []int64) {

@@ -122,6 +122,12 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	r.Get("/readyz", s.readyz)
+	// Metrics are a read like any other: Viewer, which the admin token is,
+	// so a scraper sends it as a bearer token.
+	r.Group(func(r chi.Router) {
+		r.Use(noStore, s.authenticate, requireRole(auth.Viewer))
+		r.Get("/metrics", s.metrics)
+	})
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(noStore)

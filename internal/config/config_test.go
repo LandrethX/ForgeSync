@@ -1,6 +1,13 @@
 package config
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -212,4 +219,72 @@ nodes: [{name: se, url: "http://se", token_file: se.token}]
 			t.Errorf("accepted: %s", bad)
 		}
 	}
+}
+
+// TLS: both files or neither, and they have to be a keypair. Finding out
+// at startup beats finding out on the first request.
+func TestTLSConfig(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "se.token", "tok")
+	cert, key := writeSelfSigned(t, dir)
+
+	base := "database: {url: postgres://x}\nnodes: [{name: se, url: \"http://se\", token_file: se.token}]\n"
+	t.Setenv(EnvDatabaseURL, "")
+
+	path := writeFile(t, dir, "ok.yaml", base+"http: {tls_cert_file: cert.pem, tls_key_file: key.pem}\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("a good pair: %v", err)
+	}
+	if !cfg.HTTP.TLS() || cfg.HTTP.TLSCertFile != cert || cfg.HTTP.TLSKeyFile != key {
+		t.Errorf("tls = %v %q %q", cfg.HTTP.TLS(), cfg.HTTP.TLSCertFile, cfg.HTTP.TLSKeyFile)
+	}
+
+	path = writeFile(t, dir, "half.yaml", base+"http: {tls_cert_file: cert.pem}\n")
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "set both or neither") {
+		t.Errorf("only the certificate: %v", err)
+	}
+
+	writeFile(t, dir, "other.pem", "not a key")
+	path = writeFile(t, dir, "bad.yaml", base+"http: {tls_cert_file: cert.pem, tls_key_file: other.pem}\n")
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "tls_cert_file") {
+		t.Errorf("a key that isn't the certificate's: %v", err)
+	}
+
+	// Without it, the controller serves plain HTTP as before.
+	path = writeFile(t, dir, "plain.yaml", base)
+	cfg, err = Load(path)
+	if err != nil || cfg.HTTP.TLS() {
+		t.Errorf("plain = %v, %v", cfg.HTTP.TLS(), err)
+	}
+}
+
+// writeSelfSigned puts a throwaway certificate and key in dir.
+func writeSelfSigned(t *testing.T, dir string) (certPath, keyPath string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "forgesync.test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"forgesync.test"},
+		IsCA:         true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPath = writeFile(t, dir, "cert.pem", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})))
+	keyPath = writeFile(t, dir, "key.pem", string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})))
+	return certPath, keyPath
 }

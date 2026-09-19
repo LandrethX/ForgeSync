@@ -8,6 +8,7 @@ package config
 
 import (
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/url"
@@ -213,6 +214,42 @@ type HTTP struct {
 	// SecureCookies marks the web UI's session cookie Secure (HTTPS only).
 	// Defaults to true; set false only for local development over plain http.
 	SecureCookies *bool `yaml:"secure_cookies"`
+	// TLSCertFile and TLSKeyFile make the controller serve HTTPS itself,
+	// for an installation with no reverse proxy in front of it. Both or
+	// neither; the paths are resolved against the config file, and the
+	// pair is re-read when the process is sent SIGHUP, so a renewed
+	// certificate doesn't need a restart.
+	TLSCertFile string `yaml:"tls_cert_file"`
+	TLSKeyFile  string `yaml:"tls_key_file"`
+	// TLSListen serves HTTPS on a second address while Listen keeps
+	// serving plain HTTP, for an installation that has both: a reverse
+	// proxy talking to it over HTTP on one side, browsers reaching it
+	// directly over HTTPS on the other. Without it, a configured
+	// certificate makes Listen itself HTTPS.
+	TLSListen string `yaml:"tls_listen"`
+}
+
+// TLS reports that the controller should serve HTTPS itself.
+func (h HTTP) TLS() bool { return h.TLSCertFile != "" && h.TLSKeyFile != "" }
+
+// PlainListen is the address served over plain HTTP, if any: Listen,
+// unless the certificate has taken it over.
+func (h HTTP) PlainListen() string {
+	if h.TLS() && h.TLSListen == "" {
+		return ""
+	}
+	return h.Listen
+}
+
+// HTTPSListen is the address served over HTTPS, if any.
+func (h HTTP) HTTPSListen() string {
+	switch {
+	case !h.TLS():
+		return ""
+	case h.TLSListen != "":
+		return h.TLSListen
+	}
+	return h.Listen
 }
 
 type Database struct {
@@ -353,6 +390,10 @@ func (c *Config) resolveSecrets(dir string) error {
 			return fmt.Errorf("http.admin_token_file: %w", err)
 		}
 	}
+	// The certificate and key aren't read here: they're re-read on every
+	// reload, so only their paths are settled.
+	c.HTTP.TLSCertFile = againstConfig(dir, c.HTTP.TLSCertFile)
+	c.HTTP.TLSKeyFile = againstConfig(dir, c.HTTP.TLSKeyFile)
 	if c.Webhooks.SecretFile != "" {
 		if c.Webhooks.Secret, err = readSecret(dir, c.Webhooks.SecretFile); err != nil {
 			return fmt.Errorf("webhooks.secret_file: %w", err)
@@ -378,6 +419,15 @@ func (c *Config) resolveSecrets(dir string) error {
 	return nil
 }
 
+// againstConfig resolves a path in the config file against the file's own
+// directory, so a relative path means what the person writing it meant.
+func againstConfig(dir, path string) string {
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(dir, path)
+}
+
 func readSecret(dir, path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(dir, path)
@@ -393,6 +443,26 @@ func readSecret(dir, path string) (string, error) {
 	return s, nil
 }
 
+// validateTLS: both files or neither, and they have to make a keypair,
+// which is worth finding out at startup rather than on the first request.
+func (h HTTP) validateTLS() []error {
+	switch {
+	case h.TLSCertFile == "" && h.TLSKeyFile == "":
+		if h.TLSListen != "" {
+			return []error{errors.New("http.tls_listen needs http.tls_cert_file and http.tls_key_file")}
+		}
+		return nil
+	case h.TLSCertFile == "" || h.TLSKeyFile == "":
+		return []error{errors.New("http.tls_cert_file and http.tls_key_file go together: set both or neither")}
+	case h.TLSListen != "" && h.TLSListen == h.Listen:
+		return []error{errors.New("http.tls_listen and http.listen must be different addresses")}
+	}
+	if _, err := tls.LoadX509KeyPair(h.TLSCertFile, h.TLSKeyFile); err != nil {
+		return []error{fmt.Errorf("http.tls_cert_file/tls_key_file: %w", err)}
+	}
+	return nil
+}
+
 func (c *Config) validate() error {
 	var errs []error
 	switch c.Log.Level {
@@ -405,6 +475,7 @@ func (c *Config) validate() error {
 	default:
 		errs = append(errs, fmt.Errorf("log.format %q: want text or json", c.Log.Format))
 	}
+	errs = append(errs, c.HTTP.validateTLS()...)
 	if c.Database.URL == "" {
 		errs = append(errs, fmt.Errorf("database: set url, url_file or %s", EnvDatabaseURL))
 	}

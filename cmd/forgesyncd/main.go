@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -324,11 +325,49 @@ func run(configPath string) error {
 		IdleTimeout:       2 * time.Minute,
 	}
 	serveErr := make(chan error, 1)
-	go func() {
-		log.Info("listening", "addr", cfg.HTTP.Listen)
-		serveErr <- srv.ListenAndServe()
-	}()
-
+	// A controller can serve plain HTTP, HTTPS, or both at once: behind a
+	// reverse proxy the proxy talks HTTP to it, while a browser reaching
+	// it directly wants HTTPS, and an installation can have both.
+	var servers []*http.Server
+	if addr := cfg.HTTP.HTTPSListen(); addr != "" {
+		certs, err := newCertificates(cfg.HTTP.TLSCertFile, cfg.HTTP.TLSKeyFile)
+		if err != nil {
+			return err
+		}
+		// A certificate is renewed more often than a controller is
+		// restarted, so SIGHUP re-reads the pair in place.
+		hup := make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+		defer signal.Stop(hup)
+		go func() {
+			for range hup {
+				if err := certs.reload(); err != nil {
+					log.Error("re-reading the certificate failed; keeping the one in use", "error", err)
+					continue
+				}
+				log.Info("certificate re-read", "file", cfg.HTTP.TLSCertFile)
+			}
+		}()
+		tlsSrv := &http.Server{ // the same handler and timeouts
+			Addr: addr, Handler: srv.Handler,
+			TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: certs.get},
+			ReadHeaderTimeout: srv.ReadHeaderTimeout, ReadTimeout: srv.ReadTimeout,
+			WriteTimeout: srv.WriteTimeout, IdleTimeout: srv.IdleTimeout,
+		}
+		servers = append(servers, tlsSrv)
+		go func() {
+			log.Info("listening", "addr", addr, "tls", true, "certificate", cfg.HTTP.TLSCertFile)
+			serveErr <- tlsSrv.ListenAndServeTLS("", "") // the pair is in TLSConfig
+		}()
+	}
+	if addr := cfg.HTTP.PlainListen(); addr != "" {
+		srv.Addr = addr
+		servers = append(servers, srv)
+		go func() {
+			log.Info("listening", "addr", addr, "tls", false)
+			serveErr <- srv.ListenAndServe()
+		}()
+	}
 	select {
 	case err := <-serveErr:
 		stop()
@@ -339,11 +378,12 @@ func run(configPath string) error {
 	log.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	err = srv.Shutdown(shutdownCtx)
-	<-monitorDone
-	if errors.Is(err, http.ErrServerClosed) {
-		err = nil
+	for _, s := range servers {
+		if e := s.Shutdown(shutdownCtx); e != nil && !errors.Is(e, http.ErrServerClosed) {
+			err = e
+		}
 	}
+	<-monitorDone
 	return err
 }
 
@@ -574,4 +614,39 @@ func purgeSessions(ctx context.Context, db *store.Store, log *slog.Logger) {
 			}
 		}
 	}
+}
+
+// certificates holds the keypair the server is using, so it can be
+// replaced without dropping connections or restarting: SIGHUP re-reads
+// the files, and a bad pair leaves the old one in use rather than taking
+// the controller off the air.
+type certificates struct {
+	certFile, keyFile string
+	mu                sync.RWMutex
+	pair              *tls.Certificate
+}
+
+func newCertificates(certFile, keyFile string) (*certificates, error) {
+	c := &certificates{certFile: certFile, keyFile: keyFile}
+	if err := c.reload(); err != nil {
+		return nil, fmt.Errorf("http.tls_cert_file/tls_key_file: %w", err)
+	}
+	return c, nil
+}
+
+func (c *certificates) reload() error {
+	pair, err := tls.LoadX509KeyPair(c.certFile, c.keyFile)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pair = &pair
+	return nil
+}
+
+func (c *certificates) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.pair, nil
 }

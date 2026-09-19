@@ -5,11 +5,9 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -19,22 +17,11 @@ import (
 
 const (
 	sessionCookie = "forgesync_session"
-	// loginCookie binds an OIDC sign-in attempt to the browser that started
-	// it. It must be SameSite=Lax: the callback is a top-level navigation
-	// coming back from SceneID, and Strict cookies aren't sent on those.
-	loginCookie = "forgesync_login"
 	// csrfHeader must accompany state-changing requests authenticated by the
 	// session cookie. Other sites can't set it without a CORS preflight, which
 	// this server never allows.
 	csrfHeader = "X-ForgeSync-CSRF"
 )
-
-// OIDCFlow is SceneID sign-in (auth.OIDC).
-type OIDCFlow interface {
-	Start(ctx context.Context, returnTo string) (authURL, state string, err error)
-	Finish(ctx context.Context, state, code string) (auth.Identity, string, string, error)
-	LogoutURL(idToken string) string
-}
 
 // Identities used for the admin token.
 var (
@@ -50,10 +37,11 @@ func identity(r *http.Request) auth.Identity {
 	return id
 }
 
-// tokenSignInAllowed: the admin token works in the web UI when SceneID
-// sign-in is off, or when it's explicitly kept as a break-glass option.
+// tokenSignInAllowed: the admin token can be used in the web UI when one
+// is configured. It's the break-glass way in -- and the only way to make
+// the first ForgeSync account, there being nobody to make it otherwise.
 func (s *Server) tokenSignInAllowed() bool {
-	return s.AdminToken != "" && (s.OIDC == nil || s.AllowTokenSignIn)
+	return s.AdminToken != ""
 }
 
 // authenticate accepts the admin token as a bearer token (CLI) or a session
@@ -78,8 +66,9 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 				return
 			}
 		} else {
-			if s.AdminToken == "" && s.OIDC == nil {
-				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "admin API disabled: set http.admin_token_file or oidc"})
+			if s.AdminToken == "" {
+				writeJSON(w, http.StatusServiceUnavailable,
+					map[string]string{"message": "admin API disabled: set http.admin_token_file"})
 				return
 			}
 			unauthorized(w)
@@ -122,15 +111,18 @@ func clientAddr(r *http.Request) string {
 }
 
 // authConfig tells the sign-in page which methods are available. Public.
+//
+// Signing in to ForgeSync is a ForgeSync account (the user's decision,
+// 2026-09-19): SceneID says who may use the *nodes*, and the people who
+// look after the controllers are not the same set. The admin token stays
+// as the break-glass way in, and as the only way to make the first
+// account.
 func (s *Server) authConfig(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{
-		"sceneid":       s.OIDC != nil,
-		"token_sign_in": s.tokenSignInAllowed(),
-	})
+	writeJSON(w, http.StatusOK, map[string]bool{"token_sign_in": s.tokenSignInAllowed()})
 }
 
-func (s *Server) setSessionCookie(w http.ResponseWriter, id auth.Identity, idToken string) time.Time {
-	key, expires := s.Sessions.Create(id, idToken)
+func (s *Server) setSessionCookie(w http.ResponseWriter, id auth.Identity) time.Time {
+	key, expires := s.Sessions.Create(id, "")
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: key, Path: "/", Expires: expires,
 		HttpOnly: true, Secure: s.SecureCookies, SameSite: http.SameSiteStrictMode,
@@ -208,17 +200,18 @@ func (s *Server) signInWithPassword(w http.ResponseWriter, r *http.Request, addr
 	if id.Name == "" {
 		id.Name = account.Username
 	}
-	expires := s.setSessionCookie(w, id, "")
+	expires := s.setSessionCookie(w, id)
 	s.audit(r.Context(), id.Actor(), "session.sign_in", addr, map[string]any{"source": "account", "role": account.Role})
 	writeJSON(w, http.StatusOK, sessionInfo{Identity: id, ExpiresAt: expires.UTC()})
 }
 
 func (s *Server) signInWithToken(w http.ResponseWriter, r *http.Request, addr, token string) {
 	if !s.tokenSignInAllowed() {
-		writeJSON(w, http.StatusForbidden, map[string]string{"message": "admin-token sign-in is turned off; sign in with SceneID"})
+		writeJSON(w, http.StatusForbidden,
+			map[string]string{"message": "this controller has no admin token; sign in with a ForgeSync account"})
 		return
 	}
-	breakGlass := map[string]any{"break_glass": s.OIDC != nil}
+	breakGlass := map[string]any{"break_glass": true}
 	if !s.tokenValid(token) {
 		s.limiter.Fail(addr)
 		s.audit(r.Context(), "web-token", "session.sign_in_failed", addr, breakGlass)
@@ -226,99 +219,10 @@ func (s *Server) signInWithToken(w http.ResponseWriter, r *http.Request, addr, t
 		return
 	}
 	s.limiter.Reset(addr)
-	expires := s.setSessionCookie(w, webTokenIdentity, "")
+	expires := s.setSessionCookie(w, webTokenIdentity)
 	s.audit(r.Context(), webTokenIdentity.Actor(), "session.sign_in", addr, breakGlass)
 	writeJSON(w, http.StatusOK, sessionInfo{Identity: webTokenIdentity, ExpiresAt: expires.UTC()})
 }
-
-// ---------------------------------------------------------------- SceneID
-
-// signInError values end up in /?signin_error=... for the UI to explain.
-const (
-	errNoRole      = "no_role"
-	errExpired     = "expired"
-	errCancelled   = "cancelled"
-	errUnavailable = "unavailable"
-	errFailed      = "failed"
-)
-
-func (s *Server) oidcLogin(w http.ResponseWriter, r *http.Request) {
-	if s.OIDC == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"message": "SceneID sign-in isn't configured"})
-		return
-	}
-	authURL, state, err := s.OIDC.Start(r.Context(), safeReturnTo(r.URL.Query().Get("return_to")))
-	if err != nil {
-		s.Log.Error("starting SceneID sign-in failed", "error", err)
-		http.Redirect(w, r, "/?signin_error="+errUnavailable, http.StatusFound)
-		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name: loginCookie, Value: state, Path: "/api/v1/auth", MaxAge: 600,
-		HttpOnly: true, Secure: s.SecureCookies, SameSite: http.SameSiteLaxMode,
-	})
-	http.Redirect(w, r, authURL, http.StatusFound)
-}
-
-func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
-	if s.OIDC == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"message": "SceneID sign-in isn't configured"})
-		return
-	}
-	fail := func(code string) { http.Redirect(w, r, "/?signin_error="+code, http.StatusFound) }
-	// The attempt is single use either way.
-	http.SetCookie(w, &http.Cookie{Name: loginCookie, Value: "", Path: "/api/v1/auth", MaxAge: -1,
-		HttpOnly: true, Secure: s.SecureCookies, SameSite: http.SameSiteLaxMode})
-
-	q := r.URL.Query()
-	c, err := r.Cookie(loginCookie)
-	// The state in the URL must be the one this browser started with;
-	// otherwise someone could make a victim sign in as the attacker.
-	if err != nil || q.Get("state") == "" || subtle.ConstantTimeCompare([]byte(c.Value), []byte(q.Get("state"))) != 1 {
-		fail(errExpired)
-		return
-	}
-	if e := q.Get("error"); e != "" {
-		s.Log.Info("SceneID sign-in not completed", "error", e, "description", q.Get("error_description"))
-		fail(errCancelled)
-		return
-	}
-
-	id, idToken, returnTo, err := s.OIDC.Finish(r.Context(), q.Get("state"), q.Get("code"))
-	switch {
-	case errors.Is(err, auth.ErrNoRole):
-		s.audit(r.Context(), id.Actor(), "session.sign_in_denied", clientAddr(r),
-			map[string]any{"sub": id.Subject, "reason": "no ForgeSync role"})
-		fail(errNoRole)
-		return
-	case errors.Is(err, auth.ErrUnknownState):
-		fail(errExpired)
-		return
-	case err != nil:
-		s.Log.Error("SceneID sign-in failed", "error", err)
-		fail(errFailed)
-		return
-	}
-	s.setSessionCookie(w, id, idToken)
-	s.audit(r.Context(), id.Actor(), "session.sign_in", clientAddr(r),
-		map[string]any{"sub": id.Subject, "role": id.Role.String()})
-	http.Redirect(w, r, returnTo, http.StatusFound)
-}
-
-// safeReturnTo keeps post-sign-in redirects on this site: a local path, not
-// "//host" or "/\\host" (which browsers treat as another host), not the API.
-func safeReturnTo(p string) string {
-	if p == "" || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.HasPrefix(p, "/\\") ||
-		strings.HasPrefix(p, "/api/") {
-		return "/"
-	}
-	if u, err := url.Parse(p); err != nil || u.Host != "" || u.Scheme != "" {
-		return "/"
-	}
-	return p
-}
-
-// ---------------------------------------------------------------- session
 
 type sessionInfo struct {
 	auth.Identity
@@ -339,22 +243,18 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sessionInfo{Identity: id, ExpiresAt: expires.UTC()})
 }
 
-// deleteSession signs out. For SceneID sessions it also returns the SceneID
-// sign-out URL, so the browser can end the single sign-on session too.
+// deleteSession signs out: the session is held in this controller's
+// memory, so forgetting it is the whole of it.
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
-	var logoutURL string
 	if c, err := r.Cookie(sessionCookie); err == nil {
-		if id, idToken, _, ok := s.Sessions.Get(c.Value); ok {
+		if id, _, _, ok := s.Sessions.Get(c.Value); ok {
 			s.audit(r.Context(), id.Actor(), "session.sign_out", clientAddr(r), nil)
-			if id.Source == "sceneid" && s.OIDC != nil {
-				logoutURL = s.OIDC.LogoutURL(idToken)
-			}
 		}
 		s.Sessions.Delete(c.Value)
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1,
 		HttpOnly: true, Secure: s.SecureCookies, SameSite: http.SameSiteStrictMode})
-	writeJSON(w, http.StatusOK, map[string]string{"logout_url": logoutURL})
+	writeJSON(w, http.StatusOK, map[string]string{})
 }
 
 // stillSignedIn re-checks a cookie session during a long-lived stream.

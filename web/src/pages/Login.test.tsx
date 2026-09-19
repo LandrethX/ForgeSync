@@ -35,59 +35,58 @@ const session = {
 beforeEach(() => window.history.replaceState(null, "", "/nodes/se"));
 afterEach(() => vi.unstubAllGlobals());
 
-describe("Login with SceneID", () => {
-  it("links to the SceneID sign-in, keeping the current page as the return address", async () => {
-    mockApi({
-      "/auth/config": {
-        status: 200,
-        body: { sceneid: true, token_sign_in: false },
-      },
+describe("signing in with a ForgeSync account", () => {
+  it("sends the username and password, and keeps the token out of the way", async () => {
+    const fetch = mockApi({
+      "/auth/config": { status: 200, body: { token_sign_in: true } },
+      "/session": { status: 200, body: session },
     });
-    render(<Login onSignedIn={vi.fn()} />);
-    const link = await screen.findByRole("link", {
-      name: "Sign in with SceneID",
-    });
-    expect(link.getAttribute("href")).toBe(
-      "/api/v1/auth/login?return_to=%2Fnodes%2Fse",
-    );
-    expect(screen.queryByLabelText("Admin token")).toBeNull();
-  });
+    const onSignedIn = vi.fn();
+    render(<Login onSignedIn={onSignedIn} />);
 
-  it("offers the admin token only as a break-glass option when allowed", async () => {
-    mockApi({
-      "/auth/config": {
-        status: 200,
-        body: { sceneid: true, token_sign_in: true },
-      },
+    // There is no SceneID button: SceneID signs people in to the nodes.
+    expect(screen.queryByRole("link", { name: /SceneID/ })).toBeNull();
+    await userEvent.type(
+      await screen.findByLabelText("ForgeSync account"),
+      "khav",
+    );
+    await userEvent.type(screen.getByLabelText("Password"), "a-long-one-here");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    const call = fetch.mock.calls.find(
+      ([u]) => u === "/api/v1/session",
+    ) as unknown as [string, RequestInit];
+    expect(JSON.parse(String(call[1].body))).toEqual({
+      username: "khav",
+      password: "a-long-one-here",
     });
-    render(<Login onSignedIn={vi.fn()} />);
-    await screen.findByRole("link", { name: "Sign in with SceneID" });
+    expect(onSignedIn).toHaveBeenCalledWith(session);
+    // The token is there, but folded away as the break-glass option.
     expect(screen.getByText("Use the admin token instead")).toBeTruthy();
   });
 
-  it.each([
-    ["no_role", "doesn't have a ForgeSync role"],
-    ["cancelled", "cancelled at SceneID"],
-    ["unavailable", "Can't reach SceneID"],
-    ["something-new", "Sign-in failed"],
-  ])(
-    "explains signin_error=%s and removes it from the address bar",
-    async (code, text) => {
-      window.history.replaceState(null, "", `/?signin_error=${code}`);
-      mockApi({
-        "/auth/config": {
-          status: 200,
-          body: { sceneid: true, token_sign_in: false },
-        },
-      });
-      render(<Login onSignedIn={vi.fn()} />);
-      expect(screen.getByRole("alert").textContent).toContain(text);
-      expect(window.location.search).toBe("");
-    },
-  );
+  it("says the same thing whichever part was wrong", async () => {
+    mockApi({
+      "/auth/config": { status: 200, body: { token_sign_in: true } },
+      "/session": {
+        status: 401,
+        body: { message: "that username and password don't match an account" },
+      },
+    });
+    render(<Login onSignedIn={vi.fn()} />);
+    await userEvent.type(
+      await screen.findByLabelText("ForgeSync account"),
+      "khav",
+    );
+    await userEvent.type(screen.getByLabelText("Password"), "not-the-one");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "That username and password don't match an account.",
+    );
+  });
 });
 
-describe("Login with the admin token (SceneID off)", () => {
+describe("Login with the admin token", () => {
   it("posts the token with the CSRF header and signs in", async () => {
     const fetch = mockApi({
       "/auth/config": {

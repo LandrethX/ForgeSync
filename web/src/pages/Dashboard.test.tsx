@@ -67,7 +67,7 @@ function wrapAs(role: Role) {
     username: "u",
     name: "U",
     role,
-    source: "sceneid",
+    source: "account",
     expires_at: "2026-09-20T18:00:00Z",
   };
   return (

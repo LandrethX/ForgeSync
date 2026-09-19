@@ -44,19 +44,12 @@ func withRepos(f *fixture) {
 	}
 }
 
-// sessionAs signs in through the fake SceneID with the given role.
+// sessionAs signs in with a ForgeSync account of the given role.
 func sessionAs(t *testing.T, role auth.Role) (*fixture, *http.Cookie) {
 	t.Helper()
-	f, o := newOIDCFixture("s3cret")
+	f := newFixture("s3cret")
 	withRepos(f)
-	o.finishID = auth.Identity{Subject: "x", Username: "u-" + role.String(), Role: role, Source: "sceneid"}
-	for _, c := range signInWithSceneID(t, f, "/").Cookies() {
-		if c.Name == sessionCookie {
-			return f, c
-		}
-	}
-	t.Fatal("no session")
-	return nil, nil
+	return f, signInAs(t, f, role)
 }
 
 func TestListRepositories(t *testing.T) {
@@ -140,7 +133,7 @@ func TestSetPrimaryNeedsAdministrator(t *testing.T) {
 			primary = append(primary, e.Actor+" "+e.Target)
 		}
 	}
-	if len(primary) != 2 || primary[0] != "sceneid:u-administrator alice/demo" {
+	if len(primary) != 2 || primary[0] != "account:u-administrator alice/demo" {
 		t.Errorf("audit = %v, want two changes", primary)
 	}
 }

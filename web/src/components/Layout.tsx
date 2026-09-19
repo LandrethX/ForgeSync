@@ -86,7 +86,7 @@ export function Layout({
           </span>
           <span className="who" title={session.email || undefined}>
             <span className="who-name">
-              {session.source === "sceneid" || session.source === "account"
+              {session.source === "account"
                 ? session.name || session.username
                 : "Admin token"}
             </span>

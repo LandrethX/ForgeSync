@@ -1,44 +1,17 @@
 import { useEffect, useState, type FormEvent } from "react";
-import {
-  api,
-  ApiError,
-  sceneIdLoginURL,
-  type AuthConfig,
-  type Session,
-} from "../api";
+import { api, ApiError, type AuthConfig, type Session } from "../api";
 import { formatDuration } from "../format";
 
-// Explanations for /?signin_error=... set by the SceneID callback.
-const SIGN_IN_ERRORS: Record<string, string> = {
-  no_role:
-    "Your SceneID account doesn't have a ForgeSync role. Ask an administrator to give you one in SceneID.",
-  expired:
-    "The sign-in took too long, or was started in another browser. Try again.",
-  cancelled: "Sign-in was cancelled at SceneID.",
-  unavailable: "Can't reach SceneID right now. Try again in a moment.",
-  failed:
-    "Sign-in failed. Try again, or ask an administrator to check the controller log.",
-};
-
-/** Reads and removes ?signin_error from the address bar, so a reload doesn't repeat it. */
-function takeSignInError(): string | undefined {
-  const params = new URLSearchParams(window.location.search);
-  const code = params.get("signin_error");
-  if (!code) return undefined;
-  params.delete("signin_error");
-  const rest = params.toString();
-  window.history.replaceState(
-    null,
-    "",
-    window.location.pathname + (rest ? `?${rest}` : ""),
-  );
-  return SIGN_IN_ERRORS[code] ?? SIGN_IN_ERRORS.failed;
-}
-
+/**
+ * Signing in to ForgeSync is a ForgeSync account. SceneID says who may
+ * use the Forgejo nodes; the people who look after the controllers are a
+ * different set, and their accounts live in ForgeSync's own database,
+ * which both controllers share. The admin token stays as the break-glass
+ * way in, and is how the first account gets made.
+ */
 export function Login({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
   const [config, setConfig] = useState<AuthConfig>();
   const [configError, setConfigError] = useState<string>();
-  const [sceneIdError] = useState(takeSignInError);
 
   useEffect(() => {
     api
@@ -48,8 +21,6 @@ export function Login({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
         setConfigError(e instanceof Error ? e.message : String(e)),
       );
   }, []);
-
-  const returnTo = window.location.pathname + window.location.search;
 
   return (
     <div className="login">
@@ -61,65 +32,27 @@ export function Login({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
       </div>
       <div className="login-card">
         <h1>Sign in</h1>
-        {sceneIdError && (
-          <p className="error-note" role="alert">
-            {sceneIdError}
-          </p>
-        )}
         {configError && (
           <p className="error-note" role="alert">
             {configError}
           </p>
         )}
         <PasswordForm onSignedIn={onSignedIn} />
-        {config?.sceneid && (
-          <>
-            <p className="muted or-line">
-              Or sign in with your SceneID account, which is where your
-              ForgeSync role comes from.
+        {config?.token_sign_in && (
+          <details className="break-glass">
+            <summary>Use the admin token instead</summary>
+            <p className="muted">
+              For emergencies, and for making the first account. Every use is
+              recorded in the audit log.
             </p>
-            <a
-              className="button-primary button-link"
-              href={sceneIdLoginURL(returnTo)}
-            >
-              Sign in with SceneID
-            </a>
-          </>
-        )}
-        {config?.token_sign_in &&
-          (config.sceneid ? (
-            <details className="break-glass">
-              <summary>Use the admin token instead</summary>
-              <p className="muted">
-                For emergencies when SceneID is unavailable. Every use is
-                recorded in the audit log.
-              </p>
-              <TokenForm onSignedIn={onSignedIn} />
-            </details>
-          ) : (
-            <>
-              <p className="muted">
-                Use the controller's admin token (the file named by{" "}
-                <code>http.admin_token_file</code>).
-              </p>
-              <TokenForm onSignedIn={onSignedIn} />
-            </>
-          ))}
-        {config && !config.sceneid && !config.token_sign_in && (
-          <p className="muted">
-            Web sign-in isn't configured on this controller.
-          </p>
+            <TokenForm onSignedIn={onSignedIn} />
+          </details>
         )}
       </div>
     </div>
   );
 }
 
-/**
- * ForgeSync's own accounts. They're in the database both controllers
- * share, so this works on either one -- and when SceneID is the thing
- * that's unreachable, which is when someone most needs to get in.
- */
 function PasswordForm({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");

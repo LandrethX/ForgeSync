@@ -31,7 +31,7 @@ function wrap(role: Role, children: ReactNode) {
     username: "bob",
     name: "Bob",
     role,
-    source: "sceneid",
+    source: "account",
     expires_at: "2026-09-18T18:00:00Z",
   };
   return (

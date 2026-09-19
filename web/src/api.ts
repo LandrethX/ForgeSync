@@ -403,12 +403,13 @@ export interface Session {
   name: string;
   email?: string;
   role: Role;
-  source: "sceneid" | "account" | "token" | "web-token";
+  /** "account" is one of ForgeSync's own; the others are the admin token. */
+  source: "account" | "token" | "web-token";
   expires_at: string;
 }
 
 export interface AuthConfig {
-  sceneid: boolean;
+  /** Whether the admin token can be used to sign in here (break-glass). */
   token_sign_in: boolean;
 }
 
@@ -420,11 +421,6 @@ const ROLE_RANK: Record<Role, number> = {
 
 export function hasRole(session: Session | undefined, min: Role): boolean {
   return session !== undefined && ROLE_RANK[session.role] >= ROLE_RANK[min];
-}
-
-/** Where the SceneID sign-in starts; the browser navigates there. */
-export function sceneIdLoginURL(returnTo: string): string {
-  return `/api/v1/auth/login?return_to=${encodeURIComponent(returnTo)}`;
 }
 
 export class ApiError extends Error {

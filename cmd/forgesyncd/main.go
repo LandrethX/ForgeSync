@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"scenegit.org/forgesync/internal/api"
-	"scenegit.org/forgesync/internal/auth"
 	"scenegit.org/forgesync/internal/buildinfo"
 	"scenegit.org/forgesync/internal/config"
 	"scenegit.org/forgesync/internal/conflicts"
@@ -282,26 +281,9 @@ func run(configPath string) error {
 		close(monitorDone)
 	}()
 
-	var oidcFlow api.OIDCFlow
-	if cfg.OIDC.Enabled() {
-		oidcFlow = auth.NewOIDC(auth.OIDCConfig{
-			Issuer:                cfg.OIDC.Issuer,
-			ClientID:              cfg.OIDC.ClientID,
-			ClientSecret:          cfg.OIDC.ClientSecret,
-			RedirectURL:           cfg.OIDC.RedirectURL,
-			PostLogoutRedirectURL: cfg.OIDC.PostLogoutRedirectURL,
-			Scopes:                cfg.OIDC.Scopes,
-			Roles: auth.RoleMapping{
-				Claim:         cfg.OIDC.RolesClaim,
-				Administrator: cfg.OIDC.Roles.Administrator,
-				Operator:      cfg.OIDC.Roles.Operator,
-				Viewer:        cfg.OIDC.Roles.Viewer,
-			},
-		})
-		log.Info("SceneID sign-in enabled", "issuer", cfg.OIDC.Issuer, "token_sign_in", cfg.OIDC.AllowTokenSignIn)
-	}
-	if cfg.HTTP.AdminToken == "" && oidcFlow == nil {
-		log.Warn("admin API disabled: set http.admin_token_file or oidc")
+	if cfg.HTTP.AdminToken == "" {
+		log.Warn("no admin token: the CLI and the break-glass sign-in are disabled; " +
+			"set http.admin_token_file")
 	}
 	// Only a non-nil engine: a nil *Engine in the interface would look enabled.
 	var replicator api.Replicator
@@ -312,8 +294,6 @@ func run(configPath string) error {
 		Addr: cfg.HTTP.Listen,
 		Handler: (&api.Server{
 			AdminToken:          cfg.HTTP.AdminToken,
-			OIDC:                oidcFlow,
-			AllowTokenSignIn:    cfg.OIDC.AllowTokenSignIn,
 			Nodes:               infos,
 			Health:              monitor,
 			Leader:              elector,

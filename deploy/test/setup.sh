@@ -157,18 +157,13 @@ if [ -n "${PUBLIC_HOST:-}" ]; then
     curl -fsS -X PUT -H "Authorization: Bearer $kc_token" -H "Content-Type: application/json" \
       -d "$2" "$(sceneid_url)/admin/realms/sceneid/clients/$1" >/dev/null
   }
-  admin_uris="[\"$(controller_url)/api/v1/auth/callback\",\"$(standby_url)/api/v1/auth/callback\",\"http://127.0.0.1:8090/api/v1/auth/callback\",\"http://127.0.0.1:8091/api/v1/auth/callback\",\"http://127.0.0.1:5173/api/v1/auth/callback\"]"
-  kc_redirects "$(kc_client forgesync-admin)" "{\"redirectUris\":$admin_uris}"
   node_uris=""
   for n in $NODES; do
     node_uris="$node_uris\"$(forgejo_url "$n")/user/oauth2/SceneID/callback\","
   done
   kc_redirects "$(kc_client forgejo)" "{\"redirectUris\":[${node_uris%,}]}"
-  ok "SceneID accepts the sign-in callbacks for $PUBLIC_HOST"
+  ok "SceneID accepts the nodes' sign-in callbacks for $PUBLIC_HOST"
 fi
-
-printf '%s' "$SCENEID_FORGESYNC_ADMIN_CLIENT_SECRET" > .tokens/sceneid-admin-client.secret
-chmod 600 .tokens/sceneid-admin-client.secret
 
 if [ ! -s .tokens/admin.token ]; then
   openssl rand -hex 32 > .tokens/admin.token
@@ -222,6 +217,19 @@ if [ -n "$STANDBY" ]; then
   ok "standby controller running on :8091 (forgesync-b)"
 fi
 
+# ForgeSync's own accounts live in its database, which both controllers
+# share. The first one is made with the admin token, there being nobody to
+# make it otherwise; after that they're managed in the UI.
+admin_token=$(cat .tokens/admin.token)
+if curl -fsS -H "Authorization: Bearer $admin_token" "$(controller_url)/api/v1/accounts" | grep -q '"total":0'; then
+  curl -fsS -X POST -H "Authorization: Bearer $admin_token" -H "Content-Type: application/json" \
+    -d "{\"username\":\"$FORGESYNC_ADMIN_USER\",\"password\":\"$FORGESYNC_ADMIN_PASSWORD\",\"role\":\"administrator\"}" \
+    "$(controller_url)/api/v1/accounts" >/dev/null
+  ok "ForgeSync account '$FORGESYNC_ADMIN_USER' created (password in .env)"
+else
+  ok "ForgeSync accounts exist"
+fi
+
 echo "==> Smoke tests"
 disco="$(sceneid_url)/realms/sceneid/.well-known/openid-configuration"
 if curl -fsS "$disco" | grep -q "\"issuer\":\"$(sceneid_url)/realms/sceneid\""; then
@@ -266,10 +274,10 @@ cat <<EOF
 Ready.
   SceneID admin console : $(sceneid_url)/admin   ($SCENEID_ADMIN_USER / $SCENEID_ADMIN_PASSWORD)
 $(for n in $NODES; do echo "  Forgejo $(site_of "$n")            : $(forgejo_url "$n")   (ssh port $(ssh_of "$n"))"; done)
-  SceneID test users    : alice / alice-pw (ForgeSync administrator), bob / bob-pw (operator),
-                          carol / carol-pw (viewer), erin / erin-pw (no ForgeSync role)
+  SceneID test users    : alice / alice-pw, bob / bob-pw, carol / carol-pw, erin / erin-pw
+                          (they sign in to the Forgejo nodes, not to ForgeSync)
   Local admins per node : siteadmin / $FORGEJO_SITEADMIN_PASSWORD, forgesync (API tokens in .tokens/)
-  ForgeSync admin UI    : $(controller_url)   (sign in with SceneID, or "Use the admin token instead")
+  ForgeSync admin UI    : $(controller_url)   ($FORGESYNC_ADMIN_USER / $FORGESYNC_ADMIN_PASSWORD)
   Admin token           : .tokens/admin.token
   ForgeSync database    : localhost:5432 (forgesync / $FORGESYNC_DB_PASSWORD)
   Controller logs       : docker compose --profile controller logs -f forgesync

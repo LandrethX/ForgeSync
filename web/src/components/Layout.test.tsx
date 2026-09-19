@@ -13,7 +13,7 @@ const session: Session = {
   username: "alice",
   name: "Alice Andersson",
   role: "administrator",
-  source: "sceneid",
+  source: "account",
   expires_at: new Date(Date.now() + 3600_000).toISOString(),
 };
 

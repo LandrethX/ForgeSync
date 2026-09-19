@@ -488,7 +488,7 @@ func TestSessionSignInAndOut(t *testing.T) {
 		t.Errorf("GET /session = %d %s", rec.Code, rec.Body)
 	}
 
-	if rec := f.do(req{method: "DELETE", path: "/api/v1/session", cookie: c}); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"logout_url":""`) {
+	if rec := f.do(req{method: "DELETE", path: "/api/v1/session", cookie: c}); rec.Code != 200 {
 		t.Errorf("sign out = %d", rec.Code)
 	}
 	if rec := f.do(req{path: "/api/v1/nodes", cookie: c}); rec.Code != 401 {

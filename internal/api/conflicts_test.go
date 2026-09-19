@@ -69,12 +69,12 @@ func TestAcknowledgeConflict(t *testing.T) {
 		t.Errorf("1001-character note = %d, want 400", rec.Code)
 	}
 	rec := f.do(req{method: "POST", path: path, body: `{"note":"  Fixing it in Git with Bob  "}`, cookie: op, csrf: true})
-	if rec.Code != 200 || f.db.conflicts[0].AcknowledgedBy != "sceneid:u-operator" || f.db.conflicts[0].Note != "Fixing it in Git with Bob" {
+	if rec.Code != 200 || f.db.conflicts[0].AcknowledgedBy != "account:u-operator" || f.db.conflicts[0].Note != "Fixing it in Git with Bob" {
 		t.Fatalf("operator = %d %s / %+v", rec.Code, rec.Body, f.db.conflicts[0])
 	}
 	var found bool
 	for _, e := range f.db.audit {
-		if e.Action == "conflict.acknowledged" && e.Target == "alice/demo" && e.Actor == "sceneid:u-operator" {
+		if e.Action == "conflict.acknowledged" && e.Target == "alice/demo" && e.Actor == "account:u-operator" {
 			found = true
 		}
 	}

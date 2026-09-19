@@ -26,19 +26,6 @@ http:
   admin_token_file: /etc/forgesync/tokens/admin.token
   # Plain http in the test environment; production keeps the default (true).
   secure_cookies: false
-oidc:
-  issuer: http://sceneid.test:8080/realms/sceneid
-  client_id: forgesync-admin
-  client_secret_file: /etc/forgesync/tokens/sceneid-admin-client.secret
-  redirect_url: http://forgesync.test:8090/api/v1/auth/callback
-  post_logout_redirect_url: http://forgesync.test:8090/
-  roles_claim: roles
-  roles:
-    administrator: [forgesync-admin]
-    operator: [forgesync-operator]
-    viewer: [forgesync-viewer]
-  # Keep admin-token sign-in in the web UI as a break-glass option.
-  allow_token_sign_in: true
 database:
   # Test-only credentials (see .env).
   url: postgres://forgesync:forgesync-test-pw@forgesync-db:5432/forgesync?sslmode=disable

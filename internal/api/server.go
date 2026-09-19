@@ -94,15 +94,15 @@ type Node struct {
 }
 
 type Server struct {
-	AdminToken string // bearer token for the CLI; also web sign-in when OIDC is off
-	OIDC       OIDCFlow
-	// AllowTokenSignIn keeps admin-token sign-in in the web UI while OIDC is on.
-	AllowTokenSignIn bool
-	Nodes            []NodeInfo
-	Health           HealthSource
-	Leader           Leadership
-	Inventory        Inventory
-	Replication      Replicator // nil when replication is off
+	// AdminToken is the bearer token for the CLI, and the break-glass
+	// sign-in for the web UI: it's how the first ForgeSync account gets
+	// made. People sign in with ForgeSync accounts otherwise.
+	AdminToken  string
+	Nodes       []NodeInfo
+	Health      HealthSource
+	Leader      Leadership
+	Inventory   Inventory
+	Replication Replicator // nil when replication is off
 	// ControllerName is this controller's own name, so the dashboard can
 	// mark it among the others. ControllerBeat is how often each writes
 	// its heartbeat, which says when one has been quiet too long.
@@ -152,8 +152,6 @@ func (s *Server) Handler() http.Handler {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(noStore)
 		r.Get("/auth/config", s.authConfig)
-		r.Get("/auth/login", s.oidcLogin)
-		r.Get("/auth/callback", s.oidcCallback)
 		r.Post("/session", s.createSession)
 		if s.Webhooks != nil {
 			// Signed by the node, not signed in: no session or token.

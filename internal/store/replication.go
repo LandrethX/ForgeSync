@@ -101,6 +101,47 @@ func (s *Store) ReplicaSyncs(ctx context.Context, repositoryID string) ([]Replic
 	})
 }
 
+// SourcePair is what has been copied from one node to another: the
+// repositories whose primary is From and whose copy lives on To. It's the
+// answer to "what has this node sent, and when", which the per-repository
+// view can't give without reading every repository.
+type SourcePair struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	// Repositories is how many copies this pair covers, and InSync how
+	// many of them the last run left in step.
+	Repositories int `json:"repositories"`
+	InSync       int `json:"in_sync"`
+	// LastSuccessAt is the most recent copy that went through, and
+	// LastAttemptAt the most recent try, successful or not.
+	LastSuccessAt *time.Time `json:"last_success_at,omitempty"`
+	LastAttemptAt *time.Time `json:"last_attempt_at,omitempty"`
+}
+
+// SourcePairs summarises replication by where it came from and where it
+// went. A repository's own node is left out: a primary doesn't copy to
+// itself. Repositories deleted on their primary are left out too.
+func (s *Store) SourcePairs(ctx context.Context) ([]SourcePair, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT r.primary_node, rs.node, count(*),
+		       count(*) FILTER (WHERE rs.state = 'synced'),
+		       max(rs.last_success_at), max(rs.last_attempt_at)
+		FROM replica_sync rs
+		JOIN repositories r ON r.id = rs.repository_id
+		WHERE r.primary_node IS NOT NULL AND r.primary_node <> rs.node AND r.deleted_at IS NULL
+		GROUP BY r.primary_node, rs.node
+		ORDER BY r.primary_node, rs.node`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (SourcePair, error) {
+		var p SourcePair
+		err := r.Scan(&p.From, &p.To, &p.Repositories, &p.InSync, &p.LastSuccessAt, &p.LastAttemptAt)
+		return p, err
+	})
+}
+
 // ReplicationCounts counts replicas by state, for repositories that still
 // have a primary.
 func (s *Store) ReplicationCounts(ctx context.Context) (map[string]int, error) {

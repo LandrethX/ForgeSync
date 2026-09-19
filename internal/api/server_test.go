@@ -38,6 +38,13 @@ type fakeDB struct {
 	archives  []store.Archive
 	issues    []store.IssueRecord
 	comments  []store.CommentRecord
+	pairs     []store.SourcePair
+}
+
+func (f *fakeDB) SourcePairs(context.Context) ([]store.SourcePair, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pairs, nil
 }
 
 func (f *fakeDB) Repositories(context.Context) ([]store.RepositoryRecord, error) {

@@ -1074,3 +1074,84 @@ func TestLeadership(t *testing.T) {
 		t.Errorf("someone else's release took the lease away: %+v", l)
 	}
 }
+
+// SourcePairs answers "what has this node sent, and when", which the
+// nodes page asks. It counts from where a repository's primary is, so a
+// node's own copy never appears.
+func TestSourcePairs(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncNodes(ctx, []NodeRecord{{Name: "se", URL: "http://se"},
+		{Name: "dk", URL: "http://dk"}, {Name: "de", URL: "http://de"}}); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
+	if err := s.RecordNodeScan(ctx, "se", t0, t0, []ScannedRepo{{FullName: "alice/one"}, {FullName: "bob/two"}}); err != nil {
+		t.Fatal(err)
+	}
+	recs, _ := s.Repositories(ctx)
+	byName := map[string]string{}
+	for _, r := range recs {
+		byName[r.FullName] = r.ID
+	}
+	// alice/one is se's, bob/two is dk's.
+	if _, err := s.SetPrimary(ctx, byName["alice/one"], "se"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetPrimary(ctx, byName["bob/two"], "dk"); err != nil {
+		t.Fatal(err)
+	}
+	save := func(id, node, state string, at time.Time) {
+		t.Helper()
+		if err := s.SaveReplicaSync(ctx, ReplicaSync{RepositoryID: id, Node: node, State: state, LastAttemptAt: at}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save(byName["alice/one"], "dk", "synced", t0)
+	save(byName["alice/one"], "de", "conflict", t0.Add(time.Minute))
+	save(byName["alice/one"], "se", "synced", t0) // the primary's own copy: not a pair
+	save(byName["bob/two"], "se", "synced", t0.Add(2*time.Minute))
+
+	pairs, err := s.SourcePairs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]SourcePair{}
+	for _, p := range pairs {
+		got[p.From+"->"+p.To] = p
+	}
+	if len(pairs) != 3 {
+		t.Fatalf("pairs = %+v", pairs)
+	}
+	if p := got["se->dk"]; p.Repositories != 1 || p.InSync != 1 || p.LastSuccessAt == nil || !p.LastSuccessAt.Equal(t0) {
+		t.Errorf("se->dk = %+v", p)
+	}
+	// A copy that hasn't gone through is counted, but not as in step, and
+	// it has an attempt without a success.
+	if p := got["se->de"]; p.Repositories != 1 || p.InSync != 0 || p.LastSuccessAt != nil ||
+		p.LastAttemptAt == nil || !p.LastAttemptAt.Equal(t0.Add(time.Minute)) {
+		t.Errorf("se->de = %+v", p)
+	}
+	if p := got["dk->se"]; p.Repositories != 1 || p.InSync != 1 {
+		t.Errorf("dk->se = %+v", p)
+	}
+	if _, ok := got["se->se"]; ok {
+		t.Error("a node counted as sending to itself")
+	}
+
+	// A repository deleted on its primary is left out: nothing is copied
+	// from it any more.
+	if err := s.MarkRepositoryDeleted(ctx, byName["alice/one"], t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	pairs, err = s.SourcePairs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs) != 1 || pairs[0].From != "dk" {
+		t.Fatalf("after the deletion: %+v", pairs)
+	}
+}

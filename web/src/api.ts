@@ -207,6 +207,21 @@ export interface InventoryStatus {
   nodes: NodeScan[];
 }
 
+/** What one node has sent to another: the repositories it is the primary of. */
+export interface SourcePair {
+  from: string;
+  to: string;
+  repositories: number;
+  in_sync: number;
+  last_success_at?: string;
+  last_attempt_at?: string;
+}
+
+export interface ReplicationSources {
+  enabled: boolean;
+  pairs: SourcePair[];
+}
+
 export type ConflictKind =
   | "git_diverged"
   | "default_branch_mismatch"
@@ -474,6 +489,8 @@ export const api = {
     ),
   inventory: () => request<InventoryStatus>("GET", "/inventory"),
   webhooks: () => request<WebhookStatus>("GET", "/webhooks"),
+  replicationSources: () =>
+    request<ReplicationSources>("GET", "/replication/sources"),
   users: (q?: string) =>
     request<{ total: number; items: User[] }>(
       "GET",

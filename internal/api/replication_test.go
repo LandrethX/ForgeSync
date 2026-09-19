@@ -89,3 +89,36 @@ func TestRepositoryReplicationState(t *testing.T) {
 		t.Errorf("overview = %+v", o.Replication)
 	}
 }
+
+// The nodes page asks what each node has sent, so a person can see where
+// replication is coming from without opening every repository.
+func TestReplicationSources(t *testing.T) {
+	f, admin := sessionAs(t, auth.Viewer)
+	f.srv.Replication = &fakeReplicator{}
+	at := time.Now().Add(-time.Minute)
+	f.db.pairs = []store.SourcePair{
+		{From: "se", To: "dk", Repositories: 4, InSync: 3, LastSuccessAt: &at, LastAttemptAt: &at},
+	}
+	rec := f.do(req{path: "/api/v1/replication/sources", cookie: admin})
+	if rec.Code != 200 {
+		t.Fatalf("GET = %d %s", rec.Code, rec.Body)
+	}
+	var out struct {
+		Enabled bool               `json:"enabled"`
+		Pairs   []store.SourcePair `json:"pairs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.Enabled || len(out.Pairs) != 1 || out.Pairs[0].From != "se" || out.Pairs[0].InSync != 3 {
+		t.Fatalf("answer = %+v", out)
+	}
+
+	// With replication off, the page is told so rather than shown nothing.
+	f.srv.Replication = nil
+	rec = f.do(req{path: "/api/v1/replication/sources", cookie: admin})
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"enabled":false`) ||
+		!strings.Contains(rec.Body.String(), `"pairs":[]`) {
+		t.Fatalf("with replication off = %d %s", rec.Code, rec.Body)
+	}
+}

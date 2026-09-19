@@ -50,6 +50,7 @@ type DB interface {
 	OpenConflicts(ctx context.Context) (int, error)
 	ReplicaSyncs(ctx context.Context, repositoryID string) ([]store.ReplicaSync, error)
 	ReplicationCounts(ctx context.Context) (map[string]int, error)
+	SourcePairs(ctx context.Context) ([]store.SourcePair, error)
 	History(ctx context.Context, f store.EventFilter) ([]store.Event, string, error)
 	HistoryEach(ctx context.Context, f store.EventFilter, max int, fn func(store.Event) error) error
 	HistoryActors(ctx context.Context) ([]string, error)
@@ -162,6 +163,7 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/repositories/{id}", s.getRepository)
 				r.Get("/repositories/{id}/issues", s.repositoryIssues)
 				r.Get("/inventory", s.inventoryStatus)
+				r.Get("/replication/sources", s.replicationSources)
 				r.Get("/users", s.listUsers)
 				r.Get("/webhooks", s.webhookStatus)
 				r.Get("/users/{id}", s.getUser)

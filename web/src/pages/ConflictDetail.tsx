@@ -2,7 +2,13 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, hasRole, type Conflict } from "../api";
 import { ErrorNote, PageHeader } from "../components/Layout";
 import { StatusIcon } from "../components/StatusBadge";
-import { conflictExplanation, conflictFix, conflictSides, conflictTitle, relationText } from "../conflictText";
+import {
+  conflictExplanation,
+  conflictFix,
+  conflictSides,
+  conflictTitle,
+  relationText,
+} from "../conflictText";
 import { formatDateTime } from "../format";
 import { useLoad, useNodes, useSession } from "../hooks";
 import { Link } from "../router";
@@ -44,39 +50,57 @@ export function ConflictDetail({ id }: { id: number }) {
 
       <section className="panel" aria-labelledby="what-heading">
         <h2 id="what-heading">What's different</h2>
-        <div className="table-wrap flat">
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">Node</th>
-                <th scope="col">
-                  {c.kind === "default_branch_mismatch" ? "Default branch" : c.kind === "issue_conflict" ? "Value" : "Commit"}
-                </th>
-                <th scope="col" />
-              </tr>
-            </thead>
-            <tbody>
-              {conflictSides(c).map(([node, v]) => {
-                const url = nodeURL(node);
-                return (
-                  <tr key={node}>
-                    <th scope="row">{node}</th>
-                    <td className="mono">
-                      {c.kind !== "default_branch_mismatch" && c.kind !== "issue_conflict" && url && v ? (
-                        <a href={`${url}/${c.full_name}/commit/${v}`} target="_blank" rel="noreferrer noopener">
-                          {v.slice(0, 12)}
-                        </a>
-                      ) : (
-                        v || <span className="muted">not there</span>
-                      )}
-                    </td>
-                    <td>{node === primary && <span className="tag">Primary</span>}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        {/* A deletion conflict has no per-node value: the sentence says it all. */}
+        {conflictSides(c).length > 0 && (
+          <div className="table-wrap flat">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Node</th>
+                  <th scope="col">
+                    {c.kind === "default_branch_mismatch"
+                      ? "Default branch"
+                      : c.kind === "issue_conflict"
+                        ? "Value"
+                        : "Commit"}
+                  </th>
+                  <th scope="col" />
+                </tr>
+              </thead>
+              <tbody>
+                {conflictSides(c).map(([node, v]) => {
+                  const url = nodeURL(node);
+                  return (
+                    <tr key={node}>
+                      <th scope="row">{node}</th>
+                      <td className="mono">
+                        {c.kind !== "default_branch_mismatch" &&
+                        c.kind !== "issue_conflict" &&
+                        url &&
+                        v ? (
+                          <a
+                            href={`${url}/${c.full_name}/commit/${v}`}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                          >
+                            {v.slice(0, 12)}
+                          </a>
+                        ) : (
+                          v || <span className="muted">not there</span>
+                        )}
+                      </td>
+                      <td>
+                        {node === primary && (
+                          <span className="tag">Primary</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
         {conflictExplanation(c) && <p>{conflictExplanation(c)}</p>}
         {c.details.relations && c.details.relations.length > 0 && (
           <ul className="relations">
@@ -87,41 +111,50 @@ export function ConflictDetail({ id }: { id: number }) {
         )}
         {!primary && (
           <p className="muted">
-            No primary is set for this repository yet. It's set automatically to the node where the repository was
-            created first, after the next complete scan; an administrator can{" "}
+            No primary is set for this repository yet. It's set automatically to
+            the node where the repository was created first, after the next
+            complete scan; an administrator can{" "}
             <Link to={`/repositories/${c.repository_id}`}>choose another</Link>.
           </p>
         )}
       </section>
 
-      {c.state === "open" && c.details.handoffs && c.details.handoffs.length > 0 && (
-        <section className="panel" aria-labelledby="owner-heading">
-          <h2 id="owner-heading">Waiting for the owner</h2>
-          <p>
-            ForgeSync handed this to the repository's owner as a pull request on {primary}. Merging it keeps the other
-            sites' commits; closing it without merging keeps {primary}'s version, and ForgeSync then resets those sites
-            (their commits stay on the pull request's branch for a while as a backup).
-          </p>
-          <ul>
-            {c.details.handoffs.map((h) => (
-              <li key={h.pr_number}>
-                <a href={h.pr_url} target="_blank" rel="noreferrer noopener">
-                  Pull request #{h.pr_number}
-                </a>{" "}
-                for {h.nodes.join(", ")} (branch <span className="mono">{h.branch}</span>)
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      {c.state === "open" &&
+        c.details.handoffs &&
+        c.details.handoffs.length > 0 && (
+          <section className="panel" aria-labelledby="owner-heading">
+            <h2 id="owner-heading">Waiting for the owner</h2>
+            <p>
+              ForgeSync handed this to the repository's owner as a pull request
+              on {primary}. Merging it keeps the other sites' commits; closing
+              it without merging keeps {primary}'s version, and ForgeSync then
+              resets those sites (their commits stay on the pull request's
+              branch for a while as a backup).
+            </p>
+            <ul>
+              {c.details.handoffs.map((h) => (
+                <li key={h.pr_number}>
+                  <a href={h.pr_url} target="_blank" rel="noreferrer noopener">
+                    Pull request #{h.pr_number}
+                  </a>{" "}
+                  for {h.nodes.join(", ")} (branch{" "}
+                  <span className="mono">{h.branch}</span>)
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
-      {c.state === "open" && !(c.details.handoffs && c.details.handoffs.length > 0) && (
-        <section className="panel" aria-labelledby="fix-heading">
-          <h2 id="fix-heading">How to fix it</h2>
-          <p>{conflictFix(c)}</p>
-          <p className="muted">The next check clears this conflict once the nodes agree.</p>
-        </section>
-      )}
+      {c.state === "open" &&
+        !(c.details.handoffs && c.details.handoffs.length > 0) && (
+          <section className="panel" aria-labelledby="fix-heading">
+            <h2 id="fix-heading">How to fix it</h2>
+            <p>{conflictFix(c)}</p>
+            <p className="muted">
+              The next check clears this conflict once the nodes agree.
+            </p>
+          </section>
+        )}
 
       <Acknowledgement conflict={c} onSaved={conflict.reload} />
 
@@ -152,7 +185,13 @@ export function ConflictDetail({ id }: { id: number }) {
   );
 }
 
-function Acknowledgement({ conflict, onSaved }: { conflict: Conflict; onSaved: () => void }) {
+function Acknowledgement({
+  conflict,
+  onSaved,
+}: {
+  conflict: Conflict;
+  onSaved: () => void;
+}) {
   const session = useSession();
   const [note, setNote] = useState(conflict.note ?? "");
   const [busy, setBusy] = useState(false);
@@ -171,7 +210,10 @@ function Acknowledgement({ conflict, onSaved }: { conflict: Conflict; onSaved: (
       setMessage({ ok: true, text: "Saved." });
       onSaved();
     } catch (err) {
-      setMessage({ ok: false, text: err instanceof ApiError ? err.message : "Saving failed." });
+      setMessage({
+        ok: false,
+        text: err instanceof ApiError ? err.message : "Saving failed.",
+      });
     } finally {
       setBusy(false);
     }
@@ -205,15 +247,25 @@ function Acknowledgement({ conflict, onSaved }: { conflict: Conflict; onSaved: (
           />
           <div className="toolbar">
             <button type="submit" className="button-primary" disabled={busy}>
-              {busy ? "Saving…" : conflict.acknowledged_by ? "Update acknowledgement" : "Acknowledge"}
+              {busy
+                ? "Saving…"
+                : conflict.acknowledged_by
+                  ? "Update acknowledgement"
+                  : "Acknowledge"}
             </button>
             {message && (
-              <span role="status" className={message.ok ? "muted" : "error-inline"}>
+              <span
+                role="status"
+                className={message.ok ? "muted" : "error-inline"}
+              >
                 {message.text}
               </span>
             )}
           </div>
-          <p className="muted small">This is only a record for the team; it doesn't change anything on the nodes.</p>
+          <p className="muted small">
+            This is only a record for the team; it doesn't change anything on
+            the nodes.
+          </p>
         </form>
       )}
     </section>

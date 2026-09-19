@@ -216,7 +216,9 @@ export type ConflictKind =
   | "git_replica_extra_ref"
   | "issue_conflict"
   | "org_metadata"
-  | "repo_metadata";
+  | "repo_metadata"
+  | "actions_variable_conflict"
+  | "actions_secret_missing";
 
 export interface Handoff {
   pr_number: number;
@@ -267,6 +269,11 @@ export interface Conflict {
     organization?: string;
     /** Set when the difference is in the repository's wiki, not its own refs. */
     wiki?: boolean;
+    /** actions_variable_conflict: the variable whose value differs; its values are in `values`. */
+    variable?: string;
+    /** actions_secret_missing: the secret, and the nodes that haven't got it. */
+    secret?: string;
+    missing?: string[];
   };
   detected_at: string;
   last_seen_at: string;

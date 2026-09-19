@@ -45,9 +45,12 @@ const MetadataConflictKind = "repo_metadata"
 // A toggle is carried only when ForgeSync carries what it promises.
 // has_issues and has_pull_requests are, and so is has_wiki once
 // replication.wiki is on -- the wiki's own pages travel then, so saying
-// the tab is there is true. Projects are boards and cards and actions are
-// workflow runs, neither of which ForgeSync copies, so those two toggles
-// stay where each node has them.
+// the tab is there is true. Projects are boards and cards, which ForgeSync
+// can't copy at all -- Forgejo v16 has no API for them. has_actions stays
+// where each node has it even with replication.actions on: the workflows
+// and their variables travel, but whether a node should also *run* them is
+// a decision about that node, not a difference to settle -- five nodes
+// running the same pipeline on every push is rarely what anyone wants.
 var metaFields = []string{
 	"description", "website", "has_issues", "has_pull_requests",
 	"allow_merge_commits", "allow_rebase", "allow_rebase_explicit",

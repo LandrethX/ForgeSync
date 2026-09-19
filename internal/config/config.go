@@ -161,6 +161,12 @@ type Replication struct {
 	// the API so Forgejo makes the repository, which is then replaced by
 	// the primary's history. Off by default.
 	Wiki bool `yaml:"wiki"`
+	// Actions keeps a repository's Actions variables the same on every
+	// node, and reports a node that hasn't got a secret the others have.
+	// A secret's value is never given back by Forgejo, so nothing can copy
+	// one; the workflows themselves are files, so git already carries them.
+	// Off by default.
+	Actions bool `yaml:"actions"`
 	// ArchiveOrg is the private organization ForgeSync moves the copies of a
 	// repository deleted on its primary into. Default "forgesync-archive".
 	ArchiveOrg string `yaml:"archive_org"`

@@ -79,6 +79,8 @@ replication:
   releases: true
   # Each repository's wiki, which is a second git repository.
   wiki: true
+  # Actions variables, and a report of any node missing a secret.
+  actions: true
   # ForgeSync's guard on the replicas: people work on the primary, and a
   # guard someone removes is put back (Phase 0 p02).
   protect_replicas: true

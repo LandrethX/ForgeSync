@@ -10,6 +10,8 @@ export const KIND_LABEL: Record<Conflict["kind"], string> = {
   issue_conflict: "Issue changed differently",
   org_metadata: "Organization changed differently",
   repo_metadata: "Setting changed differently",
+  actions_variable_conflict: "Variable changed differently",
+  actions_secret_missing: "Secret missing on a node",
 };
 
 /**
@@ -33,6 +35,12 @@ function itemName(c: Conflict, kind: string): string {
   return c.details.item ? `the ${kind} ${c.details.item}` : `the ${kind}`;
 }
 
+/** "dk", "dk and de", "dk, de and uk". */
+function nodeList(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 /** A wiki's branch is written wiki:refs/heads/main, so it can't be taken
  *  for the repository's own. */
 function inWiki(c: Conflict): boolean {
@@ -51,6 +59,16 @@ function refName(c: Conflict): string {
 export function conflictTitle(c: Conflict): string {
   const label = KIND_LABEL[c.kind] ?? c.kind;
   if (c.kind === "default_branch_mismatch") return label;
+  if (c.kind === "actions_variable_conflict") {
+    return `${label}: ${c.details.variable ?? c.ref}`;
+  }
+  if (c.kind === "actions_secret_missing") {
+    const where = c.details.missing?.join(", ");
+    const secret = c.details.secret ?? c.ref;
+    return where
+      ? `Secret ${secret} is missing on ${where}`
+      : `${label}: ${secret}`;
+  }
   if (c.kind === "repo_metadata") {
     return `${label}: ${c.details.field ?? c.ref}`;
   }
@@ -89,7 +107,7 @@ export function conflictSides(c: Conflict): [string, string][] {
   const m =
     (c.kind === "default_branch_mismatch"
       ? c.details.branches
-      : c.kind === "issue_conflict"
+      : c.kind === "issue_conflict" || c.kind === "actions_variable_conflict"
         ? c.details.values
         : c.details.heads) ?? {};
   return Object.entries(m).sort(([a], [b]) => a.localeCompare(b));
@@ -107,6 +125,14 @@ export function conflictExplanation(c: Conflict): string | undefined {
       return "This ref was changed on a replica after replication wrote it, or a tag there points somewhere else.";
     case "git_replica_extra_ref":
       return `This ref exists only on a replica; it wasn't created on ${primary}.`;
+    case "actions_variable_conflict":
+      return `The Actions variable ${c.details.variable ?? c.ref} was set to different values on different nodes since they last agreed. ForgeSync doesn't pick one, so none of them was changed.`;
+    case "actions_secret_missing": {
+      const missing = c.details.missing ?? [];
+      const who = missing.length > 0 ? nodeList(missing) : "A node";
+      const has = missing.length > 1 ? "haven't" : "hasn't";
+      return `${who} ${has} got the Actions secret ${c.details.secret ?? c.ref}, which the other nodes have. Forgejo never gives a secret's value back, so ForgeSync can't copy one; a workflow that needs it would fail there.`;
+    }
     case "repo_metadata":
       return `The repository's ${c.details.field ?? "setting"} was set differently on different nodes since they last agreed. ForgeSync doesn't pick one, so none of them was changed.`;
     case "org_metadata":
@@ -184,6 +210,10 @@ export function conflictFix(c: Conflict): string {
       }
       return `Edit the ${c.details.field ?? "field"} on one of the nodes so it matches another; ForgeSync then copies that value everywhere.`;
     }
+    case "actions_variable_conflict":
+      return `Set the variable ${c.details.variable ?? c.ref} on one of the nodes so it matches another; ForgeSync then copies that value everywhere.`;
+    case "actions_secret_missing":
+      return `Set the secret ${c.details.secret ?? c.ref} in the repository's Actions settings on ${nodeList(c.details.missing ?? []) || "the node that hasn't got it"}, with the same value as on the other nodes. Only someone who knows the value can do this.`;
     case "repo_metadata":
       return `Set the ${c.details.field ?? "setting"} on one of the nodes so it matches another; ForgeSync then copies that everywhere. The default branch isn't settled here -- replication follows the primary's -- and a repository private on any node is made private on all of them.`;
     case "org_metadata":

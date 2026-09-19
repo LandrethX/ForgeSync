@@ -63,6 +63,13 @@ func (m *memStore) SaveWikiRefs(_ context.Context, _, node string, refs map[stri
 	return nil
 }
 
+func (m *memStore) SetRepositoryActionVariables(_ context.Context, _, value string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rec.BaseActionVariables = value
+	return nil
+}
+
 func (m *memStore) SetRepositoryReleases(_ context.Context, _, releases, assets string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

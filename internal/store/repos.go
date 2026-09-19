@@ -194,9 +194,12 @@ type RepositoryRecord struct {
 	BaseTopics   string            `json:"-"`
 	// BaseReleases is the "<tag>:<digest>" members of its releases, and
 	// BaseReleaseAssets the "<tag>|<size>|<name>" members of their files.
-	BaseReleases      string    `json:"-"`
-	BaseReleaseAssets string    `json:"-"`
-	Replicas          []Replica `json:"-"`
+	BaseReleases      string `json:"-"`
+	BaseReleaseAssets string `json:"-"`
+	// BaseActionVariables is the "<name>:<digest>" members of its Actions
+	// variables. Secrets aren't here: their values can't be read.
+	BaseActionVariables string    `json:"-"`
+	Replicas            []Replica `json:"-"`
 }
 
 // SetRepositoryCollaborators records what the nodes now agree the
@@ -210,6 +213,13 @@ func (s *Store) SetRepositoryCollaborators(ctx context.Context, id, value string
 // now agree on.
 func (s *Store) SetRepositoryProtection(ctx context.Context, id, value string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE repositories SET base_protection = $2 WHERE id = $1::uuid`, id, value)
+	return err
+}
+
+// SetRepositoryActionVariables records the variables the nodes now agree on.
+func (s *Store) SetRepositoryActionVariables(ctx context.Context, id, value string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE repositories SET base_action_variables = $2 WHERE id = $1::uuid`, id, value)
 	return err
 }
 
@@ -257,7 +267,7 @@ func (s *Store) repositories(ctx context.Context, id string) ([]RepositoryRecord
 	rows, err := s.pool.Query(ctx, `
 		SELECT r.id::text, r.full_name, coalesce(r.primary_node, ''), r.primary_source, r.first_seen_at, r.deleted_at,
 			r.base_collaborators, r.base_protection, r.base_metadata, r.base_topics,
-			r.base_releases, r.base_release_assets, rr.node, rr.present, rr.forgejo_id, rr.private, rr.fork, rr.mirror, rr.archived, rr.empty,
+			r.base_releases, r.base_release_assets, r.base_action_variables, rr.node, rr.present, rr.forgejo_id, rr.private, rr.fork, rr.mirror, rr.archived, rr.empty,
 			rr.default_branch, rr.head_sha, rr.head_error, rr.forgejo_updated_at, rr.forgejo_created_at,
 			rr.last_seen_at, rr.checked_at, rr.full_name
 		FROM repositories r
@@ -280,7 +290,7 @@ func (s *Store) repositories(ctx context.Context, id string) ([]RepositoryRecord
 		var fullName *string
 		if err := rows.Scan(&rec.ID, &rec.FullName, &rec.PrimaryNode, &rec.PrimarySource, &rec.FirstSeenAt, &rec.DeletedAt,
 			&rec.BaseCollaborators, &rec.BaseProtection, &rec.BaseMetadata, &rec.BaseTopics,
-			&rec.BaseReleases, &rec.BaseReleaseAssets, &node, &present, &forgejoID, &private, &fork, &mirror, &archived, &empty,
+			&rec.BaseReleases, &rec.BaseReleaseAssets, &rec.BaseActionVariables, &node, &present, &forgejoID, &private, &fork, &mirror, &archived, &empty,
 			&branch, &sha, &headErr, &rp.ForgejoUpdated, &rp.ForgejoCreated, &rp.LastSeenAt, &checked, &fullName); err != nil {
 			return nil, err
 		}

@@ -41,6 +41,9 @@ type fakeAPI struct {
 	// topics its repositories' topics.
 	rules  map[string]forgejo.BranchProtection
 	topics map[string][]string
+	// vars are this node's Actions variables and secrets its secret names.
+	vars    map[string]string
+	secrets []string
 	// releases are what this node has published, with the bytes of their
 	// files; tags are the tags it has; name and as identify it and who it
 	// is acting as.
@@ -65,6 +68,57 @@ type fakeOrg struct {
 
 // meta is what this node's repository settings and topics are.
 // releases and files are what this node has published, by repository.
+// vars and secrets are this node's Actions variables and secret names.
+func (f *fakeAPI) ActionVariables(_ context.Context, _, _ string) ([]forgejo.ActionVariable, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []forgejo.ActionVariable
+	for name, data := range f.vars {
+		out = append(out, forgejo.ActionVariable{Name: name, Data: data})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (f *fakeAPI) CreateActionVariable(_ context.Context, _, _, name, value string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.vars == nil {
+		f.vars = map[string]string{}
+	}
+	f.vars[name] = value
+	f.calls = append(f.calls, "create variable "+name)
+	return nil
+}
+
+func (f *fakeAPI) UpdateActionVariable(_ context.Context, _, _, name, value string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.vars[name] = value
+	f.calls = append(f.calls, "update variable "+name)
+	return nil
+}
+
+func (f *fakeAPI) DeleteActionVariable(_ context.Context, _, _, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.vars, name)
+	f.calls = append(f.calls, "delete variable "+name)
+	return nil
+}
+
+// ActionSecrets gives names only, as Forgejo does.
+func (f *fakeAPI) ActionSecrets(_ context.Context, _, _ string) ([]forgejo.ActionSecret, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []forgejo.ActionSecret
+	for _, name := range f.secrets {
+		out = append(out, forgejo.ActionSecret{Name: name})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
 // HasWiki answers from whether the wiki's repository is there, as
 // Forgejo's page listing does.
 func (f *fakeAPI) HasWiki(_ context.Context, owner, repo string) (bool, error) {

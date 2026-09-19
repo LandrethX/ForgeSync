@@ -56,6 +56,7 @@ type Store interface {
 	SetRepositoryProtection(ctx context.Context, id, value string) error
 	SetRepositoryMetadata(ctx context.Context, id string, fields map[string]string, topics string) error
 	SetRepositoryReleases(ctx context.Context, id, releases, assets string) error
+	SetRepositoryActionVariables(ctx context.Context, id, value string) error
 	WikiRefs(ctx context.Context, repositoryID, node string) (map[string]string, error)
 	SaveWikiRefs(ctx context.Context, repositoryID, node string, refs map[string]string) error
 	Org(ctx context.Context, name string) (store.OrgRecord, error)
@@ -110,6 +111,11 @@ type Options struct {
 	// Wiki replicates each repository's wiki, which is a second git
 	// repository, from its primary to the replicas (wiki.go).
 	Wiki bool
+	// Actions keeps a repository's Actions variables the same on every
+	// node, and says which nodes are missing a secret the others have --
+	// Forgejo never gives a secret's value back, so no one can copy one
+	// (actions.go).
+	Actions bool
 	// BackupFor is how long ForgeSync keeps what it takes away: a replica's
 	// branch after the owner chose the primary's version, and the archived
 	// copies of a repository deleted on its primary. Default 30 days.
@@ -492,6 +498,9 @@ func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again
 	}
 	if e.opts.Wiki && !again {
 		e.syncWiki(ctx, rec, primary, healthy)
+	}
+	if e.opts.Actions && !again {
+		e.syncActions(ctx, rec, healthy)
 	}
 	if !again {
 		// The owner's rules first, so the guard isn't mistaken for one.

@@ -17,6 +17,11 @@ type NodeAPI interface {
 	UsersByLoginName(ctx context.Context, sourceID int64, loginName string) ([]forgejo.User, error)
 	AdminCreateUser(ctx context.Context, opt forgejo.CreateUserOption) (forgejo.User, error)
 	AdminCreateRepo(ctx context.Context, owner string, opt forgejo.CreateRepoOption) (forgejo.Repository, error)
+	ActionVariables(ctx context.Context, owner, repo string) ([]forgejo.ActionVariable, error)
+	CreateActionVariable(ctx context.Context, owner, repo, name, value string) error
+	UpdateActionVariable(ctx context.Context, owner, repo, name, value string) error
+	DeleteActionVariable(ctx context.Context, owner, repo, name string) error
+	ActionSecrets(ctx context.Context, owner, repo string) ([]forgejo.ActionSecret, error)
 	HasWiki(ctx context.Context, owner, repo string) (bool, error)
 	CreateWikiPage(ctx context.Context, owner, repo, title, content, message string) error
 	Releases(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.Release, error)

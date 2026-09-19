@@ -141,6 +141,7 @@ func run(configPath string) error {
 			Metadata:         cfg.Replication.Metadata,
 			Releases:         cfg.Replication.Releases,
 			Wiki:             cfg.Replication.Wiki,
+			Actions:          cfg.Replication.Actions,
 			AssetMax:         cfg.Replication.AttachmentMaxBytes,
 			BackupFor:        time.Duration(cfg.Replication.BackupDays) * 24 * time.Hour,
 			ArchiveOrg:       cfg.Replication.ArchiveOrg,
@@ -156,7 +157,8 @@ func run(configPath string) error {
 			"hand_off_conflicts", *cfg.Replication.HandOffConflicts, "backup_days", cfg.Replication.BackupDays,
 			"collaborators", cfg.Replication.Collaborators, "organizations", cfg.Replication.Organizations,
 			"protect_replicas", cfg.Replication.ProtectReplicas,
-			"branch_protection", cfg.Replication.BranchProtection, "metadata", cfg.Replication.Metadata, "releases", cfg.Replication.Releases, "wiki", cfg.Replication.Wiki)
+			"branch_protection", cfg.Replication.BranchProtection, "metadata", cfg.Replication.Metadata, "releases", cfg.Replication.Releases, "wiki", cfg.Replication.Wiki,
+			"actions", cfg.Replication.Actions)
 	}
 	// Renames and primaries are assigned after scans and after webhooks;
 	// one at a time.

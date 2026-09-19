@@ -1155,3 +1155,110 @@ func TestSourcePairs(t *testing.T) {
 		t.Fatalf("after the deletion: %+v", pairs)
 	}
 }
+
+// ForgeSync's own accounts: made here, checked here, and shared by both
+// controllers because they share this database.
+func TestAccounts(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.CreateAccount(ctx, "khav", "a-long-enough-one", "K", "administrator", "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.ID == "" || a.Username != "khav" || a.Role != "administrator" {
+		t.Fatalf("account = %+v", a)
+	}
+
+	// The same name in another case is the same account.
+	if _, err := s.CreateAccount(ctx, "KHAV", "another-long-one", "", "viewer", "token"); !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("duplicate = %v", err)
+	}
+
+	// The right password works; the wrong one doesn't, and neither says
+	// anything about the other.
+	got, ok, err := s.CheckPassword(ctx, "KHAV", "a-long-enough-one")
+	if err != nil || !ok || got.ID != a.ID {
+		t.Fatalf("sign-in = %+v %v %v", got, ok, err)
+	}
+	if got.LastSignIn == nil {
+		t.Error("the sign-in wasn't recorded")
+	}
+	if _, ok, _ := s.CheckPassword(ctx, "khav", "not-the-password"); ok {
+		t.Error("the wrong password was accepted")
+	}
+	if _, ok, _ := s.CheckPassword(ctx, "nobody", "a-long-enough-one"); ok {
+		t.Error("a name that doesn't exist was accepted")
+	}
+
+	// A disabled account can't sign in, and the password can be changed.
+	if _, err := s.UpdateAccount(ctx, a.ID, "K", "administrator", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.CheckPassword(ctx, "khav", "a-long-enough-one"); ok {
+		t.Error("a disabled account signed in")
+	}
+	if _, err := s.UpdateAccount(ctx, a.ID, "K", "operator", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAccountPassword(ctx, a.ID, "a-different-long-one"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.CheckPassword(ctx, "khav", "a-long-enough-one"); ok {
+		t.Error("the old password still works")
+	}
+	if _, ok, _ := s.CheckPassword(ctx, "khav", "a-different-long-one"); !ok {
+		t.Error("the new password doesn't")
+	}
+
+	// The stored hash is a hash: the password isn't in it anywhere.
+	var stored string
+	if err := s.pool.QueryRow(ctx, `SELECT password_hash FROM accounts WHERE id = $1::uuid`, a.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stored, "a-different-long-one") || !strings.HasPrefix(stored, "pbkdf2-sha256$") {
+		t.Errorf("stored = %q", stored)
+	}
+
+	if n, err := s.CountAccounts(ctx); err != nil || n != 1 {
+		t.Errorf("count = %d, %v", n, err)
+	}
+	if err := s.DeleteAccount(ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Account(ctx, a.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("after deleting: %v", err)
+	}
+}
+
+// Two hashes of one password differ (they have their own salt), and each
+// verifies. A hash from another password doesn't.
+func TestPasswordHashing(t *testing.T) {
+	one, err := HashPassword("a-long-enough-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := HashPassword("a-long-enough-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one == two {
+		t.Error("two hashes of one password are the same; the salt isn't doing anything")
+	}
+	for _, h := range []string{one, two} {
+		if ok, err := VerifyPassword(h, "a-long-enough-one"); err != nil || !ok {
+			t.Errorf("verify = %v, %v", ok, err)
+		}
+		if ok, _ := VerifyPassword(h, "a-long-enough-two"); ok {
+			t.Error("another password verified")
+		}
+	}
+	if _, err := HashPassword(""); err == nil {
+		t.Error("an empty password was hashed")
+	}
+	if _, err := VerifyPassword("not-a-hash", "x"); err == nil {
+		t.Error("a hash that isn't one was accepted")
+	}
+}

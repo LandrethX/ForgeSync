@@ -784,6 +784,13 @@ td.details {
   margin: 0;
 }
 
+/* The line between the password form and the SceneID button. */
+.or-line {
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+}
+
 .break-glass {
   margin-top: 0.75rem;
   border-top: 1px solid var(--border);

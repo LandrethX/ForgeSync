@@ -38,13 +38,19 @@ type Identity struct {
 	Name     string `json:"name"`
 	Email    string `json:"email,omitempty"`
 	Role     Role   `json:"role"`
-	Source   string `json:"source"` // "sceneid" or "token"
+	// Source is "sceneid" (a SceneID user), "account" (one of ForgeSync's
+	// own, in its database) or "web-token"/"token" (the admin token).
+	Source string `json:"source"`
 }
 
-// Actor is how the identity appears in the audit log.
+// Actor is how the identity appears in the audit log: the source and who,
+// so a line says which kind of sign-in did the thing as well as whose.
 func (id Identity) Actor() string {
-	if id.Source == "sceneid" {
+	switch id.Source {
+	case "sceneid":
 		return "sceneid:" + id.Username
+	case "account":
+		return "account:" + id.Username
 	}
 	return id.Source
 }

@@ -41,6 +41,96 @@ type fakeDB struct {
 	pairs       []store.SourcePair
 	controllers []store.ControllerRecord
 	chosen      store.LeadershipChoice
+	// accounts are ForgeSync's own, with their passwords as given: the
+	// fake doesn't hash, so a test can say what it means.
+	accounts  []store.Account
+	passwords map[string]string
+}
+
+func (f *fakeDB) Accounts(context.Context) ([]store.Account, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]store.Account(nil), f.accounts...), nil
+}
+
+func (f *fakeDB) Account(_ context.Context, id string) (store.Account, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, a := range f.accounts {
+		if a.ID == id {
+			return a, nil
+		}
+	}
+	return store.Account{}, store.ErrNotFound
+}
+
+func (f *fakeDB) CreateAccount(_ context.Context, username, password, fullName, role, by string) (store.Account, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, a := range f.accounts {
+		if strings.EqualFold(a.Username, username) {
+			return store.Account{}, store.ErrUsernameTaken
+		}
+	}
+	a := store.Account{ID: "acct-" + username, Username: username, FullName: fullName, Role: role,
+		CreatedBy: by, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	f.accounts = append(f.accounts, a)
+	if f.passwords == nil {
+		f.passwords = map[string]string{}
+	}
+	f.passwords[strings.ToLower(username)] = password
+	return a, nil
+}
+
+func (f *fakeDB) UpdateAccount(_ context.Context, id, fullName, role string, disabled bool) (store.Account, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, a := range f.accounts {
+		if a.ID == id {
+			f.accounts[i].FullName, f.accounts[i].Role, f.accounts[i].Disabled = fullName, role, disabled
+			return f.accounts[i], nil
+		}
+	}
+	return store.Account{}, store.ErrNotFound
+}
+
+func (f *fakeDB) SetAccountPassword(_ context.Context, id, password string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, a := range f.accounts {
+		if a.ID == id {
+			if f.passwords == nil {
+				f.passwords = map[string]string{}
+			}
+			f.passwords[strings.ToLower(a.Username)] = password
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
+func (f *fakeDB) DeleteAccount(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, a := range f.accounts {
+		if a.ID == id {
+			f.accounts = append(f.accounts[:i], f.accounts[i+1:]...)
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
+func (f *fakeDB) CheckPassword(_ context.Context, username, password string) (store.Account, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, a := range f.accounts {
+		if strings.EqualFold(a.Username, username) && !a.Disabled &&
+			f.passwords[strings.ToLower(username)] == password && password != "" {
+			return a, true, nil
+		}
+	}
+	return store.Account{}, false, nil
 }
 
 func (f *fakeDB) Controllers(context.Context) ([]store.ControllerRecord, error) {

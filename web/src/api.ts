@@ -380,13 +380,30 @@ export interface Controller {
 
 export type Role = "viewer" | "operator" | "administrator";
 
+/**
+ * One of ForgeSync's own accounts: someone who signs in to the
+ * controllers. They live in ForgeSync's database, which both controllers
+ * share, and are never copied to a Forgejo node.
+ */
+export interface Account {
+  id: string;
+  username: string;
+  full_name?: string;
+  role: Role;
+  disabled: boolean;
+  created_at: string;
+  created_by?: string;
+  updated_at: string;
+  last_sign_in?: string;
+}
+
 export interface Session {
   subject: string;
   username: string;
   name: string;
   email?: string;
   role: Role;
-  source: "sceneid" | "token" | "web-token";
+  source: "sceneid" | "account" | "token" | "web-token";
   expires_at: string;
 }
 
@@ -530,6 +547,31 @@ export const api = {
     email?: string;
     home: string;
   }) => request<UserWrite>("POST", "/users", u),
+  signInWithPassword: (username: string, password: string) =>
+    request<Session>("POST", "/session", { username, password }),
+  accounts: () =>
+    request<{ total: number; items: Account[] }>("GET", "/accounts"),
+  addAccount: (a: {
+    username: string;
+    password: string;
+    full_name?: string;
+    role: Role;
+  }) => request<Account>("POST", "/accounts", a),
+  updateAccount: (
+    id: string,
+    changes: { full_name?: string; role?: Role; disabled?: boolean },
+  ) => request<Account>("PUT", `/accounts/${encodeURIComponent(id)}`, changes),
+  setAccountPassword: (id: string, password: string) =>
+    request<{ message: string }>(
+      "PUT",
+      `/accounts/${encodeURIComponent(id)}/password`,
+      { password },
+    ),
+  deleteAccount: (id: string) =>
+    request<{ message: string }>(
+      "DELETE",
+      `/accounts/${encodeURIComponent(id)}`,
+    ),
   chooseLeader: (controller: string) =>
     request<{ controller: string; message: string }>("PUT", "/leadership", {
       controller,

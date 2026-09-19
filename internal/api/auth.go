@@ -1,10 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -138,11 +140,10 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, id auth.Identity, idTok
 
 // ---------------------------------------------------------------- admin token
 
+// createSession signs in with a password or the admin token. A ForgeSync
+// account is the ordinary way; the token is the break-glass one, and the
+// only way to make the first account.
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
-	if !s.tokenSignInAllowed() {
-		writeJSON(w, http.StatusForbidden, map[string]string{"message": "admin-token sign-in is turned off; sign in with SceneID"})
-		return
-	}
 	if r.Header.Get(csrfHeader) == "" {
 		writeJSON(w, http.StatusForbidden, map[string]string{"message": "missing " + csrfHeader + " header"})
 		return
@@ -153,15 +154,72 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"message": "too many failed sign-ins; try again later"})
 		return
 	}
-	var body struct {
-		Token string `json:"token"`
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8192))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "couldn't read the request"})
+		return
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "expected JSON {\"token\": ...}"})
+	var creds struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Token    string `json:"token"`
+	}
+	if err := json.Unmarshal(body, &creds); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"message": `expected JSON {"username": ..., "password": ...} or {"token": ...}`})
+		return
+	}
+	if creds.Username != "" || creds.Password != "" {
+		s.signInWithPassword(w, r, addr, creds.Username, creds.Password)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	s.signInWithToken(w, r, addr, creds.Token)
+}
+
+// signInWithPassword signs in one of ForgeSync's own accounts. They're in
+// the database both controllers share, so it works on either, including
+// while SceneID is unreachable -- which is when it matters.
+func (s *Server) signInWithPassword(w http.ResponseWriter, r *http.Request, addr, username, password string) {
+	account, ok, err := s.DB.CheckPassword(r.Context(), username, password)
+	if err != nil {
+		s.serverError(w, "check the password", err)
+		return
+	}
+	if !ok {
+		s.limiter.Fail(addr)
+		s.audit(r.Context(), "account:"+username, "session.sign_in_failed", addr, map[string]any{"source": "account"})
+		// The same answer whether the name, the password or the account
+		// itself was the problem.
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "that username and password don't match an account"})
+		return
+	}
+	s.limiter.Reset(addr)
+	role, err := auth.ParseRole(account.Role)
+	if err != nil {
+		// A role the database holds that this version doesn't know: no
+		// access, rather than guessing at what it might have meant.
+		s.Log.Error("account has an unknown role", "account", account.Username, "role", account.Role)
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "this account's role isn't one this controller knows"})
+		return
+	}
+	id := auth.Identity{Subject: account.ID, Username: account.Username, Name: account.FullName,
+		Role: role, Source: "account"}
+	if id.Name == "" {
+		id.Name = account.Username
+	}
+	expires := s.setSessionCookie(w, id, "")
+	s.audit(r.Context(), id.Actor(), "session.sign_in", addr, map[string]any{"source": "account", "role": account.Role})
+	writeJSON(w, http.StatusOK, sessionInfo{Identity: id, ExpiresAt: expires.UTC()})
+}
+
+func (s *Server) signInWithToken(w http.ResponseWriter, r *http.Request, addr, token string) {
+	if !s.tokenSignInAllowed() {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "admin-token sign-in is turned off; sign in with SceneID"})
 		return
 	}
 	breakGlass := map[string]any{"break_glass": s.OIDC != nil}
-	if !s.tokenValid(body.Token) {
+	if !s.tokenValid(token) {
 		s.limiter.Fail(addr)
 		s.audit(r.Context(), "web-token", "session.sign_in_failed", addr, breakGlass)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "invalid admin token"})

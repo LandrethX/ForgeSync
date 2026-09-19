@@ -71,11 +71,12 @@ export function Login({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
             {configError}
           </p>
         )}
+        <PasswordForm onSignedIn={onSignedIn} />
         {config?.sceneid && (
           <>
-            <p className="muted">
-              Sign in with your SceneID account. Your ForgeSync role comes from
-              SceneID.
+            <p className="muted or-line">
+              Or sign in with your SceneID account, which is where your
+              ForgeSync role comes from.
             </p>
             <a
               className="button-primary button-link"
@@ -111,6 +112,70 @@ export function Login({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * ForgeSync's own accounts. They're in the database both controllers
+ * share, so this works on either one -- and when SceneID is the thing
+ * that's unreachable, which is when someone most needs to get in.
+ */
+function PasswordForm({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(undefined);
+    try {
+      onSignedIn(await api.signInWithPassword(username.trim(), password));
+      setPassword("");
+    } catch (err) {
+      setError(
+        messageFor(err, "That username and password don't match an account."),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="token-form" onSubmit={submit} noValidate>
+      <label htmlFor="username">ForgeSync account</label>
+      <input
+        id="username"
+        autoComplete="username"
+        value={username}
+        onChange={(e) => setUsername(e.target.value)}
+        required
+      />
+      <label htmlFor="password">Password</label>
+      <input
+        id="password"
+        type="password"
+        autoComplete="current-password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? "password-error" : undefined}
+        required
+      />
+      {error && (
+        <p id="password-error" className="error-note" role="alert">
+          {error}
+        </p>
+      )}
+      <button
+        type="submit"
+        className="button-primary"
+        disabled={busy || username.trim() === "" || password === ""}
+      >
+        {busy ? "Signing in…" : "Sign in"}
+      </button>
+    </form>
   );
 }
 
@@ -163,9 +228,10 @@ function TokenForm({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
   );
 }
 
-function messageFor(err: unknown): string {
+/** `wrong` is what a 401 means for the form that asked. */
+function messageFor(err: unknown, wrong = "That token isn't valid."): string {
   if (err instanceof ApiError) {
-    if (err.status === 401) return "That token isn't valid.";
+    if (err.status === 401) return wrong;
     if (err.status === 429) {
       const wait = err.retryAfterSeconds
         ? ` Try again in ${formatDuration(err.retryAfterSeconds * 1000)}.`

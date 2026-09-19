@@ -27,9 +27,28 @@ export function describe(e: HistoryEvent): string {
   const d = e.details ?? {};
   switch (e.action) {
     case "session.sign_in":
+      if (d.source === "account") return "Signed in with a ForgeSync account";
       return d.break_glass
         ? "Signed in with the admin token (break-glass)"
         : "Signed in";
+    case "account.created":
+      return `ForgeSync account added, as ${str(d.role)}`;
+    case "account.updated":
+      return d.disabled
+        ? `ForgeSync account suspended (was ${str(d.role)})`
+        : `ForgeSync account set to ${str(d.role)}`;
+    case "account.password_set":
+      return "ForgeSync account's password changed";
+    case "account.deleted":
+      return "ForgeSync account removed";
+    case "leadership.chosen":
+      return `${str(d.controller)} chosen to be the controller doing the work`;
+    case "leadership.choice_cleared":
+      return "Back to the configured order for which controller leads";
+    case "user.created":
+      return `SceneID account created on every node, primary site ${str(d.home)}`;
+    case "user.provisioned":
+      return "SceneID account copied to the nodes that hadn't got it";
     case "session.sign_in_failed":
       return "Sign-in failed: wrong admin token";
     case "session.sign_in_denied":

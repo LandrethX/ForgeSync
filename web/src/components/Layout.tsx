@@ -10,6 +10,8 @@ const NAV: { to: string; label: string; role: Role }[] = [
   { to: "/users", label: "Users", role: "viewer" },
   { to: "/conflicts", label: "Conflicts", role: "viewer" },
   { to: "/audit", label: "Events & audit", role: "operator" },
+  // ForgeSync's own accounts, as opposed to the SceneID users above.
+  { to: "/accounts", label: "ForgeSync accounts", role: "administrator" },
 ];
 
 const ROLE_LABEL: Record<Role, string> = {
@@ -84,7 +86,7 @@ export function Layout({
           </span>
           <span className="who" title={session.email || undefined}>
             <span className="who-name">
-              {session.source === "sceneid"
+              {session.source === "sceneid" || session.source === "account"
                 ? session.name || session.username
                 : "Admin token"}
             </span>

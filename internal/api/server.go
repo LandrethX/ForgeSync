@@ -53,6 +53,13 @@ type DB interface {
 	SourcePairs(ctx context.Context) ([]store.SourcePair, error)
 	Controllers(ctx context.Context) ([]store.ControllerRecord, error)
 	Chosen(ctx context.Context) (store.LeadershipChoice, error)
+	Accounts(ctx context.Context) ([]store.Account, error)
+	Account(ctx context.Context, id string) (store.Account, error)
+	CreateAccount(ctx context.Context, username, password, fullName, role, by string) (store.Account, error)
+	UpdateAccount(ctx context.Context, id, fullName, role string, disabled bool) (store.Account, error)
+	SetAccountPassword(ctx context.Context, id, password string) error
+	DeleteAccount(ctx context.Context, id string) error
+	CheckPassword(ctx context.Context, username, password string) (store.Account, bool, error)
 	Choose(ctx context.Context, controller, by string) error
 	ClearChoice(ctx context.Context) error
 	History(ctx context.Context, f store.EventFilter) ([]store.Event, string, error)
@@ -191,6 +198,15 @@ func (s *Server) Handler() http.Handler {
 				r.Use(requireRole(auth.Administrator))
 				r.Put("/leadership", s.chooseLeader)
 				r.Delete("/leadership", s.clearLeaderChoice)
+				// ForgeSync's own accounts live in the shared database and
+				// belong to neither controller, so these aren't behind
+				// requireLeader either: someone locked out of one
+				// controller can still put it right from the other.
+				r.Get("/accounts", s.listAccounts)
+				r.Post("/accounts", s.createAccount)
+				r.Put("/accounts/{id}", s.updateAccount)
+				r.Put("/accounts/{id}/password", s.setAccountPassword)
+				r.Delete("/accounts/{id}", s.deleteAccount)
 			})
 			// Writes belong to the controller that's acting; see requireLeader.
 			r.Group(func(r chi.Router) {

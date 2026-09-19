@@ -133,6 +133,7 @@ func run(configPath string) error {
 			CreateMissing: *cfg.Replication.CreateMissing,
 			AutoFix:       *cfg.Replication.AutoFix,
 			HandOff:       *cfg.Replication.HandOffConflicts,
+			Collaborators: cfg.Replication.Collaborators,
 			BackupFor:     time.Duration(cfg.Replication.BackupDays) * 24 * time.Hour,
 			ArchiveOrg:    cfg.Replication.ArchiveOrg,
 			// Rescan so the inventory shows the result. Forgejo updates some
@@ -144,7 +145,8 @@ func run(configPath string) error {
 		}, log)
 		log.Info("replication enabled", "git", v, "work_dir", cfg.Replication.WorkDir,
 			"create_missing", *cfg.Replication.CreateMissing, "auto_fix", *cfg.Replication.AutoFix,
-			"hand_off_conflicts", *cfg.Replication.HandOffConflicts, "backup_days", cfg.Replication.BackupDays)
+			"hand_off_conflicts", *cfg.Replication.HandOffConflicts, "backup_days", cfg.Replication.BackupDays,
+			"collaborators", cfg.Replication.Collaborators)
 	}
 	// Renames and primaries are assigned after scans and after webhooks;
 	// one at a time.

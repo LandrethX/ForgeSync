@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"scenegit.org/forgesync/internal/forgejo"
+	"scenegit.org/forgesync/internal/set"
 )
 
 // Reviews are what people said about a pull request's diff: a submitted
@@ -101,9 +102,9 @@ func (r *run) syncReviews(ctx context.Context, ref, source, base string,
 			have[n][e] = true
 		}
 	}
-	plan := planSet(have, setFromValue(base))
+	plan := set.Decide(have, set.From(base))
 	for _, n := range r.nodes {
-		for _, e := range plan.remove[n] {
+		for _, e := range plan.Remove[n] {
 			v := at[n][e]
 			if err := act.remove(ctx, n, v); err != nil {
 				r.s.log.Warn("issues: a review couldn't be removed; left for the next run", "repository", r.rec.FullName,
@@ -115,7 +116,7 @@ func (r *run) syncReviews(ctx context.Context, ref, source, base string,
 			delete(have[n], e)
 			r.s.log.Info("review removed", "repository", r.rec.FullName, "node", n, "issue", ref, "by", reviewerOf(v))
 		}
-		for _, e := range plan.add[n] {
+		for _, e := range plan.Add[n] {
 			v, from, ok := r.findReview(at, e)
 			if !ok {
 				r.s.log.Warn("issues: no node has the review to copy", "repository", r.rec.FullName,
@@ -146,7 +147,7 @@ func (r *run) syncReviews(ctx context.Context, ref, source, base string,
 				"by", who, "state", v.head.State, "comments", len(v.comments))
 		}
 	}
-	return settleSet(have, setFromValue(base))
+	return set.Settle(have, set.From(base))
 }
 
 // findReview reads a review from a node that has it, the primary first.

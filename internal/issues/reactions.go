@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"scenegit.org/forgesync/internal/forgejo"
+	"scenegit.org/forgesync/internal/set"
 )
 
 // Reactions are people's reactions to an issue or a comment. Each one is a
@@ -44,17 +45,17 @@ type reactor func(ctx context.Context, node, login, content string, add bool) er
 // syncReactions brings one issue's or comment's reactions together and
 // returns the new base. ref names it in the log.
 func (r *run) syncReactions(ctx context.Context, ref, source, base string, have map[string]map[string]bool, act reactor) string {
-	want := setFromValue(base)
-	plan := planSet(have, want)
+	want := set.From(base)
+	plan := set.Decide(have, want)
 	for _, n := range r.nodes {
-		for _, e := range plan.add[n] {
+		for _, e := range plan.Add[n] {
 			r.react(ctx, n, ref, source, e, true, have, act)
 		}
-		for _, e := range plan.remove[n] {
+		for _, e := range plan.Remove[n] {
 			r.react(ctx, n, ref, source, e, false, have, act)
 		}
 	}
-	return settleSet(have, want)
+	return set.Settle(have, want)
 }
 
 func (r *run) react(ctx context.Context, node, ref, source, element string, add bool, have map[string]map[string]bool, act reactor) {

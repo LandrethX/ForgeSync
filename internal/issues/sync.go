@@ -12,6 +12,7 @@ import (
 
 	"scenegit.org/forgesync/internal/forgejo"
 	"scenegit.org/forgesync/internal/health"
+	"scenegit.org/forgesync/internal/set"
 	"scenegit.org/forgesync/internal/store"
 )
 
@@ -530,7 +531,7 @@ func (r *run) refused(refuse func(node, value string) string, value string) []st
 // refuseAssignees says why a node wouldn't take these assignees.
 func (r *run) refuseAssignees(node, value string) string {
 	var missing []string
-	for _, login := range split(value) {
+	for _, login := range set.Split(value) {
 		if !r.snaps[node].assignable[login] {
 			missing = append(missing, login)
 		}
@@ -539,14 +540,6 @@ func (r *run) refuseAssignees(node, value string) string {
 		return ""
 	}
 	return strings.Join(missing, ", ") + " can't be given an issue there"
-}
-
-// split is a merged list value as its parts; "" is no parts.
-func split(value string) []string {
-	if value == "" {
-		return nil
-	}
-	return strings.Split(value, ",")
 }
 
 // canAssign reports that the node would take every assignee in value.
@@ -558,7 +551,7 @@ func (r *run) canAssign(node, value string) bool {
 	if value == "" {
 		return true
 	}
-	for _, login := range split(value) {
+	for _, login := range set.Split(value) {
 		if !r.snaps[node].assignable[login] {
 			return false
 		}
@@ -849,7 +842,7 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 			nil},
 		{"assignees", &rec.BaseAssignees, assigneesValue,
 			func(ctx context.Context, n string, number int64, v string, _ forgejo.Issue) error {
-				return r.s.nodes[n].API.SetIssueAssignees(ctx, r.owner, r.name, number, split(v))
+				return r.s.nodes[n].API.SetIssueAssignees(ctx, r.owner, r.name, number, set.Split(v))
 			},
 			nil, nil, r.refuseAssignees},
 	}
@@ -958,7 +951,7 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 		// without them, and the node stays out of that comparison.
 		var assignees []string
 		if r.canAssign(n, want["assignees"]) {
-			assignees = split(want["assignees"])
+			assignees = set.Split(want["assignees"])
 		} else {
 			r.s.log.Info("issues: a copy is made without assignees the node won't take",
 				"repository", r.rec.FullName, "node", n, "issue", ref, "assignees", want["assignees"])

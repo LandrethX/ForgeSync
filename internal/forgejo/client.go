@@ -439,6 +439,43 @@ func (c *Client) Comment(ctx context.Context, owner, repo string, number int64, 
 		map[string]string{"body": body}, nil)
 }
 
+// Collaborators lists the people a repository is shared with, which is not
+// the same as who can see it: the owner and site admins aren't in here.
+func (c *Client) Collaborators(ctx context.Context, owner, repo string) ([]User, error) {
+	var out []User
+	err := c.do(ctx, http.MethodGet, repoPath(owner, repo)+"/collaborators", true, nil, &out)
+	return out, err
+}
+
+// CollaboratorPermission is one collaborator's access: read, write or
+// admin.
+func (c *Client) CollaboratorPermission(ctx context.Context, owner, repo, login string) (string, error) {
+	var out struct {
+		Permission string `json:"permission"`
+	}
+	err := c.do(ctx, http.MethodGet,
+		fmt.Sprintf("%s/collaborators/%s/permission", repoPath(owner, repo), url.PathEscape(login)), true, nil, &out)
+	return out.Permission, err
+}
+
+// AddCollaborator shares a repository with someone, or changes what they
+// may do; permission is read, write or admin.
+func (c *Client) AddCollaborator(ctx context.Context, owner, repo, login, permission string) error {
+	return c.do(ctx, http.MethodPut,
+		fmt.Sprintf("%s/collaborators/%s", repoPath(owner, repo), url.PathEscape(login)), true,
+		map[string]string{"permission": permission}, nil)
+}
+
+// RemoveCollaborator stops sharing it. Already gone is not an error.
+func (c *Client) RemoveCollaborator(ctx context.Context, owner, repo, login string) error {
+	err := c.do(ctx, http.MethodDelete,
+		fmt.Sprintf("%s/collaborators/%s", repoPath(owner, repo), url.PathEscape(login)), true, nil, nil)
+	if isNotFound(err) {
+		return nil
+	}
+	return err
+}
+
 // BranchExists reports whether a branch is on the node. ForgeSync opens a
 // copy of a pull request only once both its branches are there.
 func (c *Client) BranchExists(ctx context.Context, owner, repo, branch string) (bool, error) {

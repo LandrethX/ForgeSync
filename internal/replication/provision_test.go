@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,10 @@ type fakeAPI struct {
 	calls     []string
 	// failTransfer makes the next TransferRepo fail.
 	failTransfer bool
+	// collabs is who the repository is shared with here, and what they may
+	// do; refusesGrant is a login this node won't take.
+	collabs      map[string]string
+	refusesGrant string
 }
 
 // fakePull is a pull request as this fake keeps it: what it was opened
@@ -39,6 +44,47 @@ type fakeAPI struct {
 type fakePull struct {
 	forgejo.CreatePullRequestOption
 	pr forgejo.PullRequest
+}
+
+// collaborators the node has, as "<login>:<permission>". refusesGrant is a
+// login it won't take, standing in for one ForgeSync can't create there.
+func (f *fakeAPI) Collaborators(_ context.Context, _, _ string) ([]forgejo.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []forgejo.User
+	for login := range f.collabs {
+		out = append(out, forgejo.User{Login: login})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Login < out[j].Login })
+	return out, nil
+}
+
+func (f *fakeAPI) CollaboratorPermission(_ context.Context, _, _, login string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.collabs[login], nil
+}
+
+func (f *fakeAPI) AddCollaborator(_ context.Context, _, _, login, permission string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if login == f.refusesGrant {
+		return fmt.Errorf("%s can't be given access here", login)
+	}
+	if f.collabs == nil {
+		f.collabs = map[string]string{}
+	}
+	f.collabs[login] = permission
+	f.calls = append(f.calls, "grant "+login+" "+permission)
+	return nil
+}
+
+func (f *fakeAPI) RemoveCollaborator(_ context.Context, _, _, login string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.collabs, login)
+	f.calls = append(f.calls, "ungrant "+login)
+	return nil
 }
 
 func newFakeAPI(g *gitNode) *fakeAPI {

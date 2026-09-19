@@ -45,6 +45,13 @@ func (m *memStore) MarkRepositoryDeleted(_ context.Context, _ string, at time.Ti
 	}
 	return nil
 }
+func (m *memStore) SetRepositoryCollaborators(_ context.Context, _, value string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rec.BaseCollaborators = value
+	return nil
+}
+
 func (m *memStore) UndeleteRepository(context.Context, string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -48,6 +48,7 @@ type Store interface {
 	UpdateHandoff(ctx context.Context, h store.Handoff) error
 	MarkRepositoryDeleted(ctx context.Context, id string, at time.Time) error
 	UndeleteRepository(ctx context.Context, id string) error
+	SetRepositoryCollaborators(ctx context.Context, id, value string) error
 	DeleteRepository(ctx context.Context, id string) error
 	Archives(ctx context.Context, repositoryID string) ([]store.Archive, error)
 	SaveArchive(ctx context.Context, a store.Archive) (int64, error)
@@ -75,6 +76,9 @@ type Options struct {
 	// HandOff hands diverged branches to the repository's owner as a pull
 	// request on the primary (see handoff.go).
 	HandOff bool
+	// Collaborators keeps the people a repository is shared with the same
+	// on every node (collaborators.go).
+	Collaborators bool
 	// BackupFor is how long ForgeSync keeps what it takes away: a replica's
 	// branch after the owner chose the primary's version, and the archived
 	// copies of a repository deleted on its primary. Default 30 days.
@@ -436,6 +440,9 @@ func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again
 	}
 	if e.opts.AutoFix && !again {
 		e.fixDefaultBranches(ctx, rec, primary, healthy)
+	}
+	if e.opts.Collaborators && !again {
+		e.syncCollaborators(ctx, rec, primary, healthy)
 	}
 	return again, nil
 }

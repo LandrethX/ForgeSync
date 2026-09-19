@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"scenegit.org/forgesync/internal/forgejo"
+	"scenegit.org/forgesync/internal/set"
 )
 
 // Attachments are the files on an issue or a comment. Forgejo gives each
@@ -79,9 +80,9 @@ func (r *run) syncAttachments(ctx context.Context, ref, author, base string,
 			have[n][e] = true
 		}
 	}
-	plan := planSet(have, setFromValue(base))
+	plan := set.Decide(have, set.From(base))
 	for _, n := range r.nodes {
-		for _, e := range plan.remove[n] {
+		for _, e := range plan.Remove[n] {
 			a := at[n][e]
 			if err := act.remove(ctx, n, a); err != nil {
 				r.s.log.Warn("issues: an attachment couldn't be removed; left for the next run",
@@ -93,7 +94,7 @@ func (r *run) syncAttachments(ctx context.Context, ref, author, base string,
 			delete(have[n], e)
 			r.s.log.Info("attachment removed", "repository", r.rec.FullName, "node", n, "issue", ref, "file", a.Name)
 		}
-		for _, e := range plan.add[n] {
+		for _, e := range plan.Add[n] {
 			if attachmentSize(e) > r.s.opts.AttachmentMax {
 				r.s.log.Info("issues: an attachment is too big to copy; left where it is",
 					"repository", r.rec.FullName, "node", n, "issue", ref, "file", attachmentName(e),
@@ -123,7 +124,7 @@ func (r *run) syncAttachments(ctx context.Context, ref, author, base string,
 				"issue", ref, "file", attachmentName(e), "bytes", len(content))
 		}
 	}
-	return settleSet(have, setFromValue(base))
+	return set.Settle(have, set.From(base))
 }
 
 // fetchAttachment reads a file from a node that has it, the primary first.

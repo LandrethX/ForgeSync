@@ -5,10 +5,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"scenegit.org/forgesync/internal/set"
 )
 
 func TestPlanSet(t *testing.T) {
-	set := func(elements ...string) map[string]bool {
+	members := func(elements ...string) map[string]bool {
 		out := map[string]bool{}
 		for _, e := range elements {
 			out[e] = true
@@ -31,48 +33,48 @@ func TestPlanSet(t *testing.T) {
 	}{
 		{
 			name: "everyone agrees: nothing to do",
-			have: map[string]map[string]bool{"se": set("alice:+1"), "dk": set("alice:+1")},
-			base: set("alice:+1"),
+			have: map[string]map[string]bool{"se": members("alice:+1"), "dk": members("alice:+1")},
+			base: members("alice:+1"),
 		},
 		{
 			name: "added on one node: added on the others",
-			have: map[string]map[string]bool{"se": set("alice:+1"), "dk": set(), "de": set()},
-			base: set(),
+			have: map[string]map[string]bool{"se": members("alice:+1"), "dk": members(), "de": members()},
+			base: members(),
 			add:  "de=alice:+1 dk=alice:+1",
 		},
 		{
 			name:   "taken back on one node: taken back on the others",
-			have:   map[string]map[string]bool{"se": set(), "dk": set("alice:+1"), "de": set("alice:+1")},
-			base:   set("alice:+1"),
+			have:   map[string]map[string]bool{"se": members(), "dk": members("alice:+1"), "de": members("alice:+1")},
+			base:   members("alice:+1"),
 			remove: "de=alice:+1 dk=alice:+1",
 		},
 		{
 			name: "one added and another taken back at once: both, and no conflict",
 			have: map[string]map[string]bool{
-				"se": set("bob:heart"), "dk": set("alice:+1", "bob:heart"), "de": set("alice:+1")},
-			base:   set("alice:+1"),
+				"se": members("bob:heart"), "dk": members("alice:+1", "bob:heart"), "de": members("alice:+1")},
+			base:   members("alice:+1"),
 			add:    "de=bob:heart",
 			remove: "de=alice:+1 dk=alice:+1",
 		},
 		{
 			name: "two people react at once: both spread",
-			have: map[string]map[string]bool{"se": set("alice:+1"), "dk": set("bob:rocket")},
-			base: set(),
+			have: map[string]map[string]bool{"se": members("alice:+1"), "dk": members("bob:rocket")},
+			base: members(),
 			add:  "dk=alice:+1 se=bob:rocket",
 		},
 		{
 			name: "the same reaction on a node that has no copy yet",
-			have: map[string]map[string]bool{"se": set("alice:+1"), "dk": nil},
-			base: set(),
+			have: map[string]map[string]bool{"se": members("alice:+1"), "dk": nil},
+			base: members(),
 			add:  "dk=alice:+1",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := planSet(tc.have, tc.base)
-			if got := show(p.add); got != tc.add {
+			p := set.Decide(tc.have, tc.base)
+			if got := show(p.Add); got != tc.add {
 				t.Errorf("add = %q, want %q", got, tc.add)
 			}
-			if got := show(p.remove); got != tc.remove {
+			if got := show(p.Remove); got != tc.remove {
 				t.Errorf("remove = %q, want %q", got, tc.remove)
 			}
 		})
@@ -80,28 +82,28 @@ func TestPlanSet(t *testing.T) {
 }
 
 func TestSettleSetOnlyMovesTheBaseWhenEveryNodeAgrees(t *testing.T) {
-	set := func(elements ...string) map[string]bool {
+	members := func(elements ...string) map[string]bool {
 		out := map[string]bool{}
 		for _, e := range elements {
 			out[e] = true
 		}
 		return out
 	}
-	all := map[string]map[string]bool{"se": set("alice:+1"), "dk": set("alice:+1")}
-	if got := settleSet(all, set()); got != "alice:+1" {
+	all := map[string]map[string]bool{"se": members("alice:+1"), "dk": members("alice:+1")}
+	if got := set.Settle(all, members()); got != "alice:+1" {
 		t.Errorf("everyone has it: %q", got)
 	}
-	none := map[string]map[string]bool{"se": set(), "dk": set()}
-	if got := settleSet(none, set("alice:+1")); got != "" {
+	none := map[string]map[string]bool{"se": members(), "dk": members()}
+	if got := set.Settle(none, members("alice:+1")); got != "" {
 		t.Errorf("nobody has it: %q", got)
 	}
 	// Half-written: the base doesn't move, so the next run tries again
 	// instead of reading the node that's behind as someone's change.
-	half := map[string]map[string]bool{"se": set("alice:+1"), "dk": set()}
-	if got := settleSet(half, set()); got != "" {
+	half := map[string]map[string]bool{"se": members("alice:+1"), "dk": members()}
+	if got := set.Settle(half, members()); got != "" {
 		t.Errorf("half added: %q", got)
 	}
-	if got := settleSet(half, set("alice:+1")); got != "alice:+1" {
+	if got := set.Settle(half, members("alice:+1")); got != "alice:+1" {
 		t.Errorf("half removed: %q", got)
 	}
 }

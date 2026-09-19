@@ -64,4 +64,7 @@ replication:
   # people said about the diff.
   pull_requests: true
   reviews: true
+  # The people each repository is shared with, and what they may do. This
+  # is what lets an assignee be set on a replica at all.
+  collaborators: true
   work_dir: /var/lib/forgesync/git

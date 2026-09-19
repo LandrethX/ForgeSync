@@ -17,6 +17,10 @@ type NodeAPI interface {
 	UsersByLoginName(ctx context.Context, sourceID int64, loginName string) ([]forgejo.User, error)
 	AdminCreateUser(ctx context.Context, opt forgejo.CreateUserOption) (forgejo.User, error)
 	AdminCreateRepo(ctx context.Context, owner string, opt forgejo.CreateRepoOption) (forgejo.Repository, error)
+	Collaborators(ctx context.Context, owner, repo string) ([]forgejo.User, error)
+	CollaboratorPermission(ctx context.Context, owner, repo, login string) (string, error)
+	AddCollaborator(ctx context.Context, owner, repo, login, permission string) error
+	RemoveCollaborator(ctx context.Context, owner, repo, login string) error
 
 	// For resolving conflicts (handoff.go).
 	SetDefaultBranch(ctx context.Context, owner, repo, branch string) error

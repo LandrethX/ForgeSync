@@ -15,6 +15,7 @@ import (
 
 	"scenegit.org/forgesync/internal/forgejo"
 	"scenegit.org/forgesync/internal/health"
+	"scenegit.org/forgesync/internal/set"
 	"scenegit.org/forgesync/internal/store"
 )
 
@@ -459,14 +460,14 @@ func (f *fakeNode) unreact(number int64, login, content string) {
 func (f *fakeNode) reactionsOn(number int64) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return setValue(f.set(false, number))
+	return set.Value(f.set(false, number))
 }
 
 // commentReactionsOn is a comment's, by its id on the node.
 func (f *fakeNode) commentReactionsOn(id int64) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return setValue(f.set(true, id))
+	return set.Value(f.set(true, id))
 }
 
 func (f *fakeNode) list(comment bool, id int64, page int) ([]forgejo.Reaction, error) {

@@ -19,14 +19,17 @@ export function categoryLabel(key: string): string {
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 const num = (v: unknown) => (typeof v === "number" ? String(v) : "?");
-const refName = (v: unknown) => str(v).replace(/^refs\/(heads|tags)\//, "") || "a ref";
+const refName = (v: unknown) =>
+  str(v).replace(/^refs\/(heads|tags)\//, "") || "a ref";
 
 /** A readable sentence for an event; falls back to the raw action. */
 export function describe(e: HistoryEvent): string {
   const d = e.details ?? {};
   switch (e.action) {
     case "session.sign_in":
-      return d.break_glass ? "Signed in with the admin token (break-glass)" : "Signed in";
+      return d.break_glass
+        ? "Signed in with the admin token (break-glass)"
+        : "Signed in";
     case "session.sign_in_failed":
       return "Sign-in failed: wrong admin token";
     case "session.sign_in_denied":
@@ -52,6 +55,10 @@ export function describe(e: HistoryEvent): string {
       return `Created on ${str(d.node)}, copied from ${str(d.from || d.primary)}`;
     case "user.created_on_node":
       return `SceneID user created on ${str(d.node)} (as on ${str(d.from)}), linked on first sign-in`;
+    case "repo.collaborator_granted":
+      return `${str(d.who)} given ${str(d.permission)} access on ${str(d.node)}, as elsewhere`;
+    case "repo.collaborator_removed":
+      return `${str(d.who)} no longer has access on ${str(d.node)}, as elsewhere`;
     case "node.webhook_installed":
       return "ForgeSync's system webhook installed on this node";
     case "repo.renamed_on_primary":
@@ -93,7 +100,9 @@ export function describe(e: HistoryEvent): string {
     case "conflict.cleared":
       return `Conflict cleared: ${kindText(str(d.kind))}`;
     case "conflict.acknowledged":
-      return str(d.note) ? `Acknowledged a conflict: “${str(d.note)}”` : "Acknowledged a conflict";
+      return str(d.note)
+        ? `Acknowledged a conflict: “${str(d.note)}”`
+        : "Acknowledged a conflict";
     case "node.state_changed":
       return `${stateInfo(str(d.from) as NodeState).label} → ${stateInfo(str(d.to) as NodeState).label}`;
     case "history.exported":
@@ -110,8 +119,11 @@ function kindText(kind: string): string {
 /** Where the event's target lives in the UI, if anywhere. */
 export function targetLink(e: HistoryEvent): string | undefined {
   const d = e.details ?? {};
-  if (e.category === "node" && e.target) return `/nodes/${encodeURIComponent(e.target)}`;
-  if (e.category === "conflict" && typeof d.conflict_id === "number") return `/conflicts/${d.conflict_id}`;
-  if (e.category === "repo" && str(d.repository_id)) return `/repositories/${str(d.repository_id)}`;
+  if (e.category === "node" && e.target)
+    return `/nodes/${encodeURIComponent(e.target)}`;
+  if (e.category === "conflict" && typeof d.conflict_id === "number")
+    return `/conflicts/${d.conflict_id}`;
+  if (e.category === "repo" && str(d.repository_id))
+    return `/repositories/${str(d.repository_id)}`;
   return undefined;
 }

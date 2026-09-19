@@ -125,6 +125,10 @@ type Replication struct {
 	// it. The line comments carry because the diff is the same everywhere.
 	// Needs PullRequests; off by default.
 	Reviews bool `yaml:"reviews"`
+	// Collaborators keeps the people a repository is shared with, and what
+	// each may do, the same on every node. It is what lets an assignee be
+	// set on a replica at all. Off by default; it needs no other option.
+	Collaborators bool `yaml:"collaborators"`
 	// ArchiveOrg is the private organization ForgeSync moves the copies of a
 	// repository deleted on its primary into. Default "forgesync-archive".
 	ArchiveOrg string `yaml:"archive_org"`

@@ -160,9 +160,10 @@ func run(configPath string) error {
 			Concurrency: cfg.Replication.Concurrency, EnsureUser: engine.EnsureUser,
 			Reactions: cfg.Replication.Reactions, Attachments: cfg.Replication.Attachments,
 			AttachmentMax: cfg.Replication.AttachmentMaxBytes,
-			PullRequests:  cfg.Replication.PullRequests}, log)
+			PullRequests:  cfg.Replication.PullRequests, Reviews: cfg.Replication.Reviews}, log)
 		log.Info("issue replication enabled", "reactions", cfg.Replication.Reactions,
-			"attachments", cfg.Replication.Attachments, "pull_requests", cfg.Replication.PullRequests)
+			"attachments", cfg.Replication.Attachments, "pull_requests", cfg.Replication.PullRequests,
+			"reviews", cfg.Replication.Reviews)
 	}
 	detector := conflicts.NewDetector(nodeNames, comparers, db, log)
 	detector.ReplicationOwnsPrimaries = engine != nil

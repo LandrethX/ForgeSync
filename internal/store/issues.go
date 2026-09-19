@@ -33,6 +33,8 @@ type IssueRecord struct {
 	// of its files.
 	BaseReactions   string `json:"-"`
 	BaseAttachments string `json:"-"`
+	// BaseReviews is the sorted digests of its reviews (pull requests only).
+	BaseReviews string `json:"-"`
 	// IsPull marks a pull request. HeadBranch and BaseBranch are the
 	// branches it is between, which a copy on another node needs.
 	IsPull     bool                 `json:"is_pull,omitempty"`
@@ -65,7 +67,7 @@ func (s *Store) Issues(ctx context.Context, repositoryID string) ([]IssueRecord,
 	rows, err := s.pool.Query(ctx, `
 		SELECT i.id::text, i.origin_node, i.author, i.created_at, i.base_title, i.base_body, i.base_state, i.deleted_at,
 			i.base_labels, i.base_milestone, i.base_assignees, i.base_reactions, i.base_attachments,
-			i.is_pull, i.head_branch, i.base_branch, c.node, c.number, c.forgejo_id
+			i.is_pull, i.head_branch, i.base_branch, i.base_reviews, c.node, c.number, c.forgejo_id
 		FROM issues i LEFT JOIN issue_copies c ON c.issue_id = i.id
 		WHERE i.repository_id = $1::uuid
 		ORDER BY i.created_at, i.id, c.node`, repositoryID)
@@ -79,7 +81,7 @@ func (s *Store) Issues(ctx context.Context, repositoryID string) ([]IssueRecord,
 		var number, fid *int64
 		if err := rows.Scan(&r.ID, &r.OriginNode, &r.Author, &r.CreatedAt, &r.BaseTitle, &r.BaseBody, &r.BaseState, &r.DeletedAt,
 			&r.BaseLabels, &r.BaseMilestone, &r.BaseAssignees, &r.BaseReactions, &r.BaseAttachments,
-			&r.IsPull, &r.HeadBranch, &r.BaseBranch, &node, &number, &fid); err != nil {
+			&r.IsPull, &r.HeadBranch, &r.BaseBranch, &r.BaseReviews, &node, &number, &fid); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
@@ -139,19 +141,19 @@ func (s *Store) SaveIssue(ctx context.Context, r IssueRecord) (string, error) {
 		err = tx.QueryRow(ctx, `
 			INSERT INTO issues (repository_id, origin_node, author, created_at, base_title, base_body, base_state, deleted_at,
 				base_labels, base_milestone, base_assignees, base_reactions, base_attachments,
-				is_pull, head_branch, base_branch)
-			VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id::text`,
+				is_pull, head_branch, base_branch, base_reviews)
+			VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id::text`,
 			r.RepositoryID, r.OriginNode, r.Author, r.CreatedAt, r.BaseTitle, r.BaseBody, r.BaseState, r.DeletedAt,
 			r.BaseLabels, r.BaseMilestone, r.BaseAssignees, r.BaseReactions, r.BaseAttachments,
-			r.IsPull, r.HeadBranch, r.BaseBranch).Scan(&r.ID)
+			r.IsPull, r.HeadBranch, r.BaseBranch, r.BaseReviews).Scan(&r.ID)
 	} else {
 		_, err = tx.Exec(ctx, `
 			UPDATE issues SET base_title = $2, base_body = $3, base_state = $4, deleted_at = $5,
 				base_labels = $6, base_milestone = $7, base_assignees = $8, base_reactions = $9,
-				base_attachments = $10, updated_at = now()
+				base_attachments = $10, base_reviews = $11, updated_at = now()
 			WHERE id = $1::uuid`,
 			r.ID, r.BaseTitle, r.BaseBody, r.BaseState, r.DeletedAt, r.BaseLabels, r.BaseMilestone, r.BaseAssignees,
-			r.BaseReactions, r.BaseAttachments)
+			r.BaseReactions, r.BaseAttachments, r.BaseReviews)
 	}
 	if err != nil {
 		return "", err

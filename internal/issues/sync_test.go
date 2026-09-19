@@ -49,6 +49,11 @@ type fakeNode struct {
 	// node has; a copy is only opened once both of a pull request's are.
 	pulls    map[int64]*forgejo.PullRequest
 	branches map[string]bool
+	// reviews are the submitted reviews by pull request number, with their
+	// line comments. refusesReview is a reviewer the node won't take.
+	reviews       map[int64][]*fakeReview
+	nextReview    int64
+	refusesReview string
 }
 
 // fakeFile is one attachment on the node.
@@ -68,6 +73,7 @@ func newFakeNode(name string) *fakeNode {
 		commentFile:      map[int64][]*fakeFile{},
 		pulls:            map[int64]*forgejo.PullRequest{},
 		branches:         map[string]bool{"main": true},
+		reviews:          map[int64][]*fakeReview{},
 		nextID:           map[string]int64{"se": 1000, "dk": 2000, "de": 3000}[name], clock: time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)}
 }
 
@@ -237,6 +243,102 @@ func (a fakeAPI) CreatePullRequest(_ context.Context, _, _ string, opt forgejo.C
 	a.n.pulls[is.Number] = pr
 	a.n.writes = append(a.n.writes, "open pull request "+opt.Title+" as "+a.as)
 	return *pr, nil
+}
+
+// fakeReview is a submitted review on the node.
+type fakeReview struct {
+	head     forgejo.PullReview
+	comments []forgejo.PullReviewComment
+}
+
+// reviewOn is someone submitting a review on the node.
+func (f *fakeNode) reviewOn(number int64, who, state, body string, lines ...[2]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.addReview(number, who, forgejo.NewReview{Event: state, Body: body, CommitID: "c0ffee",
+		Comments: reviewComments(lines)})
+}
+
+func reviewComments(lines [][2]string) []forgejo.NewReviewComment {
+	var out []forgejo.NewReviewComment
+	for i, l := range lines {
+		out = append(out, forgejo.NewReviewComment{Path: l[0], Body: l[1], NewLine: int64(i + 1)})
+	}
+	return out
+}
+
+func (f *fakeNode) addReview(number int64, who string, r forgejo.NewReview) *fakeReview {
+	f.nextReview++
+	v := &fakeReview{head: forgejo.PullReview{ID: f.nextReview, Reviewer: &forgejo.User{Login: who},
+		State: r.Event, Body: r.Body, CommitID: r.CommitID, Comments: len(r.Comments)}}
+	for i, c := range r.Comments {
+		v.comments = append(v.comments, forgejo.PullReviewComment{ID: f.nextReview*100 + int64(i),
+			Body: c.Body, Path: c.Path, Line: c.NewLine, OldLine: c.OldLine, Extra: c.Extra,
+			Poster: &forgejo.User{Login: who}})
+	}
+	f.reviews[number] = append(f.reviews[number], v)
+	return v
+}
+
+// reviewsOnPull is what a pull request's reviews say on the node, sorted.
+func (f *fakeNode) reviewsOnPull(number int64) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, v := range f.reviews[number] {
+		parts := []string{v.head.Reviewer.Login + " " + v.head.State + " " + v.head.Body}
+		for _, c := range v.comments {
+			parts = append(parts, fmt.Sprintf("%s:%d %s", c.Path, c.Line, c.Body))
+		}
+		out = append(out, strings.Join(parts, " / "))
+	}
+	sort.Strings(out)
+	return strings.Join(out, " | ")
+}
+
+func (a fakeAPI) PullReviews(_ context.Context, _, _ string, number int64) ([]forgejo.PullReview, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	var out []forgejo.PullReview
+	for _, v := range a.n.reviews[number] {
+		out = append(out, v.head)
+	}
+	return out, nil
+}
+
+func (a fakeAPI) PullReviewComments(_ context.Context, _, _ string, number, id int64) ([]forgejo.PullReviewComment, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	for _, v := range a.n.reviews[number] {
+		if v.head.ID == id {
+			return v.comments, nil
+		}
+	}
+	return nil, nil
+}
+
+func (a fakeAPI) CreatePullReview(_ context.Context, _, _ string, number int64, r forgejo.NewReview) (forgejo.PullReview, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	if a.as == a.n.refusesReview {
+		return forgejo.PullReview{}, fmt.Errorf("%s can't review on %s", a.as, a.n.name)
+	}
+	v := a.n.addReview(number, a.as, r)
+	a.n.writes = append(a.n.writes, "review "+r.Event+" as "+a.as)
+	return v.head, nil
+}
+
+func (a fakeAPI) DeletePullReview(_ context.Context, _, _ string, number, id int64) error {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	for i, v := range a.n.reviews[number] {
+		if v.head.ID == id {
+			a.n.reviews[number] = append(a.n.reviews[number][:i], a.n.reviews[number][i+1:]...)
+			break
+		}
+	}
+	a.n.writes = append(a.n.writes, "delete review")
+	return nil
 }
 
 // openPull is someone opening a pull request on the node.

@@ -23,6 +23,10 @@ type API interface {
 	CreatePullRequest(ctx context.Context, owner, repo string, opt forgejo.CreatePullRequestOption) (forgejo.PullRequest, error)
 	BranchExists(ctx context.Context, owner, repo, branch string) (bool, error)
 	Issue(ctx context.Context, owner, repo string, number int64) (forgejo.Issue, bool, error)
+	PullReviews(ctx context.Context, owner, repo string, number int64) ([]forgejo.PullReview, error)
+	PullReviewComments(ctx context.Context, owner, repo string, number, review int64) ([]forgejo.PullReviewComment, error)
+	CreatePullReview(ctx context.Context, owner, repo string, number int64, r forgejo.NewReview) (forgejo.PullReview, error)
+	DeletePullReview(ctx context.Context, owner, repo string, number, review int64) error
 	ListRepoComments(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.IssueComment, error)
 	CreateIssue(ctx context.Context, owner, repo, title, body string, closed bool, labels []int64, milestone int64,
 		assignees []string) (forgejo.Issue, error)
@@ -108,6 +112,10 @@ type Options struct {
 	// different merge commits. A copy is opened on a node only once the
 	// branches it is between are there.
 	PullRequests bool
+	// Reviews also replicates what people said about a pull request's diff:
+	// each submitted review with its line comments. Needs PullRequests, and
+	// costs a listing per pull request per node plus one per review.
+	Reviews bool
 	// EnsureUser makes an author exist on a node as on another, as for
 	// repository owners (replication.Engine.EnsureUser). nil: authors must
 	// exist already.
@@ -230,6 +238,9 @@ type snapshot struct {
 	// between and whether they have been merged, which the issue listing
 	// doesn't carry. Empty unless Options.PullRequests.
 	pulls map[int64]forgejo.PullRequest
+	// reviews are each pull request's submitted reviews by member, by the
+	// pull request's number here. Empty unless Options.Reviews.
+	reviews map[int64]map[string]review
 }
 
 func (s *Syncer) read(ctx context.Context, n Node, owner, name string) (*snapshot, error) {
@@ -300,6 +311,11 @@ func (s *Syncer) read(ctx context.Context, n Node, owner, name string) (*snapsho
 			}
 			if len(list) < pageSize {
 				break
+			}
+		}
+		if s.opts.Reviews {
+			if err := s.readReviews(ctx, n, owner, name, sn); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -413,6 +429,34 @@ func (s *Syncer) reactionsOf(ctx context.Context, n Node, owner, name string, id
 			return set, nil
 		}
 	}
+}
+
+// readReviews adds every pull request's submitted reviews, with their line
+// comments, to the snapshot.
+func (s *Syncer) readReviews(ctx context.Context, n Node, owner, name string, sn *snapshot) error {
+	sn.reviews = make(map[int64]map[string]review, len(sn.pulls))
+	for number := range sn.pulls {
+		heads, err := n.API.PullReviews(ctx, owner, name, number)
+		if err != nil {
+			return err
+		}
+		var list []review
+		for _, h := range heads {
+			v := review{head: h}
+			if !submitted(v) {
+				continue
+			}
+			if h.Comments > 0 {
+				v.comments, err = n.API.PullReviewComments(ctx, owner, name, number, h.ID)
+				if err != nil {
+					return err
+				}
+			}
+			list = append(list, v)
+		}
+		sn.reviews[number] = reviewsOn(list)
+	}
+	return nil
 }
 
 func (s *Syncer) attachmentsOf(ctx context.Context, n Node, owner, name string, id, number int64, comment bool) (map[string]forgejo.Attachment, error) {
@@ -946,6 +990,24 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 	}
 	if rec.IsPull {
 		r.followPullState(ctx, rec, ref, present)
+		if r.s.opts.Reviews {
+			at := map[string]map[string]review{}
+			for n, c := range rec.Copies {
+				at[n] = r.snaps[n].reviews[c.Number]
+				if at[n] == nil {
+					at[n] = map[string]review{} // a copy just opened
+				}
+			}
+			rec.BaseReviews = r.syncReviews(ctx, ref, source, rec.BaseReviews, at, reviewer{
+				submit: func(ctx context.Context, n, as string, v review) error {
+					_, err := r.s.nodes[n].As(as).CreatePullReview(ctx, r.owner, r.name, rec.Copies[n].Number, asNew(v))
+					return err
+				},
+				remove: func(ctx context.Context, n string, v review) error {
+					return r.s.nodes[n].API.DeletePullReview(ctx, r.owner, r.name, rec.Copies[n].Number, v.head.ID)
+				},
+			})
+		}
 	}
 	// Reactions last, so a copy made in this run gets them too.
 	if r.s.opts.Reactions {

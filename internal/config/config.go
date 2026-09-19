@@ -120,6 +120,11 @@ type Replication struct {
 	// only once the branches it is between are there. Off by default, and
 	// it needs Issues.
 	PullRequests bool `yaml:"pull_requests"`
+	// Reviews also replicates what people said about a pull request's diff:
+	// each submitted review with its line comments, as the person who wrote
+	// it. The line comments carry because the diff is the same everywhere.
+	// Needs PullRequests; off by default.
+	Reviews bool `yaml:"reviews"`
 	// ArchiveOrg is the private organization ForgeSync moves the copies of a
 	// repository deleted on its primary into. Default "forgesync-archive".
 	ArchiveOrg string `yaml:"archive_org"`
@@ -398,6 +403,9 @@ func (c *Config) validate() error {
 	}
 	if c.Replication.PullRequests && !c.Replication.Issues {
 		errs = append(errs, errors.New("replication.pull_requests needs replication.issues"))
+	}
+	if c.Replication.Reviews && !c.Replication.PullRequests {
+		errs = append(errs, errors.New("replication.reviews needs replication.pull_requests"))
 	}
 	if c.Replication.AttachmentMaxBytes < 0 {
 		errs = append(errs, errors.New("replication.attachment_max_bytes must not be negative"))

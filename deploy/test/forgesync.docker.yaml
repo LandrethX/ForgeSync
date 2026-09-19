@@ -60,6 +60,8 @@ replication:
   # per node, which the test environment is small enough for.
   reactions: true
   attachments: true
-  # Pull requests too: their conversation, never their state.
+  # Pull requests too: their conversation, never their state, and what
+  # people said about the diff.
   pull_requests: true
+  reviews: true
   work_dir: /var/lib/forgesync/git

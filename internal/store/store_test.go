@@ -952,6 +952,7 @@ func TestRepoItems(t *testing.T) {
 	issue, err := s.SaveIssue(ctx, IssueRecord{RepositoryID: repo, OriginNode: "se", Author: "bob", CreatedAt: t0,
 		BaseTitle: "t", BaseState: "open", BaseLabels: label, BaseMilestone: milestone, BaseAssignees: "alice,bob",
 		BaseReactions: "alice:+1,bob:heart", BaseAttachments: "14:note.txt",
+		IsPull: true, HeadBranch: "topic/x", BaseBranch: "main", BaseReviews: "0123456789abcdef",
 		Copies: map[string]IssueCopy{"se": {Number: 1, ForgejoID: 10}}})
 	if err != nil {
 		t.Fatal(err)
@@ -959,7 +960,9 @@ func TestRepoItems(t *testing.T) {
 	issues, _, _ := s.Issues(ctx, repo)
 	if len(issues) != 1 || issues[0].BaseLabels != label || issues[0].BaseMilestone != milestone ||
 		issues[0].BaseAssignees != "alice,bob" || issues[0].BaseReactions != "alice:+1,bob:heart" ||
-		issues[0].BaseAttachments != "14:note.txt" {
+		issues[0].BaseAttachments != "14:note.txt" || !issues[0].IsPull ||
+		issues[0].HeadBranch != "topic/x" || issues[0].BaseBranch != "main" ||
+		issues[0].BaseReviews != "0123456789abcdef" {
 		t.Errorf("issue = %+v", issues)
 	}
 	// A comment keeps its own reactions.

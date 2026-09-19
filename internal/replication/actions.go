@@ -72,11 +72,21 @@ func (e *Engine) syncActions(ctx context.Context, rec store.RepositoryRecord, he
 			continue
 		}
 		vars, err := e.nodes[n].API.ActionVariables(ctx, owner, name)
+		if forgejo.IsNotFound(err) {
+			// Actions are turned off for this repository on this node,
+			// which is a node's own decision (has_actions isn't
+			// replicated, see metadata.go). Nothing to compare, and
+			// nothing worth saying every round.
+			continue
+		}
 		if err != nil {
 			e.log.Warn("actions: reading the variables failed", "repository", rec.FullName, "node", n, "error", err)
 			continue
 		}
 		secs, err := e.nodes[n].API.ActionSecrets(ctx, owner, name)
+		if forgejo.IsNotFound(err) {
+			continue
+		}
 		if err != nil {
 			e.log.Warn("actions: reading the secrets failed", "repository", rec.FullName, "node", n, "error", err)
 			continue

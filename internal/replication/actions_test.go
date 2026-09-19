@@ -226,3 +226,27 @@ func TestUnhealthyNodeDoesNotRemoveVariables(t *testing.T) {
 		}
 	}
 }
+
+// Actions can be turned off for a repository on a node, which is that
+// node's decision (has_actions isn't replicated). The endpoints then
+// answer 404, which is an answer -- "there are none here" -- not a
+// failure worth a warning every round.
+func TestANodeWithActionsOffIsSkippedQuietly(t *testing.T) {
+	e, st, apis := actionsSetup(t)
+	ctx := context.Background()
+	rec, _ := st.Repository(ctx, st.rec.ID)
+	apis["se"].vars["REGION"] = "europe"
+	apis["de"].actionsOff = true
+
+	e.syncActions(ctx, rec, allHealthy)
+
+	if got := vars(apis["dk"]); got != "REGION=europe" {
+		t.Errorf("dk: %q", got)
+	}
+	if got := vars(apis["de"]); got != "" {
+		t.Errorf("de was written to although Actions are off there: %q", got)
+	}
+	if len(st.found) != 0 {
+		t.Errorf("a node with Actions off became a conflict: %+v", st.found)
+	}
+}

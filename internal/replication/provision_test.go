@@ -44,9 +44,12 @@ type fakeAPI struct {
 	// topics its repositories' topics.
 	rules  map[string]forgejo.BranchProtection
 	topics map[string][]string
-	// vars are this node's Actions variables and secrets its secret names.
-	vars    map[string]string
-	secrets []string
+	// vars are this node's Actions variables and secrets its secret names;
+	// actionsOff makes the node answer as one with Actions turned off for
+	// the repository, which is a 404 from those endpoints.
+	vars       map[string]string
+	secrets    []string
+	actionsOff bool
 	// releases are what this node has published, with the bytes of their
 	// files; tags are the tags it has; name and as identify it and who it
 	// is acting as.
@@ -147,6 +150,9 @@ func (f *fakeAPI) DeletePackage(_ context.Context, owner, typ, name, version str
 func (f *fakeAPI) ActionVariables(_ context.Context, _, _ string) ([]forgejo.ActionVariable, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.actionsOff {
+		return nil, &forgejo.APIError{StatusCode: http.StatusNotFound, Message: "The target couldn't be found."}
+	}
 	var out []forgejo.ActionVariable
 	for name, data := range f.vars {
 		out = append(out, forgejo.ActionVariable{Name: name, Data: data})
@@ -186,6 +192,9 @@ func (f *fakeAPI) DeleteActionVariable(_ context.Context, _, _, name string) err
 func (f *fakeAPI) ActionSecrets(_ context.Context, _, _ string) ([]forgejo.ActionSecret, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.actionsOff {
+		return nil, &forgejo.APIError{StatusCode: http.StatusNotFound, Message: "The target couldn't be found."}
+	}
 	var out []forgejo.ActionSecret
 	for _, name := range f.secrets {
 		out = append(out, forgejo.ActionSecret{Name: name})

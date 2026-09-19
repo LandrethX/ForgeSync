@@ -19,7 +19,7 @@ the SVGs with a headless browser; see the comment at the end.
 # The ForgeSync mark: two mitred ribbons passing each other, drawn the way
 # SceneGit's is -- flat, 45 degree cuts, a thin line running with the thick
 # one. The favicon leaves the thin lines out, which don't survive 16px.
-LIGHT, DARK = "#2a4d7f", "#6d9be0"
+LIGHT, DARK = "#f66d10", "#f66d10"   # SceneGit's orange, the family colour
 
 T = 56       # ribbon thickness
 H = D = 88   # arrowhead: half-height, and reach (45 degree faces)
@@ -68,7 +68,8 @@ open(os.path.join(public, "logo.svg"), "w").write(svg(True, 24))
 open(os.path.join(public, "favicon.svg"), "w").write(svg(False, 14))
 print("wrote logo.svg and favicon.svg")
 
-# favicon.png (32) and apple-touch-icon.png (180, on a solid tile, since
-# iOS puts nothing behind it) are rasterised from these, e.g. with
+# favicon.png (32, transparent) and apple-touch-icon.png (180, on the dark
+# tile, since iOS puts nothing behind it and the orange carries best on
+# near-black) are rasterised from these, e.g. with
 # Playwright's Chromium or rsvg-convert. They only need redoing when the
 # geometry above changes.

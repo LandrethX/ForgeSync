@@ -14,6 +14,9 @@
   --text-muted: #6b6b66;
   --accent: #2a4d7f;
   --accent-text: #ffffff;
+  /* SceneGit's orange: the family colour, for the mark and the name. It
+     is brand, not chrome, and never carries meaning on its own. */
+  --brand: #f66d10;
   --link: #24508f;
   --focus: #2f6fd1;
 
@@ -640,7 +643,7 @@ td.details {
 }
 
 .wordmark span {
-  color: var(--accent);
+  color: var(--brand);
 }
 
 .login-card {

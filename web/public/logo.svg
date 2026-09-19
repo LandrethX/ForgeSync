@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="-220 -220 440 440" role="img" aria-label="ForgeSync">
 <style>
   /* The mark follows the page it sits on; --accent in the admin UI. */
-  svg { --mark: #2a4d7f }
-  @media (prefers-color-scheme: dark) { svg { --mark: #6d9be0 } }
+  svg { --mark: #f66d10 }
+  @media (prefers-color-scheme: dark) { svg { --mark: #f66d10 } }
 </style>
 <g fill="var(--mark)">
   <g transform="translate(0,-74)"><path d="M-124.0,-28.0 L92.0,-28.0 L92.0,-88.0 L180.0,0.0 L92.0,88.0 L92.0,28.0 L-180.0,28.0 Z"/><path d="M-50.0,-62.0 L58.0,-62.0 L44.0,-48.0 L-64.0,-48.0 Z"/></g>

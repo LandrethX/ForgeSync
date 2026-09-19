@@ -54,6 +54,16 @@ type Options struct {
 	// failover takes. Renew is how often the leader renews it.
 	TTL   time.Duration
 	Renew time.Duration
+	// Yield, if set, is asked on every renewal while this controller is
+	// leading whether it should hand the lease over: a controller meant to
+	// lead is back, and this one only took it because that one was away.
+	// It gives the lease up and waits a lease's length before taking part
+	// again, which is long enough for the other to take it.
+	//
+	// Leadership itself doesn't depend on this -- a controller that never
+	// yields is still correct, just not the preferred one -- so a failure
+	// to work out the answer simply means not yielding.
+	Yield func(ctx context.Context) bool
 }
 
 // State is what this controller can say about leadership.
@@ -80,6 +90,9 @@ type Elector struct {
 	// until is when our lease runs out, on this machine's clock. Leadership
 	// is this and nothing else: if we can't renew, it passes and we stop.
 	until time.Time
+	// quiet is when this controller may take part again after handing the
+	// lease over, so the one it yielded to has time to take it.
+	quiet time.Time
 	state State
 	subs  map[chan struct{}]struct{}
 }
@@ -127,6 +140,12 @@ func (e *Elector) Run(ctx context.Context) {
 }
 
 func (e *Elector) once(ctx context.Context) {
+	e.mu.RLock()
+	quiet := e.quiet
+	e.mu.RUnlock()
+	if e.now().Before(quiet) {
+		return // just handed over; let the other one take it
+	}
 	// The call itself must not outlive the lease: a renewal that answers
 	// after the lease has run out tells us nothing.
 	cctx, cancel := context.WithTimeout(ctx, e.opts.TTL)
@@ -162,6 +181,26 @@ func (e *Elector) once(ctx context.Context) {
 		e.log.Info("leadership taken", "controller", e.opts.Name, "for", lease.For().Round(time.Second))
 	case !now && was:
 		e.log.Warn("leadership lost", "controller", e.opts.Name, "holder", lease.Name)
+	}
+	e.notify()
+	if e.Leading() && e.opts.Yield != nil && e.opts.Yield(ctx) {
+		e.handOver(ctx)
+	}
+}
+
+// handOver gives the lease up for a controller that should have it, and
+// keeps this one out of the election for a lease's length so that one can
+// take it rather than this one taking it straight back.
+func (e *Elector) handOver(ctx context.Context) {
+	e.log.Info("leadership handed over: a controller that should lead is back", "controller", e.opts.Name)
+	e.mu.Lock()
+	e.until = time.Time{}
+	e.quiet = e.now().Add(e.opts.TTL)
+	e.mu.Unlock()
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := e.store.ReleaseLease(rctx, e.opts.Holder); err != nil {
+		e.log.Warn("leadership: giving the lease up failed; it runs out on its own", "error", err)
 	}
 	e.notify()
 }

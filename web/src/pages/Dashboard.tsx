@@ -1,5 +1,12 @@
-import { useEffect, useMemo } from "react";
-import { api, type Controller, type Node, type Overview } from "../api";
+import { useEffect, useMemo, useState } from "react";
+import {
+  ApiError,
+  api,
+  hasRole,
+  type Controller,
+  type Node,
+  type Overview,
+} from "../api";
 import { ErrorNote, PageHeader } from "../components/Layout";
 import {
   StatusBadge,
@@ -8,7 +15,7 @@ import {
   type Tone,
 } from "../components/StatusBadge";
 import { formatAgo, formatDateTime, formatDuration } from "../format";
-import { useLoad, useNodes, useNow } from "../hooks";
+import { useLoad, useNodes, useNow, useSession } from "../hooks";
 import { Link } from "../router";
 
 /** How this controller describes itself: single, leading or standing by. */
@@ -66,13 +73,89 @@ const CONTROLLER_ROLE: Record<
  * come from, so it's the controller's real one rather than what it
  * believes about itself.
  */
-function Controllers({ list, now }: { list: Controller[]; now: number }) {
+function Controllers({
+  list,
+  chosen,
+  now,
+  onChanged,
+}: {
+  list: Controller[];
+  chosen?: Overview["chosen"];
+  now: number;
+  onChanged: () => void;
+}) {
+  const session = useSession();
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState<string>();
+  const [message, setMessage] = useState<string>();
+  const canChoose = hasRole(session, "administrator");
+
+  // Choosing writes who should lead; the leader reads it on its next
+  // renewal and steps aside, so the change lands within a lease.
+  async function choose(name: string) {
+    setBusy(name);
+    setError(undefined);
+    setMessage(undefined);
+    try {
+      setMessage((await api.chooseLeader(name)).message);
+      onChanged();
+    } catch (e) {
+      setError(
+        e instanceof ApiError ? e.message : "Couldn't ask for the change.",
+      );
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function clear() {
+    setBusy("clear");
+    setError(undefined);
+    setMessage(undefined);
+    try {
+      setMessage((await api.clearLeaderChoice()).message);
+      onChanged();
+    } catch (e) {
+      setError(
+        e instanceof ApiError ? e.message : "Couldn't clear the choice.",
+      );
+    } finally {
+      setBusy("");
+    }
+  }
+
   if (list.length === 0) return null;
   return (
     <section aria-labelledby="controllers-heading">
       <div className="section-header">
         <h2 id="controllers-heading">Sync controllers</h2>
+        {canChoose && chosen?.controller && (
+          <button
+            type="button"
+            className="button-quiet"
+            onClick={clear}
+            disabled={busy !== ""}
+          >
+            {busy === "clear"
+              ? "Clearing…"
+              : "Follow the configured order again"}
+          </button>
+        )}
       </div>
+      {chosen?.controller && (
+        <p className="muted">
+          {chosen.controller} was chosen to lead
+          {chosen.chosen_by ? ` by ${chosen.chosen_by}` : ""}
+          {chosen.chosen_at ? `, ${formatAgo(chosen.chosen_at, now)}` : ""}. It
+          keeps the work until someone chooses another or clears this.
+        </p>
+      )}
+      {error && <ErrorNote message={error} />}
+      {message && (
+        <p className="muted" role="status">
+          {message}
+        </p>
+      )}
       <div className="cards">
         {list.map((c) => {
           const role = CONTROLLER_ROLE[c.role] ?? CONTROLLER_ROLE.unknown;
@@ -83,15 +166,34 @@ function Controllers({ list, now }: { list: Controller[]; now: number }) {
                   {c.name}
                   {c.self && <span className="muted"> · this one</span>}
                 </h3>
+                {c.chosen ? (
+                  <span
+                    className="chip"
+                    title="An administrator asked for this one"
+                  >
+                    Chosen
+                  </span>
+                ) : (
+                  c.preferred && (
+                    <span
+                      className="chip"
+                      title="Configured to lead whenever it's running"
+                    >
+                      Preferred
+                    </span>
+                  )
+                )}
                 <span className={`status-badge tone-${role.tone}`}>
                   <StatusIcon tone={role.tone} />
                   <span>{role.label}</span>
                 </span>
               </div>
               <dl className="card-rows">
-                <dt>Address</dt>
-                <dd className="mono">{c.address || "–"}</dd>
-                <dt>URL</dt>
+                <dt>Connects from</dt>
+                <dd className="mono" title="The address the database sees">
+                  {c.address || "–"}
+                </dd>
+                <dt>Reached at</dt>
                 <dd>
                   {c.url ? (
                     <a href={c.url} target="_blank" rel="noreferrer noopener">
@@ -109,6 +211,21 @@ function Controllers({ list, now }: { list: Controller[]; now: number }) {
                 </dd>
               </dl>
               <p className="tile-note">{role.note}</p>
+              {canChoose && c.role !== "leader" && (
+                <button
+                  type="button"
+                  className="button-quiet"
+                  onClick={() => choose(c.name)}
+                  disabled={busy !== "" || c.role === "unknown"}
+                  title={
+                    c.role === "unknown"
+                      ? "It hasn't checked in lately; nothing would happen"
+                      : `Ask ${c.name} to take the work over from the leader`
+                  }
+                >
+                  {busy === c.name ? "Asking…" : "Make this the leader"}
+                </button>
+              )}
             </article>
           );
         })}
@@ -236,7 +353,12 @@ export function Dashboard() {
       )}
 
       {overview.data && overview.data.controllers !== undefined && (
-        <Controllers list={overview.data.controllers} now={now} />
+        <Controllers
+          list={overview.data.controllers}
+          chosen={overview.data.chosen}
+          now={now}
+          onChanged={reloadOverview}
+        />
       )}
 
       <section aria-labelledby="nodes-heading">

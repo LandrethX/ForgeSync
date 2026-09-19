@@ -10,6 +10,10 @@
 # second one (forgesync-b) from this file; see README.md.
 controller:
   name: forgesync-a
+  # The one meant to be acting: lower leads. forgesync-b is 2, so if it
+  # took over while this one was away, it hands the lease back when this
+  # one returns instead of the pair settling on whoever started first.
+  priority: 1
   url: http://forgesync.test:8090
   # Short for the test environment, so a failover is quick to watch.
   lease: 10s

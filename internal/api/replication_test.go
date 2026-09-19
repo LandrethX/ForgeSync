@@ -175,3 +175,57 @@ func TestOverviewListsEveryController(t *testing.T) {
 		t.Errorf("no address: %+v", out.Controllers[0])
 	}
 }
+
+// Promoting is asked of whichever controller a person is looking at,
+// which is usually the standby: it writes the choice, and the leader
+// steps aside of its own accord.
+func TestChoosingWhichControllerLeads(t *testing.T) {
+	f, admin := sessionAs(t, auth.Administrator)
+	f.srv.ControllerName = "forgesync-b"
+	f.srv.Leader = &fakeLeader{leader.State{Leading: false, Name: "forgesync-a"}}
+	now := time.Now()
+	f.db.controllers = []store.ControllerRecord{
+		{Name: "forgesync-a", Priority: 1, LastSeenAt: now},
+		{Name: "forgesync-b", Priority: 2, LastSeenAt: now},
+	}
+
+	// A standby answers this one even though it turns away every other write.
+	rec := f.do(req{method: "PUT", path: "/api/v1/leadership", cookie: admin, csrf: true,
+		body: `{"controller":"forgesync-b"}`})
+	if rec.Code != 200 {
+		t.Fatalf("PUT leadership on a standby = %d %s", rec.Code, rec.Body)
+	}
+	if f.db.chosen.Controller != "forgesync-b" {
+		t.Fatalf("chosen = %+v", f.db.chosen)
+	}
+	if !audited(f, "leadership.chosen") {
+		t.Error("not audited")
+	}
+	// The overview says so, and marks the card.
+	body := f.do(req{path: "/api/v1/overview", cookie: admin}).Body.String()
+	if !strings.Contains(body, `"chosen":{"controller":"forgesync-b"`) {
+		t.Errorf("overview = %s", body)
+	}
+
+	// A name nobody has heard of is refused rather than written down.
+	rec = f.do(req{method: "PUT", path: "/api/v1/leadership", cookie: admin, csrf: true,
+		body: `{"controller":"forgesync-z"}`})
+	if rec.Code != 400 {
+		t.Errorf("unknown controller = %d %s", rec.Code, rec.Body)
+	}
+
+	// Clearing it goes back to the configured order.
+	if rec := f.do(req{method: "DELETE", path: "/api/v1/leadership", cookie: admin, csrf: true}); rec.Code != 200 {
+		t.Fatalf("DELETE = %d %s", rec.Code, rec.Body)
+	}
+	if f.db.chosen.Controller != "" {
+		t.Errorf("still chosen: %+v", f.db.chosen)
+	}
+
+	// It's an Administrator's decision.
+	g, op := sessionAs(t, auth.Operator)
+	if rec := g.do(req{method: "PUT", path: "/api/v1/leadership", cookie: op, csrf: true,
+		body: `{"controller":"forgesync-a"}`}); rec.Code != 403 {
+		t.Errorf("as operator = %d", rec.Code)
+	}
+}

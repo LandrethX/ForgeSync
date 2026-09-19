@@ -52,6 +52,9 @@ type DB interface {
 	ReplicationCounts(ctx context.Context) (map[string]int, error)
 	SourcePairs(ctx context.Context) ([]store.SourcePair, error)
 	Controllers(ctx context.Context) ([]store.ControllerRecord, error)
+	Chosen(ctx context.Context) (store.LeadershipChoice, error)
+	Choose(ctx context.Context, controller, by string) error
+	ClearChoice(ctx context.Context) error
 	History(ctx context.Context, f store.EventFilter) ([]store.Event, string, error)
 	HistoryEach(ctx context.Context, f store.EventFilter, max int, fn func(store.Event) error) error
 	HistoryActors(ctx context.Context) ([]string, error)
@@ -179,6 +182,16 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/conflicts", s.listConflicts)
 				r.Get("/conflicts/{id}", s.getConflict)
 			})
+			// Choosing which controller leads is asked of whichever one a
+			// person is looking at -- usually the standby, since that's
+			// where someone goes to promote it -- so it isn't behind
+			// requireLeader. It writes the choice and nothing else; the
+			// leader reads it and steps aside of its own accord.
+			r.Group(func(r chi.Router) {
+				r.Use(requireRole(auth.Administrator))
+				r.Put("/leadership", s.chooseLeader)
+				r.Delete("/leadership", s.clearLeaderChoice)
+			})
 			// Writes belong to the controller that's acting; see requireLeader.
 			r.Group(func(r chi.Router) {
 				r.Use(s.requireLeader)
@@ -282,6 +295,8 @@ type Overview struct {
 	// Controllers is every controller sharing this database, with the one
 	// that is acting marked. It's empty when the database can't be read.
 	Controllers []ControllerInfo `json:"controllers"`
+	// Chosen is the controller an administrator asked to lead, if any.
+	Chosen *store.LeadershipChoice `json:"chosen,omitempty"`
 }
 
 // ControllerInfo is one ForgeSync controller, for the dashboard: where it
@@ -294,6 +309,14 @@ type ControllerInfo struct {
 	// Role is "leader" (doing the work), "standby" (ready to take over),
 	// or "unknown" when the controller hasn't been heard from lately.
 	Role string `json:"role"`
+	// Preferred marks the controller meant to lead whenever it's running:
+	// the lowest priority among those configured with one.
+	Preferred bool `json:"preferred,omitempty"`
+	// Chosen marks the controller an administrator asked to lead, which
+	// beats the configured priority until it's cleared.
+	Chosen bool `json:"chosen,omitempty"`
+	// Priority is what was configured; 0 means no preference.
+	Priority int `json:"priority,omitempty"`
 	// Self marks the controller answering this request.
 	Self       bool      `json:"self"`
 	StartedAt  time.Time `json:"started_at"`
@@ -391,6 +414,14 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		o.Nodes["total"]++
 	}
 	o.Controllers = s.controllers(ctx, o.Leader)
+	if chosen, err := s.DB.Chosen(ctx); err != nil {
+		s.Log.Warn("reading the chosen controller failed", "error", err)
+	} else if chosen.Controller != "" {
+		o.Chosen = &chosen
+		for i := range o.Controllers {
+			o.Controllers[i].Chosen = o.Controllers[i].Name == chosen.Controller
+		}
+	}
 	writeJSON(w, http.StatusOK, o)
 }
 
@@ -403,6 +434,13 @@ func (s *Server) controllers(ctx context.Context, leading *LeaderInfo) []Control
 	if err != nil {
 		s.Log.Warn("listing controllers failed", "error", err)
 		return []ControllerInfo{}
+	}
+	// The preferred one is the lowest priority anybody configured.
+	best := 0
+	for _, c := range recs {
+		if c.Priority > 0 && (best == 0 || c.Priority < best) {
+			best = c.Priority
+		}
 	}
 	out := make([]ControllerInfo, 0, len(recs))
 	for _, c := range recs {
@@ -420,6 +458,8 @@ func (s *Server) controllers(ctx context.Context, leading *LeaderInfo) []Control
 		if s.ControllerName != "" && c.Name == s.ControllerName {
 			info.Self = true
 		}
+		info.Priority = c.Priority
+		info.Preferred = c.Priority > 0 && c.Priority == best
 		out = append(out, info)
 	}
 	return out

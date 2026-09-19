@@ -192,3 +192,55 @@ func TestSupervisorRunsWorkOnlyWhileLeading(t *testing.T) {
 		t.Fatal("the work kept going after the lease was lost")
 	}
 }
+
+// A controller that took the lease while the preferred one was away hands
+// it back when that one returns: someone has to decide which of two
+// healthy controllers acts, and "whoever started first" isn't a decision
+// anyone made.
+func TestTheStandbyHandsBackToThePreferredController(t *testing.T) {
+	f := &fakeLease{now: time.Now()}
+	clock := f.now
+	yield := true
+	b := newElector(f, "bbb", "forgesync-b", &clock)
+	b.opts.Yield = func(context.Context) bool { return yield }
+
+	// b is alone, so it leads.
+	yield = false
+	b.once(context.Background())
+	if !b.Leading() {
+		t.Fatal("the only controller didn't take the lease")
+	}
+
+	// a comes back: b gives the lease up and stays out of the election
+	// for a lease's length, so a can take it rather than b taking it back.
+	yield = true
+	b.once(context.Background())
+	if b.Leading() {
+		t.Fatal("it kept the lease")
+	}
+	b.once(context.Background())
+	if b.Leading() {
+		t.Error("it took the lease straight back instead of waiting")
+	}
+
+	// a takes it during that window, which is the point of the wait: the
+	// lease was given up, not left to run out.
+	a := newElector(f, "aaa", "forgesync-a", &clock)
+	a.once(context.Background())
+	if !a.Leading() {
+		t.Fatal("the preferred controller couldn't take the lease")
+	}
+
+	// Once the window has passed, b takes part again but finds it held.
+	clock = clock.Add(20 * time.Second)
+	f.tick(20 * time.Second)
+	yield = false
+	a.once(context.Background()) // a renews
+	b.once(context.Background())
+	if b.Leading() {
+		t.Error("b took the lease from a controller that was renewing it")
+	}
+	if !a.Leading() {
+		t.Error("a lost the lease it was renewing")
+	}
+}

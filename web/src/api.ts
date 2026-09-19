@@ -353,6 +353,8 @@ export interface Overview {
   };
   /** Every controller sharing this database, with the one that is acting. */
   controllers?: Controller[];
+  /** The controller an administrator asked to lead, if anyone has. */
+  chosen?: { controller: string; chosen_by?: string; chosen_at?: string };
 }
 
 /** One ForgeSync controller: where it is and what it's doing. */
@@ -366,6 +368,12 @@ export interface Controller {
   role: "leader" | "standby" | "unknown";
   /** True for the controller answering this request. */
   self: boolean;
+  /** The controller meant to lead whenever it's running. */
+  preferred?: boolean;
+  /** The controller an administrator asked to lead. */
+  chosen?: boolean;
+  /** What was configured; lower leads, 0 means no preference. */
+  priority?: number;
   started_at: string;
   last_seen_at: string;
 }
@@ -522,6 +530,12 @@ export const api = {
     email?: string;
     home: string;
   }) => request<UserWrite>("POST", "/users", u),
+  chooseLeader: (controller: string) =>
+    request<{ controller: string; message: string }>("PUT", "/leadership", {
+      controller,
+    }),
+  clearLeaderChoice: () =>
+    request<{ message: string }>("DELETE", "/leadership"),
   provisionUser: (id: string) =>
     request<UserWrite>("POST", `/users/${encodeURIComponent(id)}/nodes`),
   users: (q?: string) =>

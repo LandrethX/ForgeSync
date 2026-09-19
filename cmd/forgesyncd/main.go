@@ -80,9 +80,10 @@ func run(configPath string) error {
 	elector := leader.New(db, leader.Options{
 		Holder: holder, Name: cfg.Controller.Name, URL: cfg.Controller.URL,
 		TTL: cfg.Controller.Lease, Renew: cfg.Controller.Renew,
+		Yield: yieldToBetterController(db, cfg, log),
 	}, log)
 	log.Info("controller", "name", cfg.Controller.Name, "url", cfg.Controller.URL,
-		"lease", cfg.Controller.Lease, "renew", cfg.Controller.Renew)
+		"lease", cfg.Controller.Lease, "renew", cfg.Controller.Renew, "priority", cfg.Controller.Priority)
 
 	var records []store.NodeRecord
 	var infos []api.NodeInfo
@@ -464,7 +465,7 @@ func (u userAdmin) CreateUser(ctx context.Context, login, subject, fullName, ema
 // controller looking merely late.
 func recordController(ctx context.Context, db *store.Store, holder string, cfg *config.Config, startedAt time.Time, log *slog.Logger) {
 	rec := store.ControllerRecord{Name: cfg.Controller.Name, Holder: holder, URL: cfg.Controller.URL,
-		Version: buildinfo.Version, StartedAt: startedAt.UTC()}
+		Version: buildinfo.Version, Priority: cfg.Controller.Priority, StartedAt: startedAt.UTC()}
 	write := func() {
 		wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
@@ -486,5 +487,68 @@ func recordController(ctx context.Context, db *store.Store, holder string, cfg *
 		case <-ticker.C:
 			write()
 		}
+	}
+}
+
+// yieldToBetterController answers whether this controller should hand the
+// lease over, which is how leadership ends up where someone meant it to
+// be rather than wherever it happened to land.
+//
+// Two reasons to step aside. An administrator has chosen another
+// controller (the button on its page), which beats everything else until
+// it's cleared. Or, with no choice made, a controller configured to lead
+// before this one is running and has said so recently.
+//
+// "Recently" is three heartbeats either way: handing over to a controller
+// that has stopped would cost a whole lease of nobody doing anything, so
+// this waits to see it alive first. With no priority and no choice (the
+// defaults) nobody yields and whoever holds the lease keeps it.
+func yieldToBetterController(db *store.Store, cfg *config.Config, log *slog.Logger) func(context.Context) bool {
+	mine := cfg.Controller.Priority
+	beat := cfg.Controller.Renew
+	if beat <= 0 {
+		beat = cfg.Controller.Lease / 3
+	}
+	return func(ctx context.Context) bool {
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		chosen, err := db.Chosen(cctx)
+		if err != nil {
+			log.Warn("leadership: couldn't read the chosen controller; staying as we are", "error", err)
+			return false
+		}
+		others, err := db.Controllers(cctx)
+		if err != nil {
+			log.Warn("leadership: couldn't read the other controllers; staying as we are", "error", err)
+			return false
+		}
+		alive := func(c store.ControllerRecord) bool { return time.Since(c.LastSeenAt) <= 3*beat }
+		if chosen.Controller != "" {
+			if chosen.Controller == cfg.Controller.Name {
+				return false // we are the one they asked for
+			}
+			for _, c := range others {
+				if c.Name == chosen.Controller && alive(c) {
+					log.Info("leadership: an administrator chose another controller", "controller", c.Name,
+						"chosen_by", chosen.ChosenBy)
+					return true
+				}
+			}
+			return false // chosen but not running: keep working
+		}
+		if mine == 0 {
+			return false
+		}
+		for _, c := range others {
+			if c.Name == cfg.Controller.Name || c.Priority == 0 || c.Priority >= mine {
+				continue
+			}
+			if alive(c) {
+				log.Info("leadership: a controller that should lead is running", "controller", c.Name,
+					"priority", c.Priority, "ours", mine)
+				return true
+			}
+		}
+		return false
 	}
 }

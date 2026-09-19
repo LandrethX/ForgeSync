@@ -53,6 +53,11 @@ type Controller struct {
 	Lease time.Duration `yaml:"lease"`
 	// Renew is how often the leader renews it. Default: a third of Lease.
 	Renew time.Duration `yaml:"renew"`
+	// Priority says which controller should be the one acting when more
+	// than one could: the lowest number leads, and a controller that took
+	// the lease while a better one was away hands it back when it returns.
+	// 0 (the default) means no preference: whoever holds it keeps it.
+	Priority int `yaml:"priority"`
 }
 
 // Webhooks makes every node report changes to ForgeSync as they happen,

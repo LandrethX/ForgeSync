@@ -40,12 +40,33 @@ type fakeDB struct {
 	comments    []store.CommentRecord
 	pairs       []store.SourcePair
 	controllers []store.ControllerRecord
+	chosen      store.LeadershipChoice
 }
 
 func (f *fakeDB) Controllers(context.Context) ([]store.ControllerRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.controllers, nil
+}
+
+func (f *fakeDB) Chosen(context.Context) (store.LeadershipChoice, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.chosen, nil
+}
+
+func (f *fakeDB) Choose(_ context.Context, controller, by string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.chosen = store.LeadershipChoice{Controller: controller, ChosenBy: by, ChosenAt: time.Now()}
+	return nil
+}
+
+func (f *fakeDB) ClearChoice(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.chosen = store.LeadershipChoice{}
+	return nil
 }
 
 func (f *fakeDB) SourcePairs(context.Context) ([]store.SourcePair, error) {

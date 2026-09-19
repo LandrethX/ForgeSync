@@ -16,6 +16,18 @@
 # To reach the environment from other machines (e.g. on a server), run it as
 # PUBLIC_BIND=0.0.0.0 ./setup.sh and add the hostnames on those machines too.
 #
+# PUBLIC_HOST=<host or IP> addresses the whole environment by that name
+# instead of the *.test names, for a server people reach over the network
+# without editing their hosts file:
+#
+#   PUBLIC_BIND=0.0.0.0 PUBLIC_HOST=10.0.0.5 ./setup.sh --all --standby
+#
+# It has to be one name everywhere, not a mixture: OIDC checks the issuer
+# in the token against the one the controller was configured with, so the
+# address a browser signs in at and the address the controller expects have
+# to be the same. The *.test aliases keep working inside the compose
+# network, which is what container-to-container traffic uses.
+#
 # Written for macOS bash 3.2 (no associative arrays).
 
 set -euo pipefail
@@ -34,6 +46,16 @@ for arg in "$@"; do
   esac
 done
 
+# host_for <service-name> <port> gives the URL to use for a service:
+# PUBLIC_HOST when it's set, its *.test alias otherwise.
+url_of() {
+  if [ -n "${PUBLIC_HOST:-}" ]; then echo "http://$PUBLIC_HOST:$2"; else echo "http://$1:$2"; fi
+}
+sceneid_url() { url_of sceneid.test 8080; }
+forgejo_url() { url_of "forgejo-$1.test" "$(port_of "$1")"; }
+controller_url() { url_of forgesync.test 8090; }
+standby_url() { url_of forgesync-b.test 8091; }
+
 compose() { docker compose $PROFILE_ARGS "$@"; }
 port_of() { case "$1" in se) echo 3001;; dk) echo 3002;; de) echo 3003;; uk) echo 3004;; us) echo 3005;; esac; }
 ssh_of()  { case "$1" in se) echo 2221;; dk) echo 2222;; de) echo 2223;; uk) echo 2224;; us) echo 2225;; esac; }
@@ -42,6 +64,10 @@ ok()   { printf '  \033[32mok\033[0m    %s\n' "$*"; }
 fail() { printf '  \033[31mFAIL\033[0m  %s\n' "$*"; FAILED=1; }
 FAILED=0
 
+if [ -n "${PUBLIC_HOST:-}" ]; then
+  echo "==> Addressing everything as $PUBLIC_HOST (PUBLIC_HOST is set)"
+  ok "no /etc/hosts entries needed; the *.test aliases stay for container-to-container traffic"
+else
 echo "==> Checking /etc/hosts entries"
 missing=""
 for h in sceneid.test forgesync.test $(for n in $NODES; do printf 'forgejo-%s.test ' "$n"; done); do
@@ -58,6 +84,7 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 ok "hostnames resolve to 127.0.0.1"
+fi
 
 echo "==> Starting containers (first run pulls images)"
 compose up -d --wait
@@ -83,11 +110,19 @@ for n in $NODES; do
   done
 
   if fj admin auth list | grep -qw SceneID; then
-    ok "SceneID login source exists"
+    # The discovery URL is the address people sign in at, so it changes
+    # with PUBLIC_HOST. An existing source is updated rather than left
+    # pointing at an address nobody can reach.
+    src_id=$(fj admin auth list | awk '$2 == "SceneID" {print $1}')
+    fj admin auth update-oauth --id "$src_id" \
+      --auto-discover-url "$(sceneid_url)/realms/sceneid/.well-known/openid-configuration" >/dev/null
+    compose restart "$svc" >/dev/null
+    compose up -d --wait "$svc" >/dev/null
+    ok "SceneID login source points at $(sceneid_url)"
   else
     fj admin auth add-oauth --name SceneID --provider openidConnect \
       --key forgejo --secret "$SCENEID_FORGEJO_CLIENT_SECRET" \
-      --auto-discover-url "http://sceneid.test:8080/realms/sceneid/.well-known/openid-configuration" \
+      --auto-discover-url "$(sceneid_url)/realms/sceneid/.well-known/openid-configuration" \
       --scopes profile --scopes email >/dev/null
     # The running server loads login sources at startup; restart so it
     # picks up the one added from the CLI.
@@ -106,6 +141,31 @@ for n in $NODES; do
     ok "generated API token -> $tokfile"
   fi
 done
+
+if [ -n "${PUBLIC_HOST:-}" ]; then
+  # The realm is imported once, with the *.test callbacks; the addresses
+  # people actually sign in at have to be allowed too, or SceneID refuses
+  # the sign-in with "Invalid parameter: redirect_uri".
+  kc_token=$(curl -fsS -X POST "$(sceneid_url)/realms/master/protocol/openid-connect/token" \
+    -d "client_id=admin-cli" -d "username=$SCENEID_ADMIN_USER" -d "password=$SCENEID_ADMIN_PASSWORD" \
+    -d "grant_type=password" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+  # The first "id" in the answer is the client's own; the later ones
+  # belong to its protocol mappers, so take the first and stop.
+  kc_client() { curl -fsS -H "Authorization: Bearer $kc_token" "$(sceneid_url)/admin/realms/sceneid/clients?clientId=$1" \
+    | tr ',' '\n' | grep -m1 '"id"' | sed 's/.*"id":"\([^"]*\)".*/\1/'; }
+  kc_redirects() {
+    curl -fsS -X PUT -H "Authorization: Bearer $kc_token" -H "Content-Type: application/json" \
+      -d "$2" "$(sceneid_url)/admin/realms/sceneid/clients/$1" >/dev/null
+  }
+  admin_uris="[\"$(controller_url)/api/v1/auth/callback\",\"$(standby_url)/api/v1/auth/callback\",\"http://127.0.0.1:8090/api/v1/auth/callback\",\"http://127.0.0.1:8091/api/v1/auth/callback\",\"http://127.0.0.1:5173/api/v1/auth/callback\"]"
+  kc_redirects "$(kc_client forgesync-admin)" "{\"redirectUris\":$admin_uris}"
+  node_uris=""
+  for n in $NODES; do
+    node_uris="$node_uris\"$(forgejo_url "$n")/user/oauth2/SceneID/callback\","
+  done
+  kc_redirects "$(kc_client forgejo)" "{\"redirectUris\":[${node_uris%,}]}"
+  ok "SceneID accepts the sign-in callbacks for $PUBLIC_HOST"
+fi
 
 printf '%s' "$SCENEID_FORGESYNC_ADMIN_CLIENT_SECRET" > .tokens/sceneid-admin-client.secret
 chmod 600 .tokens/sceneid-admin-client.secret
@@ -134,14 +194,25 @@ mkdir -p .work
     # The SceneID login source's id differs per node; ForgeSync needs it to
     # create SceneID users there.
     src=$(compose exec -T -u git "forgejo-$n" forgejo admin auth list | awk '$2 == "SceneID" {print $1}')
-    printf '  - name: %s\n    site: %s\n    url: http://forgejo-%s.test:%s\n    token_file: /etc/forgesync/tokens/%s.token\n    sceneid_source_id: %s\n' \
-      "$n" "$(site_of "$n")" "$n" "$(port_of "$n")" "$n" "${src:-0}"
+    printf '  - name: %s\n    site: %s\n    url: %s\n    token_file: /etc/forgesync/tokens/%s.token\n    sceneid_source_id: %s\n' \
+      "$n" "$(site_of "$n")" "$(forgejo_url "$n")" "$n" "${src:-0}"
   done
 } > .work/forgesync.docker.yaml
+if [ -n "${PUBLIC_HOST:-}" ]; then
+  # Everything a browser sees has to agree: OIDC checks the issuer in the
+  # token against the one the controller was configured with, so the
+  # address people sign in at and the address here must be the same.
+  sed -i.bak \
+    -e "s|http://sceneid\.test:8080|$(sceneid_url)|g" \
+    -e "s|http://forgesync\.test:8090|$(controller_url)|g" \
+    .work/forgesync.docker.yaml
+  rm -f .work/forgesync.docker.yaml.bak
+fi
 # The standby is the same config with its own name, port and URLs: it shares
 # the database, so whichever holds the lease does the work.
 sed -e 's|^  name: forgesync-a$|  name: forgesync-b|' \
-    -e 's|forgesync\.test:8090|forgesync-b.test:8091|g' \
+    -e 's|^  priority: 1$|  priority: 2|' \
+    -e "s|$(controller_url | sed 's|http://||')|$(standby_url | sed 's|http://||')|g" \
     -e 's|^  listen: 0\.0\.0\.0:8090$|  listen: 0.0.0.0:8091|' \
     .work/forgesync.docker.yaml > .work/forgesync-b.docker.yaml
 docker compose $PROFILE_ARGS --profile controller up -d --build --force-recreate --wait forgesync
@@ -152,15 +223,15 @@ if [ -n "$STANDBY" ]; then
 fi
 
 echo "==> Smoke tests"
-disco="http://sceneid.test:8080/realms/sceneid/.well-known/openid-configuration"
-if curl -fsS "$disco" | grep -q '"issuer":"http://sceneid.test:8080/realms/sceneid"'; then
+disco="$(sceneid_url)/realms/sceneid/.well-known/openid-configuration"
+if curl -fsS "$disco" | grep -q "\"issuer\":\"$(sceneid_url)/realms/sceneid\""; then
   ok "host -> SceneID discovery, issuer matches"
 else
   fail "host -> SceneID discovery"
 fi
 
 for n in $NODES; do
-  url="http://forgejo-$n.test:$(port_of "$n")"
+  url="$(forgejo_url "$n")"
   curl -fsS "$url/api/healthz" >/dev/null && ok "host -> $url healthy" || fail "host -> $url"
 
   tok=$(cat ".tokens/$n.token")
@@ -178,12 +249,12 @@ for n in $NODES; do
   done
 done
 
-if curl -fsS http://forgesync.test:8090/readyz | grep -q ready; then
+if curl -fsS "$(controller_url)/readyz" | grep -q ready; then
   ok "host -> ForgeSync controller ready"
 else
   fail "ForgeSync controller not ready (docker compose --profile controller logs forgesync)"
 fi
-compose exec -T forgejo-se curl -fsS -o /dev/null http://forgesync.test:8090/healthz \
+compose exec -T forgejo-se curl -fsS -o /dev/null "$(controller_url)/healthz" \
   && ok "forgejo-se -> ForgeSync controller reachable" || fail "forgejo-se -> ForgeSync controller"
 
 echo
@@ -193,12 +264,12 @@ if [ "$FAILED" -ne 0 ]; then
 fi
 cat <<EOF
 Ready.
-  SceneID admin console : http://sceneid.test:8080/admin   ($SCENEID_ADMIN_USER / $SCENEID_ADMIN_PASSWORD)
-$(for n in $NODES; do echo "  Forgejo $(site_of "$n")            : http://forgejo-$n.test:$(port_of "$n")   (ssh port $(ssh_of "$n"))"; done)
+  SceneID admin console : $(sceneid_url)/admin   ($SCENEID_ADMIN_USER / $SCENEID_ADMIN_PASSWORD)
+$(for n in $NODES; do echo "  Forgejo $(site_of "$n")            : $(forgejo_url "$n")   (ssh port $(ssh_of "$n"))"; done)
   SceneID test users    : alice / alice-pw (ForgeSync administrator), bob / bob-pw (operator),
                           carol / carol-pw (viewer), erin / erin-pw (no ForgeSync role)
   Local admins per node : siteadmin / $FORGEJO_SITEADMIN_PASSWORD, forgesync (API tokens in .tokens/)
-  ForgeSync admin UI    : http://forgesync.test:8090   (sign in with SceneID, or "Use the admin token instead")
+  ForgeSync admin UI    : $(controller_url)   (sign in with SceneID, or "Use the admin token instead")
   Admin token           : .tokens/admin.token
   ForgeSync database    : localhost:5432 (forgesync / $FORGESYNC_DB_PASSWORD)
   Controller logs       : docker compose --profile controller logs -f forgesync

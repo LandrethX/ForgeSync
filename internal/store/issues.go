@@ -14,16 +14,20 @@ type IssueCopy struct {
 // IssueRecord is one replicated issue: its identity, the base of the
 // three-way merge, and its copies per node.
 type IssueRecord struct {
-	ID           string               `json:"id"`
-	RepositoryID string               `json:"repository_id"`
-	OriginNode   string               `json:"origin_node"`
-	Author       string               `json:"author"`
-	CreatedAt    time.Time            `json:"created_at"`
-	BaseTitle    string               `json:"title"`
-	BaseBody     string               `json:"-"`
-	BaseState    string               `json:"state"`
-	DeletedAt    *time.Time           `json:"deleted_at,omitempty"` // deleted on the primary
-	Copies       map[string]IssueCopy `json:"copies"`
+	ID           string    `json:"id"`
+	RepositoryID string    `json:"repository_id"`
+	OriginNode   string    `json:"origin_node"`
+	Author       string    `json:"author"`
+	CreatedAt    time.Time `json:"created_at"`
+	BaseTitle    string    `json:"title"`
+	BaseBody     string    `json:"-"`
+	BaseState    string    `json:"state"`
+	// BaseLabels is the sorted, comma-separated ids of its labels' items;
+	// BaseMilestone its milestone's item id or "".
+	BaseLabels    string               `json:"-"`
+	BaseMilestone string               `json:"-"`
+	DeletedAt     *time.Time           `json:"deleted_at,omitempty"` // deleted on the primary
+	Copies        map[string]IssueCopy `json:"copies"`
 }
 
 // CommentRecord is one replicated comment.
@@ -45,7 +49,7 @@ func (s *Store) Issues(ctx context.Context, repositoryID string) ([]IssueRecord,
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT i.id::text, i.origin_node, i.author, i.created_at, i.base_title, i.base_body, i.base_state, i.deleted_at,
-			c.node, c.number, c.forgejo_id
+			i.base_labels, i.base_milestone, c.node, c.number, c.forgejo_id
 		FROM issues i LEFT JOIN issue_copies c ON c.issue_id = i.id
 		WHERE i.repository_id = $1::uuid
 		ORDER BY i.created_at, i.id, c.node`, repositoryID)
@@ -58,7 +62,7 @@ func (s *Store) Issues(ctx context.Context, repositoryID string) ([]IssueRecord,
 		var node *string
 		var number, fid *int64
 		if err := rows.Scan(&r.ID, &r.OriginNode, &r.Author, &r.CreatedAt, &r.BaseTitle, &r.BaseBody, &r.BaseState, &r.DeletedAt,
-			&node, &number, &fid); err != nil {
+			&r.BaseLabels, &r.BaseMilestone, &node, &number, &fid); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
@@ -114,14 +118,17 @@ func (s *Store) SaveIssue(ctx context.Context, r IssueRecord) (string, error) {
 	defer tx.Rollback(ctx)
 	if r.ID == "" {
 		err = tx.QueryRow(ctx, `
-			INSERT INTO issues (repository_id, origin_node, author, created_at, base_title, base_body, base_state, deleted_at)
-			VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8) RETURNING id::text`,
-			r.RepositoryID, r.OriginNode, r.Author, r.CreatedAt, r.BaseTitle, r.BaseBody, r.BaseState, r.DeletedAt).Scan(&r.ID)
+			INSERT INTO issues (repository_id, origin_node, author, created_at, base_title, base_body, base_state, deleted_at,
+				base_labels, base_milestone)
+			VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id::text`,
+			r.RepositoryID, r.OriginNode, r.Author, r.CreatedAt, r.BaseTitle, r.BaseBody, r.BaseState, r.DeletedAt,
+			r.BaseLabels, r.BaseMilestone).Scan(&r.ID)
 	} else {
 		_, err = tx.Exec(ctx, `
-			UPDATE issues SET base_title = $2, base_body = $3, base_state = $4, deleted_at = $5, updated_at = now()
+			UPDATE issues SET base_title = $2, base_body = $3, base_state = $4, deleted_at = $5,
+				base_labels = $6, base_milestone = $7, updated_at = now()
 			WHERE id = $1::uuid`,
-			r.ID, r.BaseTitle, r.BaseBody, r.BaseState, r.DeletedAt)
+			r.ID, r.BaseTitle, r.BaseBody, r.BaseState, r.DeletedAt, r.BaseLabels, r.BaseMilestone)
 	}
 	if err != nil {
 		return "", err

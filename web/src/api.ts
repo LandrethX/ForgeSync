@@ -1,7 +1,8 @@
 // Client for the controller's admin API. The browser authenticates with an
 // HttpOnly session cookie; it never sees the admin token after signing in.
 
-export type NodeState = "UNKNOWN" | "HEALTHY" | "DEGRADED" | "SUSPECT" | "UNREACHABLE" | "AUTH_ERROR";
+export type NodeState =
+  "UNKNOWN" | "HEALTHY" | "DEGRADED" | "SUSPECT" | "UNREACHABLE" | "AUTH_ERROR";
 
 export interface Node {
   name: string;
@@ -54,7 +55,10 @@ function historyParams(f: HistoryFilter): URLSearchParams {
 }
 
 /** The export is a plain download link; the session cookie authenticates it. */
-export function historyExportURL(f: HistoryFilter, format: "csv" | "json"): string {
+export function historyExportURL(
+  f: HistoryFilter,
+  format: "csv" | "json",
+): string {
   const p = historyParams(f);
   p.set("format", format);
   return `/api/v1/history/export?${p}`;
@@ -89,7 +93,8 @@ export interface NodeView {
   replica?: Replica;
 }
 
-export type ReplicaState = "synced" | "conflict" | "error" | "waiting" | "missing" | "archived";
+export type ReplicaState =
+  "synced" | "conflict" | "error" | "waiting" | "missing" | "archived";
 
 /** A copy of a repository deleted on its primary, kept on one node for a while. */
 export interface Archive {
@@ -242,7 +247,8 @@ export interface Conflict {
     primary?: string;
     /** Pull requests on the primary where the owner decides (diverged branches). */
     handoffs?: Handoff[];
-    /** issue_conflict: the field (title, body, state, comment, deleted, comment deleted). */
+    /** issue_conflict: the field (title, body, state, labels, milestone, comment, deleted,
+     * comment deleted), or "<label|milestone> <field>" for a label or milestone of its own. */
     field?: string;
     /** issue_conflict: each node's value of the field. */
     values?: Record<string, string>;
@@ -250,6 +256,8 @@ export interface Conflict {
     issue?: Record<string, number>;
     /** issue_conflict (deleted): the node whose copy was changed. */
     node?: string;
+    /** issue_conflict (label or milestone): its name on the nodes that agree. */
+    item?: string;
   };
   detected_at: string;
   last_seen_at: string;
@@ -273,7 +281,10 @@ export interface Overview {
   database: { ok: boolean; error?: string };
   nodes: Record<string, number>;
   open_conflicts: number;
-  replication: { enabled: boolean; counts: Partial<Record<ReplicaState, number>> };
+  replication: {
+    enabled: boolean;
+    counts: Partial<Record<ReplicaState, number>>;
+  };
 }
 
 export type Role = "viewer" | "operator" | "administrator";
@@ -293,7 +304,11 @@ export interface AuthConfig {
   token_sign_in: boolean;
 }
 
-const ROLE_RANK: Record<Role, number> = { viewer: 1, operator: 2, administrator: 3 };
+const ROLE_RANK: Record<Role, number> = {
+  viewer: 1,
+  operator: 2,
+  administrator: 3,
+};
 
 export function hasRole(session: Session | undefined, min: Role): boolean {
   return session !== undefined && ROLE_RANK[session.role] >= ROLE_RANK[min];
@@ -317,7 +332,11 @@ export class ApiError extends Error {
 /** Fired when any request finds the session gone, so the app can show sign-in. */
 export const SIGNED_OUT_EVENT = "forgesync:signed-out";
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<T> {
   const headers: Record<string, string> = {
     Accept: "application/json",
     // Required by the server for cookie-authenticated writes (CSRF defence).
@@ -341,14 +360,25 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const data: unknown = await res.json().catch(() => ({}));
   if (!res.ok) {
     const message =
-      typeof data === "object" && data !== null && "message" in data && typeof data.message === "string"
+      typeof data === "object" &&
+      data !== null &&
+      "message" in data &&
+      typeof data.message === "string"
         ? data.message
         : res.statusText;
-    if (res.status === 401 && path !== "/session" && !path.startsWith("/auth/")) {
+    if (
+      res.status === 401 &&
+      path !== "/session" &&
+      !path.startsWith("/auth/")
+    ) {
       window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
     }
     const retry = Number(res.headers.get("Retry-After"));
-    throw new ApiError(res.status, message, Number.isFinite(retry) && retry > 0 ? retry : undefined);
+    throw new ApiError(
+      res.status,
+      message,
+      Number.isFinite(retry) && retry > 0 ? retry : undefined,
+    );
   }
   return data as T;
 }
@@ -360,46 +390,89 @@ export const api = {
   signOut: () => request<{ logout_url: string }>("DELETE", "/session"),
   overview: () => request<Overview>("GET", "/overview"),
   nodes: () => request<Node[]>("GET", "/nodes"),
-  node: (name: string) => request<Node>("GET", `/nodes/${encodeURIComponent(name)}`),
+  node: (name: string) =>
+    request<Node>("GET", `/nodes/${encodeURIComponent(name)}`),
   transitions: (node: string | null, limit: number) =>
     request<Transition[]>(
       "GET",
-      node ? `/nodes/${encodeURIComponent(node)}/transitions?limit=${limit}` : `/transitions?limit=${limit}`,
+      node
+        ? `/nodes/${encodeURIComponent(node)}/transitions?limit=${limit}`
+        : `/transitions?limit=${limit}`,
     ),
-  repositories: (opts: { q?: string; status?: RepoStatus; limit: number; offset: number }) => {
-    const p = new URLSearchParams({ limit: String(opts.limit), offset: String(opts.offset) });
+  repositories: (opts: {
+    q?: string;
+    status?: RepoStatus;
+    limit: number;
+    offset: number;
+  }) => {
+    const p = new URLSearchParams({
+      limit: String(opts.limit),
+      offset: String(opts.offset),
+    });
     if (opts.q) p.set("q", opts.q);
     if (opts.status) p.set("status", opts.status);
     return request<RepositoryList>("GET", `/repositories?${p}`);
   },
-  repository: (id: string) => request<Repository>("GET", `/repositories/${encodeURIComponent(id)}`),
+  repository: (id: string) =>
+    request<Repository>("GET", `/repositories/${encodeURIComponent(id)}`),
   repositoryIssues: (id: string) =>
-    request<{ issues: ReplicatedIssue[] }>("GET", `/repositories/${encodeURIComponent(id)}/issues`),
+    request<{ issues: ReplicatedIssue[] }>(
+      "GET",
+      `/repositories/${encodeURIComponent(id)}/issues`,
+    ),
   setPrimary: (id: string, node: string) =>
-    request<{ primary_node: string; previous: string }>("PUT", `/repositories/${encodeURIComponent(id)}/primary`, {
-      node,
-    }),
+    request<{ primary_node: string; previous: string }>(
+      "PUT",
+      `/repositories/${encodeURIComponent(id)}/primary`,
+      {
+        node,
+      },
+    ),
   inventory: () => request<InventoryStatus>("GET", "/inventory"),
   webhooks: () => request<WebhookStatus>("GET", "/webhooks"),
   users: (q?: string) =>
-    request<{ total: number; items: User[] }>("GET", `/users${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+    request<{ total: number; items: User[] }>(
+      "GET",
+      `/users${q ? `?q=${encodeURIComponent(q)}` : ""}`,
+    ),
   setUserHome: (id: string, node: string) =>
-    request<{ home_node: string; previous: string }>("PUT", `/users/${encodeURIComponent(id)}/home`, { node }),
+    request<{ home_node: string; previous: string }>(
+      "PUT",
+      `/users/${encodeURIComponent(id)}/home`,
+      { node },
+    ),
   replicateNow: (id: string) =>
-    request<{ queued: boolean; running: boolean }>("POST", `/repositories/${encodeURIComponent(id)}/replicate`),
-  scanNow: () => request<{ queued: boolean; running: boolean }>("POST", "/inventory/scan"),
-  conflicts: (opts: { state: "open" | "cleared" | "all"; repository?: string; limit: number; offset: number }) => {
-    const p = new URLSearchParams({ state: opts.state, limit: String(opts.limit), offset: String(opts.offset) });
+    request<{ queued: boolean; running: boolean }>(
+      "POST",
+      `/repositories/${encodeURIComponent(id)}/replicate`,
+    ),
+  scanNow: () =>
+    request<{ queued: boolean; running: boolean }>("POST", "/inventory/scan"),
+  conflicts: (opts: {
+    state: "open" | "cleared" | "all";
+    repository?: string;
+    limit: number;
+    offset: number;
+  }) => {
+    const p = new URLSearchParams({
+      state: opts.state,
+      limit: String(opts.limit),
+      offset: String(opts.offset),
+    });
     if (opts.repository) p.set("repository", opts.repository);
     return request<ConflictList>("GET", `/conflicts?${p}`);
   },
   conflict: (id: number) => request<Conflict>("GET", `/conflicts/${id}`),
-  acknowledgeConflict: (id: number, note: string) => request<Conflict>("POST", `/conflicts/${id}/acknowledge`, { note }),
+  acknowledgeConflict: (id: number, note: string) =>
+    request<Conflict>("POST", `/conflicts/${id}/acknowledge`, { note }),
   history: (f: HistoryFilter, limit: number, cursor?: string) => {
     const p = historyParams(f);
     p.set("limit", String(limit));
     if (cursor) p.set("cursor", cursor);
-    return request<{ items: HistoryEvent[]; next_cursor?: string }>("GET", `/history?${p}`);
+    return request<{ items: HistoryEvent[]; next_cursor?: string }>(
+      "GET",
+      `/history?${p}`,
+    );
   },
   historyActors: () => request<string[]>("GET", "/history/actors"),
 };

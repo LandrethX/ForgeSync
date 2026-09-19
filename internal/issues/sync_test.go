@@ -19,18 +19,21 @@ import (
 // fakeNode is one node's alice/demo: issues and pull requests share the
 // number sequence, as in Forgejo.
 type fakeNode struct {
-	mu       sync.Mutex
-	name     string
-	next     int64 // last number used
-	nextID   int64
-	issues   map[int64]*forgejo.Issue // by number
-	comments map[int64]*forgejo.IssueComment
-	clock    time.Time
-	writes   []string
+	mu         sync.Mutex
+	name       string
+	next       int64 // last number used
+	nextID     int64
+	issues     map[int64]*forgejo.Issue // by number
+	comments   map[int64]*forgejo.IssueComment
+	clock      time.Time
+	writes     []string
+	labels     map[int64]*forgejo.Label
+	milestones map[int64]*forgejo.Milestone
 }
 
 func newFakeNode(name string) *fakeNode {
 	return &fakeNode{name: name, issues: map[int64]*forgejo.Issue{}, comments: map[int64]*forgejo.IssueComment{},
+		labels: map[int64]*forgejo.Label{}, milestones: map[int64]*forgejo.Milestone{},
 		nextID: map[string]int64{"se": 1000, "dk": 2000, "de": 3000}[name], clock: time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)}
 }
 
@@ -141,11 +144,219 @@ func (a fakeAPI) ListRepoComments(_ context.Context, _, _ string, page, limit in
 	}
 	return all[start:min(start+limit, len(all))], nil
 }
-func (a fakeAPI) CreateIssue(_ context.Context, _, _, title, body string, closed bool) (forgejo.Issue, error) {
+func (a fakeAPI) CreateIssue(_ context.Context, _, _, title, body string, closed bool, labels []int64, milestone int64) (forgejo.Issue, error) {
 	a.n.mu.Lock()
 	defer a.n.mu.Unlock()
 	a.n.writes = append(a.n.writes, "create "+title+" as "+a.as)
-	return *a.n.create(a.as, title, body, closed), nil
+	is := a.n.create(a.as, title, body, closed)
+	a.n.setLabels(is, labels)
+	a.n.setMilestone(is, milestone)
+	return *is, nil
+}
+
+func (f *fakeNode) setLabels(is *forgejo.Issue, ids []int64) {
+	is.Labels = nil
+	for _, id := range ids {
+		if l := f.labels[id]; l != nil {
+			is.Labels = append(is.Labels, *l)
+			continue
+		}
+		// Not one of the repository's own labels (an organization's, say):
+		// Forgejo attaches it all the same.
+		is.Labels = append(is.Labels, forgejo.Label{ID: id, Name: fmt.Sprintf("other-%d", id)})
+	}
+}
+
+func (f *fakeNode) setMilestone(is *forgejo.Issue, id int64) {
+	is.Milestone = nil
+	if id != 0 {
+		is.Milestone = &struct {
+			ID int64 `json:"id"`
+		}{id}
+	}
+}
+
+// label is a user adding a label on the node; it returns its id.
+func (f *fakeNode) label(name, color string) int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextID++
+	f.labels[f.nextID] = &forgejo.Label{ID: f.nextID, Name: name, Color: color}
+	return f.nextID
+}
+
+func (f *fakeNode) labelNamed(name string) *forgejo.Label {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, l := range f.labels {
+		if l.Name == name {
+			return l
+		}
+	}
+	return nil
+}
+
+func (f *fakeNode) milestone(title string) int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextID++
+	f.milestones[f.nextID] = &forgejo.Milestone{ID: f.nextID, Title: title, State: "open"}
+	return f.nextID
+}
+
+func (f *fakeNode) milestoneNamed(title string) *forgejo.Milestone {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.milestones {
+		if m.Title == title {
+			return m
+		}
+	}
+	return nil
+}
+
+// labelNames is an issue's label names on the node, sorted.
+func (f *fakeNode) labelNames(number int64) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, l := range f.issues[number].Labels {
+		if own := f.labels[l.ID]; own != nil { // the repository's own labels
+			out = append(out, own.Name)
+		}
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
+}
+
+func (f *fakeNode) milestoneTitle(number int64) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if m := f.issues[number].Milestone; m != nil {
+		return f.milestones[m.ID].Title
+	}
+	return ""
+}
+
+func (a fakeAPI) SetIssueMilestone(_ context.Context, _, _ string, number, milestone int64) error {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	a.n.setMilestone(a.n.issues[number], milestone)
+	a.n.writes = append(a.n.writes, fmt.Sprintf("milestone #%d", number))
+	return nil
+}
+func (a fakeAPI) ReplaceIssueLabels(_ context.Context, _, _ string, number int64, labels []int64) error {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	a.n.setLabels(a.n.issues[number], labels)
+	a.n.writes = append(a.n.writes, fmt.Sprintf("labels #%d", number))
+	return nil
+}
+func (a fakeAPI) ListLabels(_ context.Context, _, _ string, page, _ int) ([]forgejo.Label, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	if page > 1 {
+		return nil, nil
+	}
+	var out []forgejo.Label
+	for _, l := range a.n.labels {
+		out = append(out, *l)
+	}
+	return out, nil
+}
+func (a fakeAPI) CreateLabel(_ context.Context, _, _ string, l forgejo.Label) (forgejo.Label, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	a.n.nextID++
+	l.ID = a.n.nextID
+	l.Color = strings.TrimPrefix(l.Color, "#")
+	a.n.labels[l.ID] = &l
+	a.n.writes = append(a.n.writes, "create label "+l.Name)
+	return l, nil
+}
+func (a fakeAPI) EditLabel(_ context.Context, _, _ string, id int64, fields map[string]any) error {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	l := a.n.labels[id]
+	for k, v := range fields {
+		switch k {
+		case "name":
+			l.Name = v.(string)
+		case "color":
+			l.Color = strings.TrimPrefix(v.(string), "#")
+		case "description":
+			l.Description = v.(string)
+		}
+	}
+	a.n.writes = append(a.n.writes, "edit label")
+	return nil
+}
+func (a fakeAPI) DeleteLabel(_ context.Context, _, _ string, id int64) error {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	delete(a.n.labels, id)
+	for _, is := range a.n.issues { // Forgejo drops it from issues too
+		var keep []forgejo.Label
+		for _, l := range is.Labels {
+			if l.ID != id {
+				keep = append(keep, l)
+			}
+		}
+		is.Labels = keep
+	}
+	a.n.writes = append(a.n.writes, "delete label")
+	return nil
+}
+func (a fakeAPI) ListMilestones(_ context.Context, _, _ string, page, _ int) ([]forgejo.Milestone, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	if page > 1 {
+		return nil, nil
+	}
+	var out []forgejo.Milestone
+	for _, m := range a.n.milestones {
+		out = append(out, *m)
+	}
+	return out, nil
+}
+func (a fakeAPI) CreateMilestone(_ context.Context, _, _ string, m forgejo.Milestone) (forgejo.Milestone, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	a.n.nextID++
+	m.ID = a.n.nextID
+	a.n.milestones[m.ID] = &m
+	a.n.writes = append(a.n.writes, "create milestone "+m.Title)
+	return m, nil
+}
+func (a fakeAPI) EditMilestone(_ context.Context, _, _ string, id int64, fields map[string]any) error {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	m := a.n.milestones[id]
+	for k, v := range fields {
+		switch k {
+		case "title":
+			m.Title = v.(string)
+		case "state":
+			m.State = v.(string)
+		case "due_on":
+			t := v.(time.Time)
+			m.Deadline = &t
+		}
+	}
+	a.n.writes = append(a.n.writes, "edit milestone")
+	return nil
+}
+func (a fakeAPI) DeleteMilestone(_ context.Context, _, _ string, id int64) error {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	delete(a.n.milestones, id)
+	for _, is := range a.n.issues {
+		if is.Milestone != nil && is.Milestone.ID == id {
+			is.Milestone = nil
+		}
+	}
+	a.n.writes = append(a.n.writes, "delete milestone")
+	return nil
 }
 func (a fakeAPI) EditIssue(_ context.Context, _, _ string, number int64, title, body, state *string) error {
 	a.n.mu.Lock()
@@ -205,11 +416,53 @@ type memStore struct {
 	seq      int
 	found    []store.FoundConflict
 	checked  []string
+	items    map[string]store.RepoItem
+}
+
+func (m *memStore) RepoItems(context.Context, string) ([]store.RepoItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []store.RepoItem
+	for _, it := range m.items {
+		cp := map[string]int64{}
+		for k, v := range it.Copies {
+			cp[k] = v
+		}
+		base := map[string]string{}
+		for k, v := range it.Base {
+			base[k] = v
+		}
+		it.Copies, it.Base = cp, base
+		out = append(out, it)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+func (m *memStore) SaveRepoItem(_ context.Context, it store.RepoItem) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if it.ID == "" {
+		m.seq++
+		it.ID = fmt.Sprintf("x%03d", m.seq)
+	}
+	cp := map[string]int64{}
+	for k, v := range it.Copies {
+		cp[k] = v
+	}
+	it.Copies = cp
+	m.items[it.ID] = it
+	return it.ID, nil
+}
+func (m *memStore) DeleteRepoItem(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.items, id)
+	return nil
 }
 
 func newMemStore() *memStore {
 	return &memStore{rec: store.RepositoryRecord{ID: "11111111-1111-1111-1111-111111111111", FullName: "alice/demo", PrimaryNode: "se"},
-		issues: map[string]store.IssueRecord{}, comments: map[string]store.CommentRecord{}}
+		issues: map[string]store.IssueRecord{}, comments: map[string]store.CommentRecord{}, items: map[string]store.RepoItem{}}
 }
 
 func (m *memStore) Repositories(context.Context) ([]store.RepositoryRecord, error) {

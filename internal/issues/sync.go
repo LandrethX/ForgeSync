@@ -19,7 +19,17 @@ import (
 type API interface {
 	ListIssues(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.Issue, error)
 	ListRepoComments(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.IssueComment, error)
-	CreateIssue(ctx context.Context, owner, repo, title, body string, closed bool) (forgejo.Issue, error)
+	CreateIssue(ctx context.Context, owner, repo, title, body string, closed bool, labels []int64, milestone int64) (forgejo.Issue, error)
+	SetIssueMilestone(ctx context.Context, owner, repo string, number, milestone int64) error
+	ReplaceIssueLabels(ctx context.Context, owner, repo string, number int64, labels []int64) error
+	ListLabels(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.Label, error)
+	CreateLabel(ctx context.Context, owner, repo string, l forgejo.Label) (forgejo.Label, error)
+	EditLabel(ctx context.Context, owner, repo string, id int64, fields map[string]any) error
+	DeleteLabel(ctx context.Context, owner, repo string, id int64) error
+	ListMilestones(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.Milestone, error)
+	CreateMilestone(ctx context.Context, owner, repo string, m forgejo.Milestone) (forgejo.Milestone, error)
+	EditMilestone(ctx context.Context, owner, repo string, id int64, fields map[string]any) error
+	DeleteMilestone(ctx context.Context, owner, repo string, id int64) error
 	EditIssue(ctx context.Context, owner, repo string, number int64, title, body, state *string) error
 	DeleteIssue(ctx context.Context, owner, repo string, number int64) error
 	CreateIssueComment(ctx context.Context, owner, repo string, number int64, body string) (forgejo.IssueComment, error)
@@ -43,6 +53,9 @@ type Store interface {
 	DeleteIssueRecord(ctx context.Context, id string) error
 	SaveComment(ctx context.Context, c store.CommentRecord) (string, error)
 	DeleteCommentRecord(ctx context.Context, id string) error
+	RepoItems(ctx context.Context, repositoryID string) ([]store.RepoItem, error)
+	SaveRepoItem(ctx context.Context, it store.RepoItem) (string, error)
+	DeleteRepoItem(ctx context.Context, id string) error
 	SyncConflicts(ctx context.Context, found []store.FoundConflict, checked, kinds []string, at time.Time) ([]store.ConflictChange, error)
 	Audit(ctx context.Context, actor, action, target string, details map[string]any) error
 }
@@ -154,13 +167,39 @@ const pageSize = 50
 
 // snapshot is what one node has of a repository's issues and comments.
 type snapshot struct {
-	issues   map[int64]forgejo.Issue        // by Forgejo id
-	byNumber map[int64]forgejo.Issue        // issues only, by number
-	comments map[int64]forgejo.IssueComment // on issues, by Forgejo id
+	issues   map[int64]forgejo.Issue                // by Forgejo id
+	byNumber map[int64]forgejo.Issue                // issues only, by number
+	comments map[int64]forgejo.IssueComment         // on issues, by Forgejo id
+	items    map[string]map[int64]map[string]string // kind -> Forgejo id -> fields
 }
 
 func (s *Syncer) read(ctx context.Context, n Node, owner, name string) (*snapshot, error) {
-	sn := &snapshot{issues: map[int64]forgejo.Issue{}, byNumber: map[int64]forgejo.Issue{}, comments: map[int64]forgejo.IssueComment{}}
+	sn := &snapshot{issues: map[int64]forgejo.Issue{}, byNumber: map[int64]forgejo.Issue{}, comments: map[int64]forgejo.IssueComment{},
+		items: map[string]map[int64]map[string]string{"label": {}, "milestone": {}}}
+	for page := 1; ; page++ {
+		list, err := n.API.ListLabels(ctx, owner, name, page, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		for _, l := range list {
+			sn.items["label"][l.ID] = labelFields(l)
+		}
+		if len(list) < pageSize {
+			break
+		}
+	}
+	for page := 1; ; page++ {
+		list, err := n.API.ListMilestones(ctx, owner, name, page, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range list {
+			sn.items["milestone"][m.ID] = milestoneFields(m)
+		}
+		if len(list) < pageSize {
+			break
+		}
+	}
 	for page := 1; ; page++ {
 		list, err := n.API.ListIssues(ctx, owner, name, page, pageSize)
 		if err != nil {
@@ -202,6 +241,8 @@ type run struct {
 	snaps       map[string]*snapshot
 	found       []store.FoundConflict
 	complete    bool
+	labels      itemIndex
+	milestones  itemIndex
 }
 
 func (s *Syncer) runOnce(ctx context.Context, id string) error {
@@ -245,6 +286,25 @@ func (s *Syncer) runOnce(ctx context.Context, id string) error {
 		r.snaps[n] = sn
 		r.nodes = append(r.nodes, n)
 	}
+
+	// Labels and milestones first: issues refer to them.
+	items, err := s.store.RepoItems(ctx, id)
+	if err != nil {
+		return err
+	}
+	byKind := map[string][]store.RepoItem{}
+	for _, it := range items {
+		byKind[it.Kind] = append(byKind[it.Kind], it)
+	}
+	labels, err := r.items(ctx, labelKind, byKind["label"])
+	if err != nil {
+		return err
+	}
+	milestones, err := r.items(ctx, milestoneKind, byKind["milestone"])
+	if err != nil {
+		return err
+	}
+	r.labels, r.milestones = newItemIndex(labels), newItemIndex(milestones)
 
 	issues, comments, err := s.store.Issues(ctx, id)
 	if err != nil {
@@ -412,26 +472,49 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 		return false, nil
 	}
 
+	edit := func(title, body, state *string) func(context.Context, string, int64, string, forgejo.Issue) error {
+		return func(ctx context.Context, n string, number int64, _ string, _ forgejo.Issue) error {
+			return r.s.nodes[n].API.EditIssue(ctx, r.owner, r.name, number, title, body, state)
+		}
+	}
 	fields := []struct {
 		name string
 		base *string
-		get  func(forgejo.Issue) string
+		get  func(node string, is forgejo.Issue) string
+		set  func(ctx context.Context, node string, number int64, value string, is forgejo.Issue) error
 	}{
-		{"title", &rec.BaseTitle, func(i forgejo.Issue) string { return i.Title }},
-		{"body", &rec.BaseBody, func(i forgejo.Issue) string { return i.Body }},
-		{"state", &rec.BaseState, func(i forgejo.Issue) string { return i.State }},
+		{"title", &rec.BaseTitle, func(_ string, i forgejo.Issue) string { return i.Title }, nil},
+		{"body", &rec.BaseBody, func(_ string, i forgejo.Issue) string { return i.Body }, nil},
+		{"state", &rec.BaseState, func(_ string, i forgejo.Issue) string { return i.State }, nil},
+		{"labels", &rec.BaseLabels, r.labels.labelsValue,
+			func(ctx context.Context, n string, number int64, v string, is forgejo.Issue) error {
+				fids, ok := r.labels.labelFIDs(n, v, &is)
+				if !ok {
+					return errNotThereYet
+				}
+				return r.s.nodes[n].API.ReplaceIssueLabels(ctx, r.owner, r.name, number, fids)
+			}},
+		{"milestone", &rec.BaseMilestone, r.milestones.milestoneValue,
+			func(ctx context.Context, n string, number int64, v string, _ forgejo.Issue) error {
+				fid, ok := r.milestones.milestoneFID(n, v)
+				if !ok {
+					return errNotThereYet
+				}
+				return r.s.nodes[n].API.SetIssueMilestone(ctx, r.owner, r.name, number, fid)
+			}},
 	}
 	want := map[string]string{} // for new copies
 	for _, f := range fields {
 		vals := map[string]string{}
 		for n, is := range present {
-			vals[n] = f.get(is)
+			vals[n] = f.get(n, is)
 		}
 		value, writes, conflict := merge(vals, *f.base)
 		if conflict {
-			r.conflict(ref+" "+f.name, map[string]any{"field": f.name, "values": clip(vals), "issue": numbers(*rec), "author": rec.Author})
+			r.conflict(ref+" "+f.name, map[string]any{"field": f.name, "values": clip(r.readable(f.name, vals)),
+				"issue": numbers(*rec), "author": rec.Author})
 			if is, ok := present[r.primary]; ok {
-				want[f.name] = f.get(is)
+				want[f.name] = f.get(r.primary, is)
 			} else {
 				want[f.name] = *f.base
 			}
@@ -439,18 +522,22 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 		}
 		want[f.name] = value
 		for _, n := range writes {
-			v := value
-			var t, b, st *string
-			switch f.name {
-			case "title":
-				t = &v
-			case "body":
-				b = &v
-			case "state":
-				st = &v
+			set := f.set
+			if set == nil {
+				v := value
+				switch f.name {
+				case "title":
+					set = edit(&v, nil, nil)
+				case "body":
+					set = edit(nil, &v, nil)
+				case "state":
+					set = edit(nil, nil, &v)
+				}
 			}
-			if err := r.s.nodes[n].API.EditIssue(ctx, r.owner, r.name, rec.Copies[n].Number, t, b, st); err != nil {
-				r.s.log.Warn("issues: updating a copy failed", "repository", r.rec.FullName, "node", n, "issue", ref, "field", f.name, "error", err)
+			if err := set(ctx, n, rec.Copies[n].Number, value, present[n]); err != nil {
+				if !errors.Is(err, errNotThereYet) {
+					r.s.log.Warn("issues: updating a copy failed", "repository", r.rec.FullName, "node", n, "issue", ref, "field", f.name, "error", err)
+				}
 				r.complete = false
 				continue
 			}
@@ -480,7 +567,17 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 				continue
 			}
 		}
-		is, err := r.s.nodes[n].As(rec.Author).CreateIssue(ctx, r.owner, r.name, want["title"], want["body"], want["state"] == "closed")
+		// Only with every label and the milestone: a copy missing some would
+		// look like someone removed them, and that would be copied everywhere.
+		labelIDs, ok1 := r.labels.labelFIDs(n, want["labels"], nil)
+		milestone, ok2 := r.milestones.milestoneFID(n, want["milestone"])
+		if !ok1 || !ok2 {
+			r.s.log.Debug("issues: copy waits for its labels or milestone", "repository", r.rec.FullName, "node", n, "issue", ref)
+			r.complete = false
+			continue
+		}
+		is, err := r.s.nodes[n].As(rec.Author).CreateIssue(ctx, r.owner, r.name, want["title"], want["body"], want["state"] == "closed",
+			labelIDs, milestone)
 		if err != nil {
 			r.s.log.Warn("issues: creating a copy failed", "repository", r.rec.FullName, "node", n, "issue", ref, "error", err)
 			r.complete = false
@@ -761,6 +858,44 @@ func (r *run) comment(ctx context.Context, c *store.CommentRecord, issue *store.
 	}
 	_, err := r.s.store.SaveComment(ctx, *c)
 	return err
+}
+
+// errNotThereYet: a label or milestone an issue should get has no copy on
+// the node yet; the next run sets it.
+var errNotThereYet = errors.New("label or milestone not on the node yet")
+
+// readable turns item ids in labels and milestone values into names, for
+// conflict details.
+func (r *run) readable(field string, vals map[string]string) map[string]string {
+	if field != "labels" && field != "milestone" {
+		return vals
+	}
+	names := map[string]string{}
+	for _, n := range r.nodes {
+		for kind, items := range r.snaps[n].items {
+			idx := r.labels
+			key := "name"
+			if kind == "milestone" {
+				idx, key = r.milestones, "title"
+			}
+			for fid, f := range items {
+				if id, ok := idx.toItem[n][fid]; ok {
+					names[id] = f[key]
+				}
+			}
+		}
+	}
+	out := map[string]string{}
+	for n, v := range vals {
+		var parts []string
+		for _, id := range strings.Split(v, ",") {
+			if id != "" {
+				parts = append(parts, names[id])
+			}
+		}
+		out[n] = strings.Join(parts, ", ")
+	}
+	return out
 }
 
 // numbers is an issue's number on each node, for conflict details.

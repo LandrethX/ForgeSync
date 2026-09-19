@@ -10,16 +10,51 @@ export const KIND_LABEL: Record<Conflict["kind"], string> = {
   issue_conflict: "Issue changed differently",
 };
 
+/**
+ * For a conflict about a label or milestone of its own, its kind and the
+ * field that differs; issue_conflict carries those as "<kind> <field>".
+ */
+function itemField(
+  c: Conflict,
+): { kind: "label" | "milestone"; field: string } | undefined {
+  if (c.kind !== "issue_conflict") return undefined;
+  const f = c.details.field ?? "";
+  for (const kind of ["label", "milestone"] as const) {
+    if (f.startsWith(`${kind} `))
+      return { kind, field: f.slice(kind.length + 1) };
+  }
+  return undefined;
+}
+
+/** "the label bug", or just "the label" if its name is unknown. */
+function itemName(c: Conflict, kind: string): string {
+  return c.details.item ? `the ${kind} ${c.details.item}` : `the ${kind}`;
+}
+
 function refName(c: Conflict): string {
-  return c.details.branch ?? c.details.tag ?? c.ref.replace(/^refs\/(heads|tags)\//, "");
+  return (
+    c.details.branch ??
+    c.details.tag ??
+    c.ref.replace(/^refs\/(heads|tags)\//, "")
+  );
 }
 
 /** One-line summary, e.g. "Diverged history on main". */
 export function conflictTitle(c: Conflict): string {
   const label = KIND_LABEL[c.kind] ?? c.kind;
   if (c.kind === "default_branch_mismatch") return label;
-  if (c.kind === "issue_conflict") return `${label}: ${c.ref}`;
-  const what = c.details.tag !== undefined || c.ref.startsWith("refs/tags/") ? `tag ${refName(c)}` : refName(c);
+  if (c.kind === "issue_conflict") {
+    const item = itemField(c);
+    if (item) {
+      const what = item.kind === "label" ? "Label" : "Milestone";
+      return `${what} changed differently: ${c.details.item ?? c.ref}`;
+    }
+    return `${label}: ${c.ref}`;
+  }
+  const what =
+    c.details.tag !== undefined || c.ref.startsWith("refs/tags/")
+      ? `tag ${refName(c)}`
+      : refName(c);
   return `${label}: ${what}`;
 }
 
@@ -57,15 +92,28 @@ export function conflictExplanation(c: Conflict): string | undefined {
       return "This ref was changed on a replica after replication wrote it, or a tag there points somewhere else.";
     case "git_replica_extra_ref":
       return `This ref exists only on a replica; it wasn't created on ${primary}.`;
-    case "issue_conflict":
+    case "issue_conflict": {
+      const item = itemField(c);
+      if (item) {
+        const what = itemName(c, item.kind);
+        if (item.field === "deleted") {
+          return `${what.charAt(0).toUpperCase()}${what.slice(1)} was deleted on ${primary}, but changed on ${c.details.node ?? "another node"} since. ForgeSync kept that copy and won't copy it back.`;
+        }
+        return `The ${item.field} of ${what} was changed to different values on different nodes since they last agreed. ForgeSync doesn't pick one.`;
+      }
       switch (c.details.field) {
         case "deleted":
           return `The issue was deleted on ${primary}, but changed on ${c.details.node ?? "another node"} since. ForgeSync kept that copy and won't copy it back.`;
         case "comment deleted":
           return `The comment was deleted on ${primary}, but edited on ${c.details.node ?? "another node"} since. ForgeSync kept that copy.`;
+        case "labels":
+          return "The issue's labels were set differently on different nodes since they last agreed. ForgeSync doesn't pick one.";
+        case "milestone":
+          return "The issue was put in different milestones on different nodes since they last agreed. ForgeSync doesn't pick one.";
         default:
           return `The ${c.details.field ?? "issue"} was changed to different values on different nodes since they last agreed. ForgeSync doesn't pick one.`;
       }
+    }
   }
   return undefined;
 }
@@ -73,7 +121,9 @@ export function conflictExplanation(c: Conflict): string | undefined {
 /** Guidance for fixing each kind of conflict. */
 export function conflictFix(c: Conflict): string {
   const primary = c.details.primary || c.primary_node;
-  const onPrimary = primary ? `on the primary (${primary})` : "on the side you trust";
+  const onPrimary = primary
+    ? `on the primary (${primary})`
+    : "on the side you trust";
   switch (c.kind) {
     case "git_replica_ahead":
       return `ForgeSync normally takes a replica's new commits over to ${primary || "the primary"} by itself. It couldn't here, most likely because the primary changed at the same time; the next run tries again.`;
@@ -83,11 +133,25 @@ export function conflictFix(c: Conflict): string {
       return `Decide which value is right. Set it ${onPrimary} and make the replica match, or delete the ref on the replica so replication recreates it from the primary.`;
     case "git_replica_extra_ref":
       return `ForgeSync normally creates a ref like this on ${primary || "the primary"} by itself, so it replicates from there. It couldn't here, most likely because the same name appeared on the primary in the meantime; the next run tries again. If the ref shouldn't exist, delete it on the replica.`;
-    case "issue_conflict":
-      if (c.details.field === "deleted" || c.details.field === "comment deleted") {
+    case "issue_conflict": {
+      const item = itemField(c);
+      if (item) {
+        if (item.field === "deleted") {
+          return `Delete ${itemName(c, item.kind)} on ${c.details.node ?? "that node"} too if it should go. To keep it, create it again on ${primary || "the primary"} with the same ${item.kind === "label" ? "name" : "title"}; ForgeSync then treats it as normal again.`;
+        }
+        return `Set the ${item.field} of ${itemName(c, item.kind)} on one of the nodes so it matches another; ForgeSync then copies that value everywhere.`;
+      }
+      if (
+        c.details.field === "deleted" ||
+        c.details.field === "comment deleted"
+      ) {
         return `Delete it on ${c.details.node ?? "that node"} too if it should go. To keep it, create it again on ${primary} with the same author and title (or text); ForgeSync then treats it as normal again.`;
       }
+      if (c.details.field === "labels" || c.details.field === "milestone") {
+        return `Set the issue's ${c.details.field} on one of the nodes so it matches another; ForgeSync then copies that everywhere.`;
+      }
       return `Edit the ${c.details.field ?? "field"} on one of the nodes so it matches another; ForgeSync then copies that value everywhere.`;
+    }
     case "default_branch_mismatch":
       return "ForgeSync sets each replica's default branch to the primary's once that branch exists there. If this stays, set it in the repository settings on the nodes that differ.";
     default:

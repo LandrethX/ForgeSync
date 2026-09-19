@@ -885,3 +885,92 @@ func TestIssueRecords(t *testing.T) {
 		t.Errorf("left after deleting: %+v %+v", issues, comments)
 	}
 }
+
+func TestRepoItems(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s.SyncNodes(ctx, []NodeRecord{{Name: "se", URL: "http://se"}, {Name: "dk", URL: "http://dk"}})
+	t0 := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
+	s.RecordNodeScan(ctx, "se", t0, t0, []ScannedRepo{{FullName: "alice/demo"}})
+	repos, _ := s.Repositories(ctx)
+	repo := repos[0].ID
+
+	label, err := s.SaveRepoItem(ctx, RepoItem{RepositoryID: repo, Kind: "label", OriginNode: "se",
+		Base: map[string]string{"name": "bug", "color": "ee0701"}, Copies: map[string]int64{"se": 7}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Labels and milestones have separate id sequences, so the same Forgejo
+	// id on the same node is fine across kinds.
+	milestone, err := s.SaveRepoItem(ctx, RepoItem{RepositoryID: repo, Kind: "milestone", OriginNode: "dk",
+		Base: map[string]string{"title": "v1", "state": "open"}, Copies: map[string]int64{"dk": 7}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Copies are replaced on save; the base follows.
+	if _, err := s.SaveRepoItem(ctx, RepoItem{ID: label, Kind: "label",
+		Base: map[string]string{"name": "defect", "color": "ee0701"}, Copies: map[string]int64{"se": 7, "dk": 8}}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.RepoItems(ctx, repo)
+	if err != nil || len(items) != 2 {
+		t.Fatalf("items %+v err %v", items, err)
+	}
+	got := map[string]RepoItem{}
+	for _, it := range items {
+		got[it.Kind] = it
+	}
+	if l := got["label"]; l.ID != label || l.OriginNode != "se" || l.Base["name"] != "defect" ||
+		len(l.Copies) != 2 || l.Copies["dk"] != 8 || l.DeletedAt != nil {
+		t.Errorf("label = %+v", l)
+	}
+	if m := got["milestone"]; m.ID != milestone || m.Base["title"] != "v1" || m.Copies["dk"] != 7 {
+		t.Errorf("milestone = %+v", m)
+	}
+	// One node's Forgejo label id belongs to one item.
+	if _, err := s.SaveRepoItem(ctx, RepoItem{RepositoryID: repo, Kind: "label", OriginNode: "se",
+		Base: map[string]string{"name": "other"}, Copies: map[string]int64{"se": 7}}); err == nil {
+		t.Error("a second item took the same Forgejo label")
+	}
+	// Deleted on the primary: kept with deleted_at until the copies go.
+	gone := t0.Add(time.Hour)
+	if _, err := s.SaveRepoItem(ctx, RepoItem{ID: milestone, Kind: "milestone",
+		Base: map[string]string{"title": "v1"}, DeletedAt: &gone, Copies: map[string]int64{"dk": 7}}); err != nil {
+		t.Fatal(err)
+	}
+	items, _ = s.RepoItems(ctx, repo)
+	for _, it := range items {
+		if it.ID == milestone && (it.DeletedAt == nil || !it.DeletedAt.Equal(gone)) {
+			t.Errorf("deleted_at = %v", it.DeletedAt)
+		}
+	}
+
+	// An issue's labels and milestone are remembered as item ids.
+	issue, err := s.SaveIssue(ctx, IssueRecord{RepositoryID: repo, OriginNode: "se", Author: "bob", CreatedAt: t0,
+		BaseTitle: "t", BaseState: "open", BaseLabels: label, BaseMilestone: milestone,
+		Copies: map[string]IssueCopy{"se": {Number: 1, ForgejoID: 10}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues, _, _ := s.Issues(ctx, repo)
+	if len(issues) != 1 || issues[0].BaseLabels != label || issues[0].BaseMilestone != milestone {
+		t.Errorf("issue = %+v", issues)
+	}
+	if _, err := s.SaveIssue(ctx, IssueRecord{ID: issue, BaseTitle: "t", BaseState: "open",
+		Copies: map[string]IssueCopy{"se": {Number: 1, ForgejoID: 10}}}); err != nil {
+		t.Fatal(err)
+	}
+	if issues, _, _ := s.Issues(ctx, repo); issues[0].BaseLabels != "" || issues[0].BaseMilestone != "" {
+		t.Errorf("labels not cleared: %+v", issues[0])
+	}
+
+	if err := s.DeleteRepoItem(ctx, label); err != nil {
+		t.Fatal(err)
+	}
+	if items, _ := s.RepoItems(ctx, repo); len(items) != 1 {
+		t.Errorf("left after deleting: %+v", items)
+	}
+}

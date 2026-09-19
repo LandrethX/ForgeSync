@@ -545,6 +545,10 @@ type Issue struct {
 	User        User      `json:"user"`
 	Created     time.Time `json:"created_at"`
 	PullRequest *struct{} `json:"pull_request"` // set for pull requests
+	Labels      []Label   `json:"labels"`
+	Milestone   *struct {
+		ID int64 `json:"id"`
+	} `json:"milestone"`
 }
 
 // IssueComment is a comment on an issue or pull request.
@@ -581,12 +585,34 @@ func (c *Client) ListRepoComments(ctx context.Context, owner, repo string, page,
 	return out, err
 }
 
-// CreateIssue opens an issue (already closed if closed is set).
-func (c *Client) CreateIssue(ctx context.Context, owner, repo, title, body string, closed bool) (Issue, error) {
+// CreateIssue opens an issue (already closed if closed is set) with these
+// labels and milestone (0: none).
+func (c *Client) CreateIssue(ctx context.Context, owner, repo, title, body string, closed bool, labels []int64, milestone int64) (Issue, error) {
 	var is Issue
-	err := c.do(ctx, http.MethodPost, repoPath(owner, repo)+"/issues", true,
-		map[string]any{"title": title, "body": body, "closed": closed}, &is)
+	opt := map[string]any{"title": title, "body": body, "closed": closed}
+	if len(labels) > 0 {
+		opt["labels"] = labels
+	}
+	if milestone != 0 {
+		opt["milestone"] = milestone
+	}
+	err := c.do(ctx, http.MethodPost, repoPath(owner, repo)+"/issues", true, opt, &is)
 	return is, err
+}
+
+// SetIssueMilestone sets an issue's milestone (0: none).
+func (c *Client) SetIssueMilestone(ctx context.Context, owner, repo string, number, milestone int64) error {
+	return c.do(ctx, http.MethodPatch, fmt.Sprintf("%s/issues/%d", repoPath(owner, repo), number), true,
+		map[string]int64{"milestone": milestone}, nil)
+}
+
+// ReplaceIssueLabels sets an issue's labels to exactly these.
+func (c *Client) ReplaceIssueLabels(ctx context.Context, owner, repo string, number int64, labels []int64) error {
+	if labels == nil {
+		labels = []int64{}
+	}
+	return c.do(ctx, http.MethodPut, fmt.Sprintf("%s/issues/%d/labels", repoPath(owner, repo), number), true,
+		map[string]any{"labels": labels}, nil)
 }
 
 // EditIssue changes an issue's title, body or state; nil leaves a field.
@@ -631,6 +657,95 @@ func (c *Client) EditIssueComment(ctx context.Context, owner, repo string, id in
 // DeleteIssueComment deletes a comment. Already gone is not an error.
 func (c *Client) DeleteIssueComment(ctx context.Context, owner, repo string, id int64) error {
 	err := c.do(ctx, http.MethodDelete, fmt.Sprintf("%s/issues/comments/%d", repoPath(owner, repo), id), true, nil, nil)
+	if isNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// Label is a repository label (modules/structs/issue_label.go). Color comes
+// back without the leading #.
+type Label struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Color       string `json:"color"`
+	Description string `json:"description"`
+	Exclusive   bool   `json:"exclusive"`
+	IsArchived  bool   `json:"is_archived"`
+}
+
+// ListLabels returns one page of a repository's own labels (not its
+// organization's).
+func (c *Client) ListLabels(ctx context.Context, owner, repo string, page, limit int) ([]Label, error) {
+	var out []Label
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/labels?page=%d&limit=%d", repoPath(owner, repo), page, limit), true, nil, &out)
+	return out, err
+}
+
+// CreateLabel adds a label.
+func (c *Client) CreateLabel(ctx context.Context, owner, repo string, l Label) (Label, error) {
+	var out Label
+	err := c.do(ctx, http.MethodPost, repoPath(owner, repo)+"/labels", true, map[string]any{
+		"name": l.Name, "color": "#" + strings.TrimPrefix(l.Color, "#"), "description": l.Description,
+		"exclusive": l.Exclusive, "is_archived": l.IsArchived}, &out)
+	return out, err
+}
+
+// EditLabel changes the given fields of a label (name, color, description,
+// exclusive, is_archived).
+func (c *Client) EditLabel(ctx context.Context, owner, repo string, id int64, fields map[string]any) error {
+	if col, ok := fields["color"].(string); ok {
+		fields["color"] = "#" + strings.TrimPrefix(col, "#")
+	}
+	return c.do(ctx, http.MethodPatch, fmt.Sprintf("%s/labels/%d", repoPath(owner, repo), id), true, fields, nil)
+}
+
+// DeleteLabel removes a label. Already gone is not an error.
+func (c *Client) DeleteLabel(ctx context.Context, owner, repo string, id int64) error {
+	err := c.do(ctx, http.MethodDelete, fmt.Sprintf("%s/labels/%d", repoPath(owner, repo), id), true, nil, nil)
+	if isNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// Milestone is a repository milestone (modules/structs/issue_milestone.go).
+type Milestone struct {
+	ID          int64      `json:"id"`
+	Title       string     `json:"title"`
+	Description string     `json:"description"`
+	State       string     `json:"state"` // open or closed
+	Deadline    *time.Time `json:"due_on"`
+}
+
+// ListMilestones returns one page of a repository's milestones, open and
+// closed.
+func (c *Client) ListMilestones(ctx context.Context, owner, repo string, page, limit int) ([]Milestone, error) {
+	var out []Milestone
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/milestones?state=all&page=%d&limit=%d", repoPath(owner, repo), page, limit), true, nil, &out)
+	return out, err
+}
+
+// CreateMilestone adds a milestone.
+func (c *Client) CreateMilestone(ctx context.Context, owner, repo string, m Milestone) (Milestone, error) {
+	var out Milestone
+	opt := map[string]any{"title": m.Title, "description": m.Description, "state": m.State}
+	if m.Deadline != nil {
+		opt["due_on"] = m.Deadline
+	}
+	err := c.do(ctx, http.MethodPost, repoPath(owner, repo)+"/milestones", true, opt, &out)
+	return out, err
+}
+
+// EditMilestone changes the given fields (title, description, state,
+// due_on). Forgejo can set a due date but not clear one.
+func (c *Client) EditMilestone(ctx context.Context, owner, repo string, id int64, fields map[string]any) error {
+	return c.do(ctx, http.MethodPatch, fmt.Sprintf("%s/milestones/%d", repoPath(owner, repo), id), true, fields, nil)
+}
+
+// DeleteMilestone removes a milestone. Already gone is not an error.
+func (c *Client) DeleteMilestone(ctx context.Context, owner, repo string, id int64) error {
+	err := c.do(ctx, http.MethodDelete, fmt.Sprintf("%s/milestones/%d", repoPath(owner, repo), id), true, nil, nil)
 	if isNotFound(err) {
 		return nil
 	}

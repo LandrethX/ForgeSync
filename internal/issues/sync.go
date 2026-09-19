@@ -589,6 +589,15 @@ func (s *Syncer) runOnce(ctx context.Context, id string) error {
 		}
 		sn, err := s.read(ctx, s.nodes[n], owner, name)
 		if err != nil {
+			if forgejo.IsNotFound(err) {
+				// Issues are turned off for this repository on this node,
+				// which is that node's own decision, so its endpoints
+				// answer 404. Nothing to read, and nothing worth a
+				// warning every round.
+				s.log.Debug("issues: turned off here", "repository", rec.FullName, "node", n)
+				r.complete = false
+				continue
+			}
 			if n == rec.PrimaryNode {
 				return fmt.Errorf("reading issues on the primary %s: %w", n, err)
 			}

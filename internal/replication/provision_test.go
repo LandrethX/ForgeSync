@@ -50,6 +50,9 @@ type fakeAPI struct {
 	vars       map[string]string
 	secrets    []string
 	actionsOff bool
+	// releasesOff makes the node answer as one with releases turned off
+	// for the repository, which a fork is by default.
+	releasesOff bool
 	// releases are what this node has published, with the bytes of their
 	// files; tags are the tags it has; name and as identify it and who it
 	// is acting as.
@@ -231,6 +234,9 @@ func (f *fakeAPI) CreateWikiPage(_ context.Context, owner, repo, title, _, _ str
 func (f *fakeAPI) Releases(_ context.Context, owner, repo string, page, _ int) ([]forgejo.Release, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.releasesOff {
+		return nil, &forgejo.APIError{StatusCode: http.StatusNotFound, Message: "The target couldn't be found."}
+	}
 	if page > 1 {
 		return nil, nil
 	}

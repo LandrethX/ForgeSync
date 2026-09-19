@@ -149,3 +149,27 @@ func TestAReleaseWaitsForItsTagAndDraftsStayPut(t *testing.T) {
 		t.Errorf("de after the tag arrived: %q", got)
 	}
 }
+
+// Releases can be turned off for a repository on a node -- a fork has
+// them off by default -- and the endpoint then answers 404. That's an
+// answer, not a failure: the node is passed over, the others are brought
+// together as usual, and nothing is said about it every round.
+func TestANodeWithReleasesOffIsSkippedQuietly(t *testing.T) {
+	e, st, apis, rec := releaseSetup(t)
+	ctx := context.Background()
+	apis["de"].releasesOff = true
+	apis["se"].releases["alice/demo"] = []*forgejo.Release{{ID: 1, TagName: "v1.0", Title: "Version 1.0",
+		Body: "The first one.", Author: forgejo.User{Login: "alice"}}}
+
+	e.syncReleases(ctx, rec, map[string]bool{"se": true, "dk": true, "de": true})
+
+	if got := releasesOn(apis["dk"]); got != "v1.0 Version 1.0 []" {
+		t.Errorf("dk: %q", got)
+	}
+	if got := releasesOn(apis["de"]); got != "" {
+		t.Errorf("de was written to although releases are off there: %q", got)
+	}
+	if len(st.found) != 0 {
+		t.Errorf("a node with releases off became a conflict: %+v", st.found)
+	}
+}

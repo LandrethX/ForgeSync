@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"slices"
 	"sort"
 	"strconv"
@@ -33,6 +34,9 @@ type fakeNode struct {
 	labels     map[int64]*forgejo.Label
 	milestones map[int64]*forgejo.Milestone
 	assignable map[string]bool // who the node would let an issue be assigned to
+	// issuesOff makes the node answer as one with issues turned off for
+	// the repository, which a fork is by default: its endpoints 404.
+	issuesOff bool
 	// reactions are "<login>:<content>" sets, by issue number and comment id.
 	reactions        map[int64]map[string]bool
 	commentReactions map[int64]map[string]bool
@@ -189,6 +193,9 @@ func (a fakeAPI) ListIssuesAndPulls(_ context.Context, _, _ string, page, limit 
 func (a fakeAPI) listIssues(page, limit int, withPulls bool) ([]forgejo.Issue, error) {
 	a.n.mu.Lock()
 	defer a.n.mu.Unlock()
+	if a.n.issuesOff {
+		return nil, &forgejo.APIError{StatusCode: http.StatusNotFound, Message: "The target couldn't be found."}
+	}
 	var all []forgejo.Issue
 	for _, is := range a.n.issues {
 		if is.PullRequest != nil && !withPulls {
@@ -1346,5 +1353,32 @@ func TestCommentDeletedOnPrimaryButEditedElsewhere(t *testing.T) {
 	}
 	if len(f["se"].commentsOn(1)) != 0 || len(st.found) != 1 || !strings.HasSuffix(st.found[0].Ref, "comment deleted") {
 		t.Errorf("se %v, conflicts %+v", f["se"].commentsOn(1), st.found)
+	}
+}
+
+// Issues can be turned off for a repository on a node -- a fork has them
+// off by default -- and its endpoints then answer 404. That's an answer,
+// not a failure: the node is passed over and nothing is said about it
+// every round. With the primary off, there is nothing to replicate at
+// all, and that isn't an error either.
+func TestANodeWithIssuesOffIsSkippedQuietly(t *testing.T) {
+	s, _, fakes, _ := setup(t)
+	fakes["de"].issuesOff = true
+	fakes["se"].open("alice", "Something")
+
+	s.run(t)
+
+	if fakes["dk"].byTitle("Something") == nil {
+		t.Error("dk didn't get the issue")
+	}
+	if fakes["de"].byTitle("Something") != nil {
+		t.Error("de was written to although issues are off there")
+	}
+
+	// And with the primary itself off, the run is a quiet no-op.
+	t2, _, fakes2, _ := setup(t)
+	fakes2["se"].issuesOff = true
+	if err := t2.RunRepo(context.Background(), "11111111-1111-1111-1111-111111111111"); err != nil {
+		t.Fatalf("a repository with issues off on its primary: %v", err)
 	}
 }

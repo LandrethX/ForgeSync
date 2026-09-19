@@ -84,6 +84,13 @@ func (e *Engine) syncReleases(ctx context.Context, rec store.RepositoryRecord, h
 			continue
 		}
 		st, err := e.readReleases(ctx, e.nodes[n], owner, name)
+		if forgejo.IsNotFound(err) {
+			// Releases are turned off for this repository on this node --
+			// a fork has them off by default -- so the endpoint answers
+			// 404. There's nothing to compare, and nothing worth saying
+			// about it every round.
+			continue
+		}
 		if err != nil {
 			e.log.Warn("releases: reading them failed", "repository", rec.FullName, "node", n, "error", err)
 			continue

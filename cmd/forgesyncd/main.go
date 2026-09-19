@@ -202,18 +202,26 @@ func run(configPath string) error {
 		// Archived copies of deleted repositories aren't inventoried.
 		SkipOwners: []string{cfg.Replication.ArchiveOrg},
 		AfterScan: func(ctx context.Context) {
-			if err := assignPrimaries(ctx); err != nil {
-				log.Error("assigning primaries failed", "error", err)
+			// Each part is timed: the round's cost grows with repositories
+			// times nodes, and when it grows too long for the interval the
+			// log should say which part to look at.
+			round := time.Now()
+			timed := func(what string, fn func() error) {
+				start := time.Now()
+				if err := fn(); err != nil {
+					log.Error(what+" failed", "error", err)
+				}
+				log.Debug("scan round part finished", "part", what, "duration", time.Since(start).Round(time.Millisecond))
 			}
-			if err := detector.Run(ctx); err != nil {
-				log.Error("conflict detection failed", "error", err)
-			}
+			timed("assigning primaries", func() error { return assignPrimaries(ctx) })
+			timed("conflict detection", func() error { return detector.Run(ctx) })
 			if engine != nil {
-				engine.RunAll(ctx)
+				timed("replication", func() error { engine.RunAll(ctx); return nil })
 			}
 			if issueSync != nil {
-				issueSync.RunAll(ctx)
+				timed("issue replication", func() error { issueSync.RunAll(ctx); return nil })
 			}
+			log.Info("scan round finished", "duration", time.Since(round).Round(time.Millisecond))
 		},
 	}, db, log)
 	var hooks http.Handler

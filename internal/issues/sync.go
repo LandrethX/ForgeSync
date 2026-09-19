@@ -29,6 +29,13 @@ type API interface {
 	RemoveIssueReaction(ctx context.Context, owner, repo string, number int64, content string) error
 	AddCommentReaction(ctx context.Context, owner, repo string, id int64, content string) error
 	RemoveCommentReaction(ctx context.Context, owner, repo string, id int64, content string) error
+	IssueAttachments(ctx context.Context, owner, repo string, number int64) ([]forgejo.Attachment, error)
+	CommentAttachments(ctx context.Context, owner, repo string, id int64) ([]forgejo.Attachment, error)
+	UploadIssueAttachment(ctx context.Context, owner, repo string, number int64, name string, content []byte) (forgejo.Attachment, error)
+	UploadCommentAttachment(ctx context.Context, owner, repo string, id int64, name string, content []byte) (forgejo.Attachment, error)
+	DeleteIssueAttachment(ctx context.Context, owner, repo string, number, id int64) error
+	DeleteCommentAttachment(ctx context.Context, owner, repo string, commentID, id int64) error
+	Download(ctx context.Context, url string, max int64) ([]byte, error)
 	ListAssignees(ctx context.Context, owner, repo string) ([]forgejo.User, error)
 	ReplaceIssueLabels(ctx context.Context, owner, repo string, number int64, labels []int64) error
 	ListLabels(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.Label, error)
@@ -83,11 +90,20 @@ type Options struct {
 	// Forgejo has no bulk endpoint for them, so it costs one call per issue
 	// and per comment per node on every run; off by default.
 	Reactions bool
+	// Attachments also replicates the files on issues and comments, which
+	// costs the same listing plus a download and an upload for each file
+	// that has to move. AttachmentMax is the largest file it will carry
+	// (default 16 MiB); a bigger one is left where it is, with a warning.
+	Attachments   bool
+	AttachmentMax int64
 	// EnsureUser makes an author exist on a node as on another, as for
 	// repository owners (replication.Engine.EnsureUser). nil: authors must
 	// exist already.
 	EnsureUser func(ctx context.Context, login, from, to string) error
 }
+
+// defaultAttachmentMax is the largest file replication carries by default.
+const defaultAttachmentMax = 16 << 20
 
 // Syncer replicates the issues of repositories that have a primary.
 type Syncer struct {
@@ -107,6 +123,9 @@ type Syncer struct {
 func NewSyncer(nodes []Node, st Store, h HealthSource, opts Options, log *slog.Logger) *Syncer {
 	if opts.Concurrency < 1 {
 		opts.Concurrency = 2
+	}
+	if opts.AttachmentMax <= 0 {
+		opts.AttachmentMax = defaultAttachmentMax
 	}
 	s := &Syncer{nodes: map[string]Node{}, store: st, health: h, opts: opts, log: log, now: time.Now,
 		running: map[string]bool{}, again: map[string]bool{}}
@@ -191,6 +210,10 @@ type snapshot struct {
 	// issue's and the comment's Forgejo id. Empty unless Options.Reactions.
 	reactions        map[int64]map[string]bool
 	commentReactions map[int64]map[string]bool
+	// attachments and commentAttachments are the files by "<size>:<name>",
+	// likewise. Empty unless Options.Attachments.
+	attachments        map[int64]map[string]forgejo.Attachment
+	commentAttachments map[int64]map[string]forgejo.Attachment
 }
 
 func (s *Syncer) read(ctx context.Context, n Node, owner, name string) (*snapshot, error) {
@@ -255,20 +278,22 @@ func (s *Syncer) read(ctx context.Context, n Node, owner, name string) (*snapsho
 			break
 		}
 	}
-	if s.opts.Reactions {
-		if err := s.readReactions(ctx, n, owner, name, sn); err != nil {
+	if s.opts.Reactions || s.opts.Attachments {
+		if err := s.readExtras(ctx, n, owner, name, sn); err != nil {
 			return nil, err
 		}
 	}
 	return sn, nil
 }
 
-// readReactions adds every issue's and comment's reactions to the snapshot.
-// Forgejo has no bulk endpoint for them, so this is one call each; they go
-// out a few at a time.
-func (s *Syncer) readReactions(ctx context.Context, n Node, owner, name string, sn *snapshot) error {
+// readExtras adds every issue's and comment's reactions and attachments to
+// the snapshot. Forgejo has no bulk endpoint for either, so this is one
+// call each; they go out a few at a time.
+func (s *Syncer) readExtras(ctx context.Context, n Node, owner, name string, sn *snapshot) error {
 	sn.reactions = make(map[int64]map[string]bool, len(sn.issues))
 	sn.commentReactions = make(map[int64]map[string]bool, len(sn.comments))
+	sn.attachments = make(map[int64]map[string]forgejo.Attachment, len(sn.issues))
+	sn.commentAttachments = make(map[int64]map[string]forgejo.Attachment, len(sn.comments))
 	type job struct {
 		id      int64 // the issue's or the comment's Forgejo id
 		number  int64 // the issue's number, 0 for a comment
@@ -291,15 +316,25 @@ func (s *Syncer) readReactions(ctx context.Context, n Node, owner, name string, 
 		go func() {
 			defer wg.Done()
 			for j := range next {
-				set, err := s.reactionsOf(ctx, n, owner, name, j.id, j.number, j.comment)
+				var set map[string]bool
+				var files map[string]forgejo.Attachment
+				var err error
+				if s.opts.Reactions {
+					set, err = s.reactionsOf(ctx, n, owner, name, j.id, j.number, j.comment)
+				}
+				if err == nil && s.opts.Attachments {
+					files, err = s.attachmentsOf(ctx, n, owner, name, j.id, j.number, j.comment)
+				}
 				mu.Lock()
 				switch {
-				case err != nil && first == nil:
-					first = err
-				case err == nil && j.comment:
-					sn.commentReactions[j.id] = set
-				case err == nil:
-					sn.reactions[j.id] = set
+				case err != nil:
+					if first == nil {
+						first = err
+					}
+				case j.comment:
+					sn.commentReactions[j.id], sn.commentAttachments[j.id] = set, files
+				default:
+					sn.reactions[j.id], sn.attachments[j.id] = set, files
 				}
 				mu.Unlock()
 			}
@@ -333,6 +368,20 @@ func (s *Syncer) reactionsOf(ctx context.Context, n Node, owner, name string, id
 			return set, nil
 		}
 	}
+}
+
+func (s *Syncer) attachmentsOf(ctx context.Context, n Node, owner, name string, id, number int64, comment bool) (map[string]forgejo.Attachment, error) {
+	var list []forgejo.Attachment
+	var err error
+	if comment {
+		list, err = n.API.CommentAttachments(ctx, owner, name, id)
+	} else {
+		list, err = n.API.IssueAttachments(ctx, owner, name, number)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return attachmentsOn(list), nil
 }
 
 // run is one repository's replication pass.
@@ -853,6 +902,24 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 				return api.RemoveIssueReaction(ctx, r.owner, r.name, rec.Copies[n].Number, content)
 			})
 	}
+	if r.s.opts.Attachments {
+		at := map[string]map[string]forgejo.Attachment{}
+		for n, c := range rec.Copies {
+			at[n] = r.snaps[n].attachments[c.ForgejoID]
+			if at[n] == nil {
+				at[n] = map[string]forgejo.Attachment{} // a copy just made
+			}
+		}
+		rec.BaseAttachments = r.syncAttachments(ctx, ref, rec.Author, rec.BaseAttachments, at, attacher{
+			upload: func(ctx context.Context, n, author, name string, content []byte) error {
+				_, err := r.s.nodes[n].As(author).UploadIssueAttachment(ctx, r.owner, r.name, rec.Copies[n].Number, name, content)
+				return err
+			},
+			remove: func(ctx context.Context, n string, a forgejo.Attachment) error {
+				return r.s.nodes[n].API.DeleteIssueAttachment(ctx, r.owner, r.name, rec.Copies[n].Number, a.ID)
+			},
+		})
+	}
 	_, err = r.s.store.SaveIssue(ctx, *rec)
 	return false, err
 }
@@ -1135,9 +1202,30 @@ func (r *run) comment(ctx context.Context, c *store.CommentRecord, issue *store.
 				return api.RemoveCommentReaction(ctx, r.owner, r.name, c.Copies[n], content)
 			})
 	}
+	if r.s.opts.Attachments {
+		at := map[string]map[string]forgejo.Attachment{}
+		for n, id := range c.Copies {
+			at[n] = r.snaps[n].commentAttachments[id]
+			if at[n] == nil {
+				at[n] = map[string]forgejo.Attachment{} // a copy just made
+			}
+		}
+		c.BaseAttachments = r.syncAttachments(ctx, ref, c.Author, c.BaseAttachments, at, attacher{
+			upload: func(ctx context.Context, n, author, name string, content []byte) error {
+				_, err := r.s.nodes[n].As(author).UploadCommentAttachment(ctx, r.owner, r.name, c.Copies[n], name, content)
+				return err
+			},
+			remove: func(ctx context.Context, n string, a forgejo.Attachment) error {
+				return r.s.nodes[n].API.DeleteCommentAttachment(ctx, r.owner, r.name, c.Copies[n], a.ID)
+			},
+		})
+	}
 	_, err := r.s.store.SaveComment(ctx, *c)
 	return err
 }
+
+// errNoSource: no node ForgeSync could read has the attachment any more.
+var errNoSource = errors.New("no node has the file to copy")
 
 // errNotThereYet: a label or milestone an issue should get has no copy on
 // the node yet; the next run sets it.

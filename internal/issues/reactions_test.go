@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestPlanReactions(t *testing.T) {
+func TestPlanSet(t *testing.T) {
 	set := func(elements ...string) map[string]bool {
 		out := map[string]bool{}
 		for _, e := range elements {
@@ -68,7 +68,7 @@ func TestPlanReactions(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := planReactions(tc.have, tc.base)
+			p := planSet(tc.have, tc.base)
 			if got := show(p.add); got != tc.add {
 				t.Errorf("add = %q, want %q", got, tc.add)
 			}
@@ -79,7 +79,7 @@ func TestPlanReactions(t *testing.T) {
 	}
 }
 
-func TestSettleOnlyMovesTheBaseWhenEveryNodeAgrees(t *testing.T) {
+func TestSettleSetOnlyMovesTheBaseWhenEveryNodeAgrees(t *testing.T) {
 	set := func(elements ...string) map[string]bool {
 		out := map[string]bool{}
 		for _, e := range elements {
@@ -88,20 +88,20 @@ func TestSettleOnlyMovesTheBaseWhenEveryNodeAgrees(t *testing.T) {
 		return out
 	}
 	all := map[string]map[string]bool{"se": set("alice:+1"), "dk": set("alice:+1")}
-	if got := settle(all, set()); got != "alice:+1" {
+	if got := settleSet(all, set()); got != "alice:+1" {
 		t.Errorf("everyone has it: %q", got)
 	}
 	none := map[string]map[string]bool{"se": set(), "dk": set()}
-	if got := settle(none, set("alice:+1")); got != "" {
+	if got := settleSet(none, set("alice:+1")); got != "" {
 		t.Errorf("nobody has it: %q", got)
 	}
 	// Half-written: the base doesn't move, so the next run tries again
 	// instead of reading the node that's behind as someone's change.
 	half := map[string]map[string]bool{"se": set("alice:+1"), "dk": set()}
-	if got := settle(half, set()); got != "" {
+	if got := settleSet(half, set()); got != "" {
 		t.Errorf("half added: %q", got)
 	}
-	if got := settle(half, set("alice:+1")); got != "alice:+1" {
+	if got := settleSet(half, set("alice:+1")); got != "alice:+1" {
 		t.Errorf("half removed: %q", got)
 	}
 }

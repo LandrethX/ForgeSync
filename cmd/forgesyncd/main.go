@@ -158,8 +158,10 @@ func run(configPath string) error {
 	if engine != nil && cfg.Replication.Issues {
 		issueSync = issues.NewSyncer(issueNodes, db, monitor, issues.Options{
 			Concurrency: cfg.Replication.Concurrency, EnsureUser: engine.EnsureUser,
-			Reactions: cfg.Replication.Reactions}, log)
-		log.Info("issue replication enabled", "reactions", cfg.Replication.Reactions)
+			Reactions: cfg.Replication.Reactions, Attachments: cfg.Replication.Attachments,
+			AttachmentMax: cfg.Replication.AttachmentMaxBytes}, log)
+		log.Info("issue replication enabled", "reactions", cfg.Replication.Reactions,
+			"attachments", cfg.Replication.Attachments)
 	}
 	detector := conflicts.NewDetector(nodeNames, comparers, db, log)
 	detector.ReplicationOwnsPrimaries = engine != nil

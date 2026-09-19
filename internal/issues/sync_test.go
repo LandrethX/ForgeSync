@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -37,6 +38,20 @@ type fakeNode struct {
 	// refuses is a login the node won't let react, standing in for a person
 	// ForgeSync can't create there.
 	refuses string
+	// files are the attachments by issue number and comment id, with their
+	// content; nextFile numbers them. rejects is a file name the node won't
+	// take, standing in for a type or size it doesn't allow.
+	files       map[int64][]*fakeFile
+	commentFile map[int64][]*fakeFile
+	nextFile    int64
+	rejects     string
+}
+
+// fakeFile is one attachment on the node.
+type fakeFile struct {
+	id      int64
+	name    string
+	content []byte
 }
 
 func newFakeNode(name string) *fakeNode {
@@ -45,6 +60,8 @@ func newFakeNode(name string) *fakeNode {
 		assignable:       map[string]bool{"alice": true, "bob": true, "carol": true},
 		reactions:        map[int64]map[string]bool{},
 		commentReactions: map[int64]map[string]bool{},
+		files:            map[int64][]*fakeFile{},
+		commentFile:      map[int64][]*fakeFile{},
 		nextID:           map[string]int64{"se": 1000, "dk": 2000, "de": 3000}[name], clock: time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)}
 }
 
@@ -244,14 +261,14 @@ func (f *fakeNode) unreact(number int64, login, content string) {
 func (f *fakeNode) reactionsOn(number int64) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return reactionValue(f.set(false, number))
+	return setValue(f.set(false, number))
 }
 
 // commentReactionsOn is a comment's, by its id on the node.
 func (f *fakeNode) commentReactionsOn(id int64) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return reactionValue(f.set(true, id))
+	return setValue(f.set(true, id))
 }
 
 func (f *fakeNode) list(comment bool, id int64, page int) ([]forgejo.Reaction, error) {
@@ -305,6 +322,147 @@ func (a fakeAPI) AddCommentReaction(_ context.Context, _, _ string, id int64, co
 }
 func (a fakeAPI) RemoveCommentReaction(_ context.Context, _, _ string, id int64, content string) error {
 	return a.change(true, id, content, false)
+}
+
+func (f *fakeNode) fileList(comment bool, id int64) []*fakeFile {
+	if comment {
+		return f.commentFile[id]
+	}
+	return f.files[id]
+}
+
+func (f *fakeNode) putFile(comment bool, id int64, file *fakeFile) {
+	if comment {
+		f.commentFile[id] = append(f.commentFile[id], file)
+		return
+	}
+	f.files[id] = append(f.files[id], file)
+}
+
+func (f *fakeNode) dropFile(comment bool, id, fileID int64) {
+	list := f.fileList(comment, id)
+	for i, x := range list {
+		if x.id == fileID {
+			list = append(list[:i], list[i+1:]...)
+			break
+		}
+	}
+	if comment {
+		f.commentFile[id] = list
+	} else {
+		f.files[id] = list
+	}
+}
+
+// attach is a person putting a file on an issue on the node.
+func (f *fakeNode) attach(number int64, name, content string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextFile++
+	f.putFile(false, number, &fakeFile{id: f.nextFile, name: name, content: []byte(content)})
+}
+
+// detach takes it off again.
+func (f *fakeNode) detach(number int64, name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, x := range f.fileList(false, number) {
+		if x.name == name {
+			f.dropFile(false, number, x.id)
+			return
+		}
+	}
+}
+
+// filesOn is an issue's attachments on the node as "<name>=<content>",
+// sorted.
+func (f *fakeNode) filesOn(number int64) string { return f.fileNames(false, number) }
+
+// commentFilesOn is a comment's, by its id on the node.
+func (f *fakeNode) commentFilesOn(id int64) string { return f.fileNames(true, id) }
+
+func (f *fakeNode) fileNames(comment bool, id int64) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, x := range f.fileList(comment, id) {
+		out = append(out, x.name+"="+string(x.content))
+	}
+	sort.Strings(out)
+	return strings.Join(out, " ")
+}
+
+func (a fakeAPI) attachments(comment bool, id int64) ([]forgejo.Attachment, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	var out []forgejo.Attachment
+	for _, x := range a.n.fileList(comment, id) {
+		out = append(out, forgejo.Attachment{ID: x.id, Name: x.name, Size: int64(len(x.content)),
+			Type: "attachment", DownloadURL: fmt.Sprintf("http://%s/attachments/%d", a.n.name, x.id)})
+	}
+	return out, nil
+}
+
+func (a fakeAPI) IssueAttachments(_ context.Context, _, _ string, number int64) ([]forgejo.Attachment, error) {
+	return a.attachments(false, number)
+}
+func (a fakeAPI) CommentAttachments(_ context.Context, _, _ string, id int64) ([]forgejo.Attachment, error) {
+	return a.attachments(true, id)
+}
+func (a fakeAPI) upload(comment bool, id int64, name string, content []byte) (forgejo.Attachment, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	if name == a.n.rejects {
+		return forgejo.Attachment{}, fmt.Errorf("%s won't take a file called %s", a.n.name, name)
+	}
+	a.n.nextFile++
+	a.n.putFile(comment, id, &fakeFile{id: a.n.nextFile, name: name, content: content})
+	a.n.writes = append(a.n.writes, "attach "+name)
+	return forgejo.Attachment{ID: a.n.nextFile, Name: name, Size: int64(len(content)), Type: "attachment"}, nil
+}
+func (a fakeAPI) UploadIssueAttachment(_ context.Context, _, _ string, number int64, name string, content []byte) (forgejo.Attachment, error) {
+	return a.upload(false, number, name, content)
+}
+func (a fakeAPI) UploadCommentAttachment(_ context.Context, _, _ string, id int64, name string, content []byte) (forgejo.Attachment, error) {
+	return a.upload(true, id, name, content)
+}
+func (a fakeAPI) DeleteIssueAttachment(_ context.Context, _, _ string, number, id int64) error {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	a.n.dropFile(false, number, id)
+	a.n.writes = append(a.n.writes, "detach")
+	return nil
+}
+func (a fakeAPI) DeleteCommentAttachment(_ context.Context, _, _ string, commentID, id int64) error {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	a.n.dropFile(true, commentID, id)
+	a.n.writes = append(a.n.writes, "detach")
+	return nil
+}
+
+// Download serves the fake's own attachment URLs.
+func (a fakeAPI) Download(_ context.Context, url string, max int64) ([]byte, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	id, err := strconv.ParseInt(url[strings.LastIndex(url, "/")+1:], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	for _, list := range [](map[int64][]*fakeFile){a.n.files, a.n.commentFile} {
+		for _, files := range list {
+			for _, x := range files {
+				if x.id != id {
+					continue
+				}
+				if int64(len(x.content)) > max {
+					return nil, fmt.Errorf("larger than %d bytes", max)
+				}
+				return x.content, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("no attachment %d on %s", id, a.n.name)
 }
 
 // assignees is an issue's assignees on the node, sorted.

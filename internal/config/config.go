@@ -105,6 +105,14 @@ type Replication struct {
 	// so this costs one API call per issue and per comment per node on
 	// every run; off by default, and it needs Issues.
 	Reactions bool `yaml:"reactions"`
+	// Attachments also replicates the files on issues and comments, copied
+	// as the author. It costs the same listing per issue and per comment
+	// per node, plus a download and an upload for each file that has to
+	// move; off by default, and it needs Issues.
+	Attachments bool `yaml:"attachments"`
+	// AttachmentMaxBytes is the largest file replication carries. A bigger
+	// one is left where it is, with a warning. Default 16 MiB.
+	AttachmentMaxBytes int64 `yaml:"attachment_max_bytes"`
 	// ArchiveOrg is the private organization ForgeSync moves the copies of a
 	// repository deleted on its primary into. Default "forgesync-archive".
 	ArchiveOrg string `yaml:"archive_org"`
@@ -377,6 +385,12 @@ func (c *Config) validate() error {
 	}
 	if c.Replication.Reactions && !c.Replication.Issues {
 		errs = append(errs, errors.New("replication.reactions needs replication.issues"))
+	}
+	if c.Replication.Attachments && !c.Replication.Issues {
+		errs = append(errs, errors.New("replication.attachments needs replication.issues"))
+	}
+	if c.Replication.AttachmentMaxBytes < 0 {
+		errs = append(errs, errors.New("replication.attachment_max_bytes must not be negative"))
 	}
 	if c.Health.Interval < time.Second {
 		errs = append(errs, errors.New("health.interval must be at least 1s"))

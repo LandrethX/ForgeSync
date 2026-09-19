@@ -31,6 +31,17 @@ func (r Role) String() string {
 
 func (r Role) MarshalText() ([]byte, error) { return []byte(r.String()), nil }
 
+// UnmarshalText reads a role back, so an identity can be stored as JSON
+// and returned as itself.
+func (r *Role) UnmarshalText(b []byte) error {
+	role, err := ParseRole(string(b))
+	if err != nil {
+		return err
+	}
+	*r = role
+	return nil
+}
+
 // Identity is a signed-in user, or the admin token.
 type Identity struct {
 	Subject  string `json:"subject"`  // SceneID sub, or "token"

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strconv"
@@ -1260,5 +1261,79 @@ func TestPasswordHashing(t *testing.T) {
 	}
 	if _, err := VerifyPassword("not-a-hash", "x"); err == nil {
 		t.Error("a hash that isn't one was accepted")
+	}
+}
+
+// Sessions are in the database so both controllers see them, and they
+// end two ways: after their lifetime, and after long enough without a
+// request.
+func TestSessions(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const idle = 30 * time.Minute
+	identity := []byte(`{"username":"khav","role":"administrator"}`)
+	if err := s.CreateSession(ctx, "hash-1", identity, time.Now().Add(8*time.Hour), idle); err != nil {
+		t.Fatal(err)
+	}
+	got, expires, ok, err := s.Session(ctx, "hash-1", idle, true)
+	if err != nil || !ok {
+		t.Fatalf("session = %s %v %v", got, ok, err)
+	}
+	// jsonb is stored as a document, not as the bytes given, so read it
+	// back the way the caller does.
+	var who struct{ Username, Role string }
+	if err := json.Unmarshal(got, &who); err != nil || who.Username != "khav" || who.Role != "administrator" {
+		t.Fatalf("identity = %s (%v)", got, err)
+	}
+	if time.Until(expires) < 7*time.Hour {
+		t.Errorf("expires = %s", expires)
+	}
+
+	// Reading without touching doesn't count as activity: an open event
+	// stream mustn't keep an idle session alive.
+	if _, err := s.pool.Exec(ctx, `UPDATE sessions SET last_used_at = now() - interval '29 minutes'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok, _ := s.Session(ctx, "hash-1", idle, false); !ok {
+		t.Fatal("a session 29 minutes idle was refused")
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE sessions SET last_used_at = now() - interval '31 minutes'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok, _ := s.Session(ctx, "hash-1", idle, true); ok {
+		t.Fatal("a session 31 minutes idle was accepted")
+	}
+
+	// And the absolute lifetime ends it however busy it has been.
+	if err := s.CreateSession(ctx, "hash-2", identity, time.Now().Add(-time.Minute), idle); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok, _ := s.Session(ctx, "hash-2", idle, true); ok {
+		t.Fatal("a session past its lifetime was accepted")
+	}
+
+	// Signing out removes it for every controller at once, and the ones
+	// that have run out are cleared away.
+	if err := s.CreateSession(ctx, "hash-3", identity, time.Now().Add(time.Hour), idle); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteSession(ctx, "hash-3"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok, _ := s.Session(ctx, "hash-3", idle, true); ok {
+		t.Fatal("a deleted session was accepted")
+	}
+	if _, err := s.PurgeSessions(ctx, idle); err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM sessions`).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if left != 0 {
+		t.Errorf("%d sessions left after the purge", left)
 	}
 }

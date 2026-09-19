@@ -56,8 +56,8 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			}
 			id = tokenIdentity
 		} else if c, err := r.Cookie(sessionCookie); err == nil {
-			var ok bool
-			if id, _, _, ok = s.Sessions.Get(c.Value); !ok {
+			var ok2 bool
+			if id, _, ok2 = s.Sessions.Get(r.Context(), c.Value); !ok2 {
 				unauthorized(w)
 				return
 			}
@@ -121,13 +121,18 @@ func (s *Server) authConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"token_sign_in": s.tokenSignInAllowed()})
 }
 
-func (s *Server) setSessionCookie(w http.ResponseWriter, id auth.Identity) time.Time {
-	key, expires := s.Sessions.Create(id, "")
+// setSessionCookie starts a session and sets the cookie. The session is
+// in the database, so it works on either controller.
+func (s *Server) setSessionCookie(ctx context.Context, w http.ResponseWriter, id auth.Identity) (time.Time, error) {
+	key, expires, err := s.Sessions.Create(ctx, id)
+	if err != nil {
+		return time.Time{}, err
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: key, Path: "/", Expires: expires,
 		HttpOnly: true, Secure: s.SecureCookies, SameSite: http.SameSiteStrictMode,
 	})
-	return expires
+	return expires, nil
 }
 
 // ---------------------------------------------------------------- admin token
@@ -200,7 +205,11 @@ func (s *Server) signInWithPassword(w http.ResponseWriter, r *http.Request, addr
 	if id.Name == "" {
 		id.Name = account.Username
 	}
-	expires := s.setSessionCookie(w, id)
+	expires, err := s.setSessionCookie(r.Context(), w, id)
+	if err != nil {
+		s.serverError(w, "start the session", err)
+		return
+	}
 	s.audit(r.Context(), id.Actor(), "session.sign_in", addr, map[string]any{"source": "account", "role": account.Role})
 	writeJSON(w, http.StatusOK, sessionInfo{Identity: id, ExpiresAt: expires.UTC()})
 }
@@ -219,7 +228,11 @@ func (s *Server) signInWithToken(w http.ResponseWriter, r *http.Request, addr, t
 		return
 	}
 	s.limiter.Reset(addr)
-	expires := s.setSessionCookie(w, webTokenIdentity)
+	expires, err := s.setSessionCookie(r.Context(), w, webTokenIdentity)
+	if err != nil {
+		s.serverError(w, "start the session", err)
+		return
+	}
 	s.audit(r.Context(), webTokenIdentity.Actor(), "session.sign_in", addr, breakGlass)
 	writeJSON(w, http.StatusOK, sessionInfo{Identity: webTokenIdentity, ExpiresAt: expires.UTC()})
 }
@@ -235,7 +248,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		unauthorized(w)
 		return
 	}
-	id, _, expires, ok := s.Sessions.Get(c.Value)
+	id, expires, ok := s.Sessions.Get(r.Context(), c.Value)
 	if !ok {
 		unauthorized(w)
 		return
@@ -247,10 +260,10 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 // memory, so forgetting it is the whole of it.
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
-		if id, _, _, ok := s.Sessions.Get(c.Value); ok {
+		if id, _, ok := s.Sessions.Get(r.Context(), c.Value); ok {
 			s.audit(r.Context(), id.Actor(), "session.sign_out", clientAddr(r), nil)
 		}
-		s.Sessions.Delete(c.Value)
+		s.Sessions.Delete(r.Context(), c.Value)
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1,
 		HttpOnly: true, Secure: s.SecureCookies, SameSite: http.SameSiteStrictMode})
@@ -266,7 +279,7 @@ func (s *Server) stillSignedIn(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	return s.Sessions.Valid(c.Value)
+	return s.Sessions.Valid(r.Context(), c.Value)
 }
 
 func (s *Server) audit(ctx context.Context, actor, action, target string, details map[string]any) {

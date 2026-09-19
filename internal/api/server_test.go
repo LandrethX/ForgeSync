@@ -40,6 +40,7 @@ type fakeDB struct {
 	comments    []store.CommentRecord
 	pairs       []store.SourcePair
 	controllers []store.ControllerRecord
+	sessions    map[string]fakeSession
 	chosen      store.LeadershipChoice
 	// accounts are ForgeSync's own, with their passwords as given: the
 	// fake doesn't hash, so a test can say what it means.
@@ -137,6 +138,44 @@ func (f *fakeDB) Controllers(context.Context) ([]store.ControllerRecord, error) 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.controllers, nil
+}
+
+// fakeSession is one row of the sessions table.
+type fakeSession struct {
+	identity []byte
+	lastUsed time.Time
+	expires  time.Time
+}
+
+func (f *fakeDB) CreateSession(_ context.Context, hash string, identity []byte, expires time.Time, _ time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.sessions == nil {
+		f.sessions = map[string]fakeSession{}
+	}
+	f.sessions[hash] = fakeSession{identity: identity, lastUsed: time.Now(), expires: expires}
+	return nil
+}
+
+func (f *fakeDB) Session(_ context.Context, hash string, idle time.Duration, touch bool) ([]byte, time.Time, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.sessions[hash]
+	if !ok || time.Now().After(s.expires) || time.Since(s.lastUsed) > idle {
+		return nil, time.Time{}, false, nil
+	}
+	if touch {
+		s.lastUsed = time.Now()
+		f.sessions[hash] = s
+	}
+	return s.identity, s.expires, true, nil
+}
+
+func (f *fakeDB) DeleteSession(_ context.Context, hash string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.sessions, hash)
+	return nil
 }
 
 func (f *fakeDB) Chosen(context.Context) (store.LeadershipChoice, error) {
@@ -633,33 +672,48 @@ func TestEventStream(t *testing.T) {
 	}
 }
 
-func TestSessionsExpire(t *testing.T) {
-	now := time.Date(2026, 9, 18, 9, 0, 0, 0, time.UTC)
-	s := NewSessions(8*time.Hour, 30*time.Minute)
-	s.now = func() time.Time { return now }
-	id, _ := s.Create(webTokenIdentity, "")
+// Sessions live in the database the controllers share, so one made on
+// one controller is a session on the other: a failover doesn't sign
+// anyone out.
+func TestASessionWorksOnEitherController(t *testing.T) {
+	db := &fakeDB{}
+	a := NewSessions(8*time.Hour, 30*time.Minute, db, nil)
+	b := NewSessions(8*time.Hour, 30*time.Minute, db, nil)
 
-	now = now.Add(20 * time.Minute)
-	if !s.Valid(id) {
-		t.Fatal("expired too early")
+	key, expires, err := a.Create(t.Context(), webTokenIdentity)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Valid doesn't count as activity; 20 + 15 minutes is past the idle limit.
-	now = now.Add(15 * time.Minute)
-	if s.Valid(id) {
-		t.Fatal("idle session still valid")
+	if expires.Before(time.Now()) {
+		t.Fatalf("expires = %s", expires)
 	}
+	id, _, ok := b.Get(t.Context(), key)
+	if !ok || id.Username != webTokenIdentity.Username || id.Role != webTokenIdentity.Role {
+		t.Fatalf("the other controller saw %+v (ok=%v)", id, ok)
+	}
+	// Signing out on one signs out on both.
+	b.Delete(t.Context(), key)
+	if a.Valid(t.Context(), key) {
+		t.Error("still signed in on the first controller")
+	}
+}
 
-	id, _ = s.Create(webTokenIdentity, "")
-	for i := 0; i < 20; i++ { // active every 25 minutes...
-		now = now.Add(25 * time.Minute)
-		if _, _, _, ok := s.Get(id); !ok {
-			if i*25 < 8*60-25 {
-				t.Fatalf("active session expired after %d minutes", (i+1)*25)
-			}
-			return // ...until the absolute lifetime ends
+// The cookie's value isn't what's stored: a copy of the table is no use
+// to anyone.
+func TestSessionKeysAreStoredHashed(t *testing.T) {
+	db := &fakeDB{}
+	s := NewSessions(time.Hour, time.Hour, db, nil)
+	key, _, err := s.Create(t.Context(), webTokenIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	for hash := range db.sessions {
+		if hash == key {
+			t.Fatal("the cookie's own value was stored")
 		}
 	}
-	t.Fatal("session outlived its absolute lifetime")
 }
 
 // fakeLeader is a controller's view of the election.

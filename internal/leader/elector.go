@@ -189,13 +189,19 @@ func (e *Elector) once(ctx context.Context) {
 }
 
 // handOver gives the lease up for a controller that should have it, and
-// keeps this one out of the election for a lease's length so that one can
-// take it rather than this one taking it straight back.
+// keeps this one out of the election long enough for that one to take it
+// -- two of its renewals, not a whole lease. If it doesn't (it stopped
+// between saying it was there and being handed the work), this one takes
+// the lease straight back, so the wait costs seconds rather than a lease.
 func (e *Elector) handOver(ctx context.Context) {
 	e.log.Info("leadership handed over: a controller that should lead is back", "controller", e.opts.Name)
+	quiet := 2 * e.opts.Renew
+	if quiet > e.opts.TTL {
+		quiet = e.opts.TTL
+	}
 	e.mu.Lock()
 	e.until = time.Time{}
-	e.quiet = e.now().Add(e.opts.TTL)
+	e.quiet = e.now().Add(quiet)
 	e.mu.Unlock()
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()

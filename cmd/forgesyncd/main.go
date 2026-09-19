@@ -247,8 +247,15 @@ func run(configPath string) error {
 	monitorDone := make(chan struct{})
 	go func() {
 		var wg sync.WaitGroup
-		wg.Add(4)
+		wg.Add(5)
 		go func() { defer wg.Done(); elector.Run(ctx) }()
+		// Sessions are in the database, so they outlive a failover; the
+		// ones that have run out are cleared away now and then. Either
+		// controller can do it, and doing it twice costs nothing.
+		go func() {
+			defer wg.Done()
+			purgeSessions(ctx, db, log)
+		}()
 		// Every controller says it's there, leader or not, so the UI can
 		// show them all and say which one is acting. On the same beat as
 		// the lease, so a controller that has stopped shows as stale at
@@ -489,6 +496,20 @@ func yieldToBetterController(db *store.Store, cfg *config.Config, log *slog.Logg
 	if beat <= 0 {
 		beat = cfg.Controller.Lease / 3
 	}
+	// The heartbeat another controller wrote is only a hint: one written
+	// a moment before it stopped still looks recent. So this waits to see
+	// a heartbeat *move* between two of our own renewals, which a stopped
+	// controller's never does. Handing the work to one that has just died
+	// would cost a lease of nobody doing anything.
+	var mu sync.Mutex
+	seen := map[string]time.Time{}
+	alive := func(c store.ControllerRecord) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		last, known := seen[c.Name]
+		seen[c.Name] = c.LastSeenAt
+		return known && c.LastSeenAt.After(last) && time.Since(c.LastSeenAt) <= 3*beat
+	}
 	return func(ctx context.Context) bool {
 		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
@@ -502,7 +523,6 @@ func yieldToBetterController(db *store.Store, cfg *config.Config, log *slog.Logg
 			log.Warn("leadership: couldn't read the other controllers; staying as we are", "error", err)
 			return false
 		}
-		alive := func(c store.ControllerRecord) bool { return time.Since(c.LastSeenAt) <= 3*beat }
 		if chosen.Controller != "" {
 			if chosen.Controller == cfg.Controller.Name {
 				return false // we are the one they asked for
@@ -530,5 +550,28 @@ func yieldToBetterController(db *store.Store, cfg *config.Config, log *slog.Logg
 			}
 		}
 		return false
+	}
+}
+
+// purgeSessions clears out sessions that have run out, until ctx ends.
+func purgeSessions(ctx context.Context, db *store.Store, log *slog.Logger) {
+	const idle = 30 * time.Minute // the same as the API's session idle limit
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			n, err := db.PurgeSessions(cctx, idle)
+			cancel()
+			switch {
+			case err != nil && ctx.Err() == nil:
+				log.Warn("clearing out old sessions failed", "error", err)
+			case n > 0:
+				log.Info("cleared out sessions that had run out", "count", n)
+			}
+		}
 	}
 }

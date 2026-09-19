@@ -1,90 +1,108 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"log/slog"
 	"sync"
 	"time"
 
 	"scenegit.org/forgesync/internal/auth"
 )
 
-// Sessions holds browser sessions in memory. A restart signs everyone out,
-// which is acceptable for a single controller; an HA pair will need shared
-// sessions instead.
+// SessionStore is where sessions live: the database both controllers
+// share, so signing in on one and being served by the other works, and a
+// failover doesn't sign anyone out.
+type SessionStore interface {
+	CreateSession(ctx context.Context, hash string, identity []byte, expires time.Time, idle time.Duration) error
+	Session(ctx context.Context, hash string, idle time.Duration, touch bool) ([]byte, time.Time, bool, error)
+	DeleteSession(ctx context.Context, hash string) error
+}
+
+// Sessions are the signed-in browsers. The cookie carries a random value;
+// what's stored is its SHA-256, so the table can't be read back into a
+// session. A session ends at TTL whatever happens, or after Idle without
+// a request.
 type Sessions struct {
 	TTL  time.Duration // absolute lifetime
 	Idle time.Duration // expires after this long without requests
 
-	mu  sync.Mutex
-	m   map[string]*session
-	now func() time.Time
+	db  SessionStore
+	log *slog.Logger
 }
 
-type session struct {
-	identity auth.Identity
-	idToken  string // SceneID ID token, used as id_token_hint when signing out
-	lastSeen time.Time
-	expires  time.Time
+func NewSessions(ttl, idle time.Duration, db SessionStore, log *slog.Logger) *Sessions {
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	return &Sessions{TTL: ttl, Idle: idle, db: db, log: log}
 }
 
-func NewSessions(ttl, idle time.Duration) *Sessions {
-	return &Sessions{TTL: ttl, Idle: idle, m: map[string]*session{}, now: time.Now}
+// keyHash is what's stored for a cookie's value.
+func keyHash(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
 }
 
-// Create starts a session and returns its id and absolute expiry.
-func (s *Sessions) Create(id auth.Identity, idToken string) (string, time.Time) {
+// Create starts a session and returns the cookie's value and when it ends.
+func (s *Sessions) Create(ctx context.Context, id auth.Identity) (string, time.Time, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		panic(err) // crypto/rand never fails on supported platforms
+		return "", time.Time{}, err
 	}
 	key := base64.RawURLEncoding.EncodeToString(b)
-	now := s.now()
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for k, v := range s.m {
-		if !s.valid(v, now) {
-			delete(s.m, k)
-		}
+	expires := time.Now().Add(s.TTL).UTC()
+	identity, err := json.Marshal(id)
+	if err != nil {
+		return "", time.Time{}, err
 	}
-	sess := &session{identity: id, idToken: idToken, lastSeen: now, expires: now.Add(s.TTL)}
-	s.m[key] = sess
-	return key, sess.expires
-}
-
-// Get returns the session and counts the call as activity for the idle timeout.
-func (s *Sessions) Get(key string) (id auth.Identity, idToken string, expires time.Time, ok bool) {
-	now := s.now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sess, found := s.m[key]
-	if !found || !s.valid(sess, now) {
-		delete(s.m, key)
-		return auth.Identity{}, "", time.Time{}, false
+	if err := s.db.CreateSession(ctx, keyHash(key), identity, expires, s.Idle); err != nil {
+		return "", time.Time{}, err
 	}
-	sess.lastSeen = now
-	return sess.identity, sess.idToken, sess.expires, true
+	return key, expires, nil
 }
 
-// Valid reports whether the session exists and hasn't expired, without
-// counting as activity (used by the event stream, so an open dashboard
-// doesn't keep an idle session alive).
-func (s *Sessions) Valid(key string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sess, ok := s.m[key]
-	return ok && s.valid(sess, s.now())
+// Get returns the session and counts the call as activity against the
+// idle limit. A database that can't be reached means nobody is signed in,
+// which is the safe way round.
+func (s *Sessions) Get(ctx context.Context, key string) (auth.Identity, time.Time, bool) {
+	return s.read(ctx, key, true)
 }
 
-func (s *Sessions) Delete(key string) {
-	s.mu.Lock()
-	delete(s.m, key)
-	s.mu.Unlock()
+// Valid reports whether the session is still good, without counting as
+// activity (the event stream, so an open dashboard doesn't keep an idle
+// session alive).
+func (s *Sessions) Valid(ctx context.Context, key string) bool {
+	_, _, ok := s.read(ctx, key, false)
+	return ok
 }
 
-func (s *Sessions) valid(sess *session, now time.Time) bool {
-	return now.Before(sess.expires) && now.Sub(sess.lastSeen) < s.Idle
+func (s *Sessions) read(ctx context.Context, key string, touch bool) (auth.Identity, time.Time, bool) {
+	identity, expires, ok, err := s.db.Session(ctx, keyHash(key), s.Idle, touch)
+	if err != nil {
+		s.log.Error("reading the session failed", "error", err)
+		return auth.Identity{}, time.Time{}, false
+	}
+	if !ok {
+		return auth.Identity{}, time.Time{}, false
+	}
+	var id auth.Identity
+	if err := json.Unmarshal(identity, &id); err != nil {
+		s.log.Error("a stored session couldn't be read", "error", err)
+		return auth.Identity{}, time.Time{}, false
+	}
+	return id, expires, true
+}
+
+// Delete signs out, on every controller at once.
+func (s *Sessions) Delete(ctx context.Context, key string) {
+	if err := s.db.DeleteSession(ctx, keyHash(key)); err != nil {
+		s.log.Error("deleting the session failed", "error", err)
+	}
 }
 
 // loginLimiter counts failed sign-ins per client address in a fixed window.

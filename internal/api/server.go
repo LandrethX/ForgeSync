@@ -53,6 +53,9 @@ type DB interface {
 	SourcePairs(ctx context.Context) ([]store.SourcePair, error)
 	Controllers(ctx context.Context) ([]store.ControllerRecord, error)
 	Chosen(ctx context.Context) (store.LeadershipChoice, error)
+	CreateSession(ctx context.Context, hash string, identity []byte, expires time.Time, idle time.Duration) error
+	Session(ctx context.Context, hash string, idle time.Duration, touch bool) ([]byte, time.Time, bool, error)
+	DeleteSession(ctx context.Context, hash string) error
 	Accounts(ctx context.Context) ([]store.Account, error)
 	Account(ctx context.Context, id string) (store.Account, error)
 	CreateAccount(ctx context.Context, username, password, fullName, role, by string) (store.Account, error)
@@ -131,7 +134,7 @@ type Server struct {
 
 func (s *Server) Handler() http.Handler {
 	if s.Sessions == nil {
-		s.Sessions = NewSessions(8*time.Hour, 30*time.Minute)
+		s.Sessions = NewSessions(8*time.Hour, 30*time.Minute, s.DB, s.Log)
 	}
 	s.limiter = newLoginLimiter(10, 5*time.Minute)
 

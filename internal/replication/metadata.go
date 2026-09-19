@@ -41,17 +41,25 @@ import (
 const MetadataConflictKind = "repo_metadata"
 
 // metaFields are the settings that travel, in the order they're written.
+//
+// The toggles for the wiki, projects and actions are not among them, and
+// has_issues is: issues, their comments and everything on them do
+// replicate, so saying the tab is there is true. A wiki is a second git
+// repository, projects are boards and cards, actions are workflow runs,
+// and ForgeSync copies none of those. Turning those tabs on everywhere
+// would promise something that isn't there -- a page written on one node
+// and an empty wiki on the next -- which is worse than leaving each node's
+// own setting alone.
 var metaFields = []string{
-	"description", "website", "has_issues", "has_wiki", "has_projects", "has_pull_requests",
-	"has_actions", "allow_merge_commits", "allow_rebase", "allow_rebase_explicit",
+	"description", "website", "has_issues", "has_pull_requests",
+	"allow_merge_commits", "allow_rebase", "allow_rebase_explicit",
 	"allow_squash_merge", "default_merge_style", "delete_branch_after_merge",
 }
 
 func metaOf(r forgejo.Repository) map[string]string {
 	return map[string]string{
 		"description": r.Description, "website": r.Website,
-		"has_issues": yes(r.HasIssues), "has_wiki": yes(r.HasWiki), "has_projects": yes(r.HasProjects),
-		"has_pull_requests": yes(r.HasPullRequests), "has_actions": yes(r.HasActions),
+		"has_issues": yes(r.HasIssues), "has_pull_requests": yes(r.HasPullRequests),
 		"allow_merge_commits": yes(r.AllowMergeCommits), "allow_rebase": yes(r.AllowRebase),
 		"allow_rebase_explicit": yes(r.AllowRebaseExplicit), "allow_squash_merge": yes(r.AllowSquashMerge),
 		"default_merge_style": r.DefaultMergeStyle, "delete_branch_after_merge": yes(r.DeleteBranchAfterMerge),
@@ -103,20 +111,23 @@ func (e *Engine) syncMetadata(ctx context.Context, rec store.RepositoryRecord, h
 	if len(at) < 2 {
 		return
 	}
-	base := rec.BaseMetadata
-	if base == nil {
-		base = map[string]string{}
+	was := rec.BaseMetadata
+	if was == nil {
+		was = map[string]string{}
 	}
+	// Built fresh, so a setting ForgeSync no longer carries doesn't linger.
+	base := map[string]string{}
 	var found []store.FoundConflict
 	for _, field := range metaFields {
 		vals := map[string]string{}
 		for n, r := range at {
 			vals[n] = metaOf(r)[field]
 		}
-		value, writes, conflict := mergeField(vals, base[field])
+		value, writes, conflict := mergeField(vals, was[field])
 		if conflict {
 			found = append(found, store.FoundConflict{RepositoryID: rec.ID, Kind: MetadataConflictKind, Ref: field,
 				Details: map[string]any{"field": field, "values": vals, "primary": rec.PrimaryNode}})
+			base[field] = was[field] // the base doesn't move while they differ
 			continue
 		}
 		for _, n := range writes {

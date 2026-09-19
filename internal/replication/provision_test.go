@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +41,15 @@ type fakeAPI struct {
 	// topics its repositories' topics.
 	rules  map[string]forgejo.BranchProtection
 	topics map[string][]string
+	// releases are what this node has published, with the bytes of their
+	// files; tags are the tags it has; name and as identify it and who it
+	// is acting as.
+	releases    map[string][]*forgejo.Release
+	assetBytes  map[int64][]byte
+	tags        []string
+	nextRelease int64
+	name        string
+	as          string
 	// orgState is each organization this node has, with its teams and who
 	// is in them; orgs above is only what IsOrg answers.
 	orgState map[string]*fakeOrg
@@ -54,6 +64,127 @@ type fakeOrg struct {
 }
 
 // meta is what this node's repository settings and topics are.
+// releases and files are what this node has published, by repository.
+func (f *fakeAPI) Releases(_ context.Context, owner, repo string, page, _ int) ([]forgejo.Release, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if page > 1 {
+		return nil, nil
+	}
+	var out []forgejo.Release
+	for _, r := range f.releases[owner+"/"+repo] {
+		out = append(out, *r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].TagName < out[j].TagName })
+	return out, nil
+}
+
+func (f *fakeAPI) CreateRelease(_ context.Context, owner, repo string, r forgejo.Release) (forgejo.Release, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.releases == nil {
+		f.releases = map[string][]*forgejo.Release{}
+	}
+	f.nextRelease++
+	r.ID = f.nextRelease
+	r.Author = forgejo.User{Login: f.as}
+	// Forgejo's create takes the words and the tag, nothing else: a new
+	// release starts with no files.
+	r.Assets = nil
+	f.releases[owner+"/"+repo] = append(f.releases[owner+"/"+repo], &r)
+	f.calls = append(f.calls, "publish "+r.TagName+" as "+f.as)
+	return r, nil
+}
+
+func (f *fakeAPI) EditRelease(_ context.Context, owner, repo string, id int64, r forgejo.Release) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, x := range f.releases[owner+"/"+repo] {
+		if x.ID == id {
+			x.Title, x.Body, x.Draft, x.Prerelease = r.Title, r.Body, r.Draft, r.Prerelease
+			f.calls = append(f.calls, "edit release "+x.TagName)
+			return nil
+		}
+	}
+	return fmt.Errorf("no release %d", id)
+}
+
+func (f *fakeAPI) DeleteRelease(_ context.Context, owner, repo string, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	list := f.releases[owner+"/"+repo]
+	for i, x := range list {
+		if x.ID == id {
+			f.calls = append(f.calls, "unpublish "+x.TagName)
+			f.releases[owner+"/"+repo] = append(list[:i], list[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+
+func (f *fakeAPI) UploadReleaseAsset(_ context.Context, owner, repo string, release int64, name string, content []byte) (forgejo.ReleaseAsset, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, x := range f.releases[owner+"/"+repo] {
+		if x.ID != release {
+			continue
+		}
+		f.nextRelease++
+		a := forgejo.ReleaseAsset{ID: f.nextRelease, Name: name, Size: int64(len(content)),
+			DownloadURL: fmt.Sprintf("http://%s/assets/%d", f.name, f.nextRelease)}
+		x.Assets = append(x.Assets, a)
+		if f.assetBytes == nil {
+			f.assetBytes = map[int64][]byte{}
+		}
+		f.assetBytes[a.ID] = content
+		f.calls = append(f.calls, "upload "+name)
+		return a, nil
+	}
+	return forgejo.ReleaseAsset{}, fmt.Errorf("no release %d", release)
+}
+
+func (f *fakeAPI) DeleteReleaseAsset(_ context.Context, owner, repo string, release, asset int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, x := range f.releases[owner+"/"+repo] {
+		if x.ID != release {
+			continue
+		}
+		for i, a := range x.Assets {
+			if a.ID == asset {
+				x.Assets = append(x.Assets[:i], x.Assets[i+1:]...)
+				f.calls = append(f.calls, "delete asset "+a.Name)
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+func (f *fakeAPI) Tags(_ context.Context, _, _ string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.tags...), nil
+}
+
+func (f *fakeAPI) Download(_ context.Context, url string, max int64) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id, err := strconv.ParseInt(url[strings.LastIndex(url, "/")+1:], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	b, ok := f.assetBytes[id]
+	if !ok {
+		return nil, fmt.Errorf("no asset %d on %s", id, f.name)
+	}
+	if int64(len(b)) > max {
+		return nil, fmt.Errorf("larger than %d bytes", max)
+	}
+	return b, nil
+}
+
 func (f *fakeAPI) EditRepoFields(_ context.Context, owner, repo string, fields map[string]any) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

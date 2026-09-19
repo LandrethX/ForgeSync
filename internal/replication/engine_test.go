@@ -46,6 +46,13 @@ func (m *memStore) MarkRepositoryDeleted(_ context.Context, _ string, at time.Ti
 	}
 	return nil
 }
+func (m *memStore) SetRepositoryReleases(_ context.Context, _, releases, assets string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rec.BaseReleases, m.rec.BaseReleaseAssets = releases, assets
+	return nil
+}
+
 func (m *memStore) SetRepositoryMetadata(_ context.Context, _ string, fields map[string]string, topics string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

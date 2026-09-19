@@ -109,7 +109,8 @@ func run(configPath string) error {
 			As: func(login string) issues.API { return client.Sudo(login) }})
 		serviceUsers[n.Name] = n.ServiceUser
 		gitNodes = append(gitNodes, replication.Node{Name: n.Name, URL: n.URL, User: n.ServiceUser, Token: n.Token,
-			API: client, SceneIDSourceID: n.SceneIDSourceID})
+			API: client, As: func(login string) replication.NodeAPI { return client.Sudo(login) },
+			SceneIDSourceID: n.SceneIDSourceID})
 	}
 	if err := db.SyncNodes(ctx, records); err != nil {
 		return err
@@ -138,6 +139,8 @@ func run(configPath string) error {
 			ProtectReplicas:  cfg.Replication.ProtectReplicas,
 			BranchProtection: cfg.Replication.BranchProtection,
 			Metadata:         cfg.Replication.Metadata,
+			Releases:         cfg.Replication.Releases,
+			AssetMax:         cfg.Replication.AttachmentMaxBytes,
 			BackupFor:        time.Duration(cfg.Replication.BackupDays) * 24 * time.Hour,
 			ArchiveOrg:       cfg.Replication.ArchiveOrg,
 			// Rescan so the inventory shows the result. Forgejo updates some
@@ -152,7 +155,7 @@ func run(configPath string) error {
 			"hand_off_conflicts", *cfg.Replication.HandOffConflicts, "backup_days", cfg.Replication.BackupDays,
 			"collaborators", cfg.Replication.Collaborators, "organizations", cfg.Replication.Organizations,
 			"protect_replicas", cfg.Replication.ProtectReplicas,
-			"branch_protection", cfg.Replication.BranchProtection, "metadata", cfg.Replication.Metadata)
+			"branch_protection", cfg.Replication.BranchProtection, "metadata", cfg.Replication.Metadata, "releases", cfg.Replication.Releases)
 	}
 	// Renames and primaries are assigned after scans and after webhooks;
 	// one at a time.

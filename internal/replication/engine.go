@@ -32,6 +32,10 @@ type Node struct {
 	// API is the node's REST API, used to create missing repositories. nil
 	// leaves them missing.
 	API NodeAPI
+	// As is the same API acting as another person, for the few writes that
+	// belong to one rather than to ForgeSync: publishing a release keeps
+	// the name of whoever published it. nil acts as the service account.
+	As func(login string) NodeAPI
 	// SceneIDSourceID is the id of the SceneID login source on this node
 	// (it differs per node). 0 = unknown: owners can't be created here.
 	SceneIDSourceID int64
@@ -51,6 +55,7 @@ type Store interface {
 	SetRepositoryCollaborators(ctx context.Context, id, value string) error
 	SetRepositoryProtection(ctx context.Context, id, value string) error
 	SetRepositoryMetadata(ctx context.Context, id string, fields map[string]string, topics string) error
+	SetRepositoryReleases(ctx context.Context, id, releases, assets string) error
 	Org(ctx context.Context, name string) (store.OrgRecord, error)
 	SaveOrg(ctx context.Context, rec store.OrgRecord) error
 	DeleteRepository(ctx context.Context, id string) error
@@ -95,6 +100,11 @@ type Options struct {
 	// Metadata keeps a repository's settings and topics the same on every
 	// node (metadata.go).
 	Metadata bool
+	// Releases keeps what was published on each tag, and the files with
+	// it, the same on every node (releases.go). AssetMax is the largest
+	// file it carries; default 16 MiB.
+	Releases bool
+	AssetMax int64
 	// BackupFor is how long ForgeSync keeps what it takes away: a replica's
 	// branch after the owner chose the primary's version, and the archived
 	// copies of a repository deleted on its primary. Default 30 days.
@@ -133,6 +143,9 @@ func NewEngine(nodes []Node, git *Git, st Store, h HealthSource, opts Options, l
 	}
 	if opts.ArchiveOrg == "" {
 		opts.ArchiveOrg = "forgesync-archive"
+	}
+	if opts.AssetMax <= 0 {
+		opts.AssetMax = 16 << 20
 	}
 	e := &Engine{nodes: map[string]Node{}, git: git, store: st, health: h, opts: opts, log: log, now: time.Now, running: map[string]bool{}, again: map[string]bool{}}
 	for _, n := range nodes {
@@ -468,6 +481,9 @@ func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again
 	}
 	if e.opts.Metadata && !again {
 		e.syncMetadata(ctx, rec, healthy)
+	}
+	if e.opts.Releases && !again {
+		e.syncReleases(ctx, rec, healthy)
 	}
 	if !again {
 		// The owner's rules first, so the guard isn't mistaken for one.

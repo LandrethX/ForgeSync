@@ -150,6 +150,11 @@ type Replication struct {
 	// anywhere becomes private everywhere; the other way is a person's
 	// decision. Off by default.
 	Metadata bool `yaml:"metadata"`
+	// Releases keeps what was published on each tag, and the files with
+	// it, the same on every node. A release is identified by its tag, which
+	// git replication has already put everywhere. Files are bounded by
+	// AttachmentMaxBytes. Off by default.
+	Releases bool `yaml:"releases"`
 	// ArchiveOrg is the private organization ForgeSync moves the copies of a
 	// repository deleted on its primary into. Default "forgesync-archive".
 	ArchiveOrg string `yaml:"archive_org"`

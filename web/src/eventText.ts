@@ -59,6 +59,10 @@ export function describe(e: HistoryEvent): string {
       return `${str(d.who)} given ${str(d.permission)} access on ${str(d.node)}, as elsewhere`;
     case "repo.collaborator_removed":
       return `${str(d.who)} no longer has access on ${str(d.node)}, as elsewhere`;
+    case "repo.release_published":
+      return `Release ${str(d.tag)} published on ${str(d.node)} as ${str(d.by)}, as elsewhere`;
+    case "repo.release_removed":
+      return `Release ${str(d.tag)} taken down on ${str(d.node)}, as elsewhere`;
     case "repo.made_private":
       return `Made private on ${str(d.node)}, as it is elsewhere`;
     case "repo.replica_guarded":

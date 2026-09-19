@@ -17,6 +17,14 @@ type NodeAPI interface {
 	UsersByLoginName(ctx context.Context, sourceID int64, loginName string) ([]forgejo.User, error)
 	AdminCreateUser(ctx context.Context, opt forgejo.CreateUserOption) (forgejo.User, error)
 	AdminCreateRepo(ctx context.Context, owner string, opt forgejo.CreateRepoOption) (forgejo.Repository, error)
+	Releases(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.Release, error)
+	CreateRelease(ctx context.Context, owner, repo string, r forgejo.Release) (forgejo.Release, error)
+	EditRelease(ctx context.Context, owner, repo string, id int64, r forgejo.Release) error
+	DeleteRelease(ctx context.Context, owner, repo string, id int64) error
+	UploadReleaseAsset(ctx context.Context, owner, repo string, release int64, name string, content []byte) (forgejo.ReleaseAsset, error)
+	DeleteReleaseAsset(ctx context.Context, owner, repo string, release, asset int64) error
+	Tags(ctx context.Context, owner, repo string) ([]string, error)
+	Download(ctx context.Context, url string, max int64) ([]byte, error)
 	EditRepoFields(ctx context.Context, owner, repo string, fields map[string]any) error
 	Topics(ctx context.Context, owner, repo string) ([]string, error)
 	SetTopics(ctx context.Context, owner, repo string, topics []string) error

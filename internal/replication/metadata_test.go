@@ -50,10 +50,12 @@ func TestRepositorySettingsAndTopicsTravel(t *testing.T) {
 		}
 	}
 
-	// Changed on a replica: everywhere.
+	// Changed on a replica: everywhere. The wiki toggle is turned off at
+	// the same time and must stay where it is -- ForgeSync doesn't copy
+	// what a wiki holds, so it doesn't decide whether the tab is there.
 	apis["de"].mu.Lock()
 	r := apis["de"].repos["alice/demo"]
-	r.Description, r.HasWiki = "a better demo", false
+	r.Description, r.HasIssues, r.HasWiki = "a better demo", false, false
 	apis["de"].repos["alice/demo"] = r
 	apis["de"].topics["alice/demo"] = []string{"scene", "forgejo"}
 	apis["de"].mu.Unlock()
@@ -61,8 +63,11 @@ func TestRepositorySettingsAndTopicsTravel(t *testing.T) {
 	e.syncMetadata(ctx, rec, healthy)
 	for _, n := range []string{"se", "dk", "de"} {
 		r := apis[n].repos["alice/demo"]
-		if r.Description != "a better demo" || r.HasWiki {
-			t.Errorf("%s: description %q has_wiki %v", n, r.Description, r.HasWiki)
+		if r.Description != "a better demo" || r.HasIssues {
+			t.Errorf("%s: description %q has_issues %v", n, r.Description, r.HasIssues)
+		}
+		if want := n == "de"; r.HasWiki == want {
+			t.Errorf("%s: has_wiki = %v; the wiki toggle isn't ForgeSync's to move", n, r.HasWiki)
 		}
 		// The node that already had them keeps its own order; what
 		// matters is that every node has the same set.

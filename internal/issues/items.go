@@ -50,6 +50,8 @@ func milestoneFields(m forgejo.Milestone) map[string]string {
 
 // errCantClear: Forgejo's API can set a milestone's due date but not remove
 // it.
+//
+//lint:ignore ST1005 the sentence starts with a proper noun
 var errCantClear = errors.New("Forgejo's API can't remove a milestone's due date")
 
 func (r *run) createItem(ctx context.Context, k itemKind, node string, f map[string]string) (int64, error) {

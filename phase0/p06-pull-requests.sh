@@ -40,9 +40,8 @@ open_pr() {
 
 # merge_on_se PR  merges on SE as alice and pushes the new main to DK; prints the merge commit
 merge_on_se() {
-  local i
   # Right after a push Forgejo may still be checking mergeability; retry briefly.
-  for i in 1 2 3 4 5 6 7 8 9 10; do
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
     SUDO=alice api POST se "/repos/$REPO/pulls/$1/merge" '{"Do":"merge"}' >/dev/null
     [ "$(ok_status)" = true ] && break
     sleep 2

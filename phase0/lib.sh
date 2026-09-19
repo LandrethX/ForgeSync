@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared helpers for the Phase 0 probes. Source this; don't run it.
 # Written for macOS bash 3.2. Needs curl, jq, git and docker on the Mac.
 
@@ -164,6 +165,7 @@ repo_url() { echo "http://$2:$3@$(node_host "$1")/$4.git"; }
 # try_git DIR ARGS...  runs git, sets GIT_RC and GIT_OUT, never aborts the probe
 try_git() {
   local dir=$1; shift
+  # shellcheck disable=SC2034  # GIT_RC is what the caller reads
   if GIT_OUT=$(cd "$dir" && gitc "$@" 2>&1); then GIT_RC=0; else GIT_RC=$?; fi
   GIT_OUT=$(printf '%s' "$GIT_OUT" | { grep -E 'remote:|error:|rejected|->|fatal:' || true; } | { grep -v '^remote: *$' || true; } | head -4 | tr '\n' ' ' | sed 's/http:\/\/[^@]*@/http:\/\/***@/g')
 }
@@ -262,8 +264,8 @@ hooks_seq() { curl -fsS "$HOOKSINK/events" | jq 'map(.seq) | max // 0'; }
 
 # hooks_after SEQ TAG  waits until deliveries for TAG settle, prints them as a JSON array
 hooks_after() {
-  local last=-1 now i
-  for i in 1 2 3 4 5 6 7 8 9 10; do
+  local last=-1 now
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
     sleep 1
     now=$(curl -fsS "$HOOKSINK/events?after=$1" | jq --arg t "/hook/$2" '[.[] | select(.path == $t)] | length')
     [ "$now" -gt 0 ] && [ "$now" = "$last" ] && break

@@ -6,7 +6,7 @@
 #        NODE_A=de NODE_B=uk ./run-all.sh   # another pair; the probes' "SE"/"DK"
 #                                          # labels then mean node A / node B
 set -uo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 # A running controller replicates and creates repositories and users on other
 # nodes, which changes what the probes observe (e.g. "not on DK yet").

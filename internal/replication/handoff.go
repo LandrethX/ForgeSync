@@ -387,8 +387,13 @@ func (e *Engine) openHandoff(ctx context.Context, dir string, rec store.Reposito
 		pr, err = primary.API.CreatePullRequest(ctx, owner, name, opt)
 	}
 	if err != nil {
-		// Don't leave a branch without its pull request.
-		e.git.Push(ctx, dir, remote, []Action{{Kind: Delete, Ref: full, Expected: sha}})
+		// Don't leave a branch without its pull request. If even that
+		// fails, say so: the branch is then on the primary with nothing
+		// pointing at it, and the next run will try the hand-off again.
+		if _, perr := e.git.Push(ctx, dir, remote, []Action{{Kind: Delete, Ref: full, Expected: sha}}); perr != nil {
+			e.log.Warn("couldn't remove the hand-off branch after the pull request failed",
+				"repository", rec.FullName, "ref", full, "error", perr)
+		}
 		delete(handoffRefs, full)
 		return store.Handoff{}, err
 	}

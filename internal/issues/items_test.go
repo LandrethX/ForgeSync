@@ -56,7 +56,7 @@ func TestLabelsAndMilestones(t *testing.T) {
 	if f["de"].labelNamed("feature") == nil {
 		t.Error("feature not recreated on de")
 	}
-	fakeAPI{f["se"], "alice"}.DeleteLabel(nil, "", "", f["se"].labelNamed("defect").ID)
+	fakeAPI{f["se"], "alice"}.DeleteLabel(t.Context(), "", "", f["se"].labelNamed("defect").ID)
 	s.run(t)
 	for _, n := range []string{"dk", "de"} {
 		if f[n].labelNamed("defect") != nil {
@@ -105,7 +105,7 @@ func TestIssueLabelsAndMilestone(t *testing.T) {
 
 	// Labels changed on a replica, milestone removed on the primary: both
 	// carry over.
-	fakeAPI{f["dk"], "bob"}.ReplaceIssueLabels(nil, "", "", 1, []int64{mustID(t, f["dk"], "bug"), mustID(t, f["dk"], "docs")})
+	fakeAPI{f["dk"], "bob"}.ReplaceIssueLabels(t.Context(), "", "", 1, []int64{mustID(t, f["dk"], "bug"), mustID(t, f["dk"], "docs")})
 	f["se"].setMilestone(f["se"].issue(1), 0)
 	s.run(t)
 	for _, n := range []string{"se", "dk", "de"} {
@@ -115,8 +115,8 @@ func TestIssueLabelsAndMilestone(t *testing.T) {
 	}
 
 	// Different label changes on two nodes: a conflict that names them.
-	fakeAPI{f["se"], "alice"}.ReplaceIssueLabels(nil, "", "", 1, []int64{bug})
-	fakeAPI{f["de"], "carol"}.ReplaceIssueLabels(nil, "", "", 1, []int64{mustID(t, f["de"], "docs")})
+	fakeAPI{f["se"], "alice"}.ReplaceIssueLabels(t.Context(), "", "", 1, []int64{bug})
+	fakeAPI{f["de"], "carol"}.ReplaceIssueLabels(t.Context(), "", "", 1, []int64{mustID(t, f["de"], "docs")})
 	s.run(t)
 	if len(st.found) != 1 || st.found[0].Ref != "#1 labels" {
 		t.Fatalf("conflicts = %+v", st.found)
@@ -170,7 +170,7 @@ func TestLabelDeletedOnReplicaKeepsIssueLabels(t *testing.T) {
 		}
 	}
 
-	fakeAPI{f["de"], "carol"}.DeleteLabel(nil, "", "", mustID(t, f["de"], "bug"))
+	fakeAPI{f["de"], "carol"}.DeleteLabel(t.Context(), "", "", mustID(t, f["de"], "bug"))
 	s.run(t)
 	if f["de"].labelNamed("bug") == nil {
 		t.Fatal("the label wasn't recreated on de")
@@ -209,8 +209,8 @@ func TestItemKeptForItsOwnerStaysOnTheIssues(t *testing.T) {
 	// Changed on de and deleted on the primary in the same window.
 	f["de"].labelNamed("bug").Color = "b60205"
 	f["de"].milestoneNamed("v1").Description = "ships in May"
-	fakeAPI{f["se"], "alice"}.DeleteLabel(nil, "", "", f["se"].labelNamed("bug").ID)
-	fakeAPI{f["se"], "alice"}.DeleteMilestone(nil, "", "", f["se"].milestoneNamed("v1").ID)
+	fakeAPI{f["se"], "alice"}.DeleteLabel(t.Context(), "", "", f["se"].labelNamed("bug").ID)
+	fakeAPI{f["se"], "alice"}.DeleteMilestone(t.Context(), "", "", f["se"].milestoneNamed("v1").ID)
 	s.run(t)
 
 	if f["de"].labelNamed("bug") == nil || f["de"].milestoneNamed("v1") == nil {
@@ -260,8 +260,8 @@ func TestItemKeptForItsOwnerStaysOnTheIssues(t *testing.T) {
 	}
 
 	// Deleted on de as well: both are forgotten and the conflicts clear.
-	fakeAPI{f["de"], "carol"}.DeleteLabel(nil, "", "", f["de"].labelNamed("bug").ID)
-	fakeAPI{f["de"], "carol"}.DeleteMilestone(nil, "", "", f["de"].milestoneNamed("v1").ID)
+	fakeAPI{f["de"], "carol"}.DeleteLabel(t.Context(), "", "", f["de"].labelNamed("bug").ID)
+	fakeAPI{f["de"], "carol"}.DeleteMilestone(t.Context(), "", "", f["de"].milestoneNamed("v1").ID)
 	s.run(t)
 	if len(st.found) != 0 {
 		t.Errorf("conflicts left: %+v", st.found)

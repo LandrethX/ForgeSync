@@ -46,11 +46,11 @@ func Handler() http.Handler {
 		if err != nil {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte("The web UI isn't built into this binary. Run `make web` and rebuild.\n"))
+			_, _ = w.Write([]byte("The web UI isn't built into this binary. Run `make web` and rebuild.\n"))
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Write(index)
+		_, _ = w.Write(index)
 	})
 }

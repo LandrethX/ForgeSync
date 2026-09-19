@@ -46,6 +46,27 @@ make test-db      # also the tests that need PostgreSQL
 `bin/forgesyncd` is the controller and its admin UI; `bin/forgesync` is the command-line
 client for the same API.
 
+### Before a release
+
+`make check` is the gate for every change. Before tagging one, these slower passes run as
+well, with tools that aren't dependencies of the build -- install them where they don't
+become one (`GOBIN=/tmp/bin go install ...`):
+
+```sh
+golangci-lint run ./...                      # errcheck, govet, ineffassign, staticcheck, unused
+govulncheck ./...                            # known vulnerabilities in what we import
+gosec -exclude-dir=web ./...                 # security patterns in the Go source
+shellcheck -S warning $(git ls-files '*.sh') # the setup, probe and deploy scripts
+cd web && npm audit                          # and the UI's dependencies
+```
+
+`.golangci.yml` says which findings were looked at and deliberately kept, and why -- an
+error ignored in a test fixture, a write to an `http.ResponseWriter` with nobody left to
+tell. Keep that file honest rather than silencing a linter in passing. `gosec` still
+reports five findings by design: the session cookie's `Secure` flag is a setting (it has
+to be, for a reverse proxy terminating TLS), the git CLI is run with arguments ForgeSync
+builds, and the config and token files are read from paths the config gives.
+
 ## Two controllers, one database
 
 A pair of controllers share one PostgreSQL database and take a lease in it; whichever holds

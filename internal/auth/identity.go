@@ -125,15 +125,6 @@ func claimValues(claims map[string]any, path string) []string {
 	return nil
 }
 
-func claimString(claims map[string]any, names ...string) string {
-	for _, n := range names {
-		if s, ok := claims[n].(string); ok && s != "" {
-			return s
-		}
-	}
-	return ""
-}
-
 // ParseRole parses "viewer", "operator" or "administrator".
 func ParseRole(s string) (Role, error) {
 	for _, r := range []Role{Viewer, Operator, Administrator} {

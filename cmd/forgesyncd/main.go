@@ -348,16 +348,15 @@ func run(configPath string) error {
 	var certs *certificates
 	go func() {
 		for range hup {
-			switch {
-			case certs == nil:
+			if certs == nil {
 				log.Info("reload: nothing to re-read (no certificate configured)")
-			default:
-				if err := certs.reload(); err != nil {
-					log.Error("re-reading the certificate failed; keeping the one in use", "error", err)
-					continue
-				}
-				log.Info("certificate re-read", "file", cfg.HTTP.TLSCertFile)
+				continue
 			}
+			if err := certs.reload(); err != nil {
+				log.Error("re-reading the certificate failed; keeping the one in use", "error", err)
+				continue
+			}
+			log.Info("certificate re-read", "file", cfg.HTTP.TLSCertFile)
 		}
 	}()
 	if addr := cfg.HTTP.HTTPSListen(); addr != "" {

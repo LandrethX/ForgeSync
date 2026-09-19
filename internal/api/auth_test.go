@@ -33,15 +33,6 @@ func signInAs(t *testing.T, f *fixture, role auth.Role) *http.Cookie {
 	return nil
 }
 
-func cookieNamed(rec interface{ Result() *http.Response }, name string) *http.Cookie {
-	for _, c := range rec.Result().Cookies() {
-		if c.Name == name {
-			return c
-		}
-	}
-	return nil
-}
-
 // A role is a role wherever it came from: a viewer can read, and the
 // history needs an operator.
 func TestRoles(t *testing.T) {

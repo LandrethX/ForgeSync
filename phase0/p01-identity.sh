@@ -25,7 +25,6 @@ final=$(sceneid_login se "$U_AUTO" "$U_AUTO-pw" "$WORK/jar-a")
 who=$(session_login "$WORK/jar-a" se)
 hyp "First SceneID login creates the account automatically" "$(is "$who" "$U_AUTO")" "landed on $final, session user '$who'"
 
-rec=$(api GET se "/users/$U_AUTO"); uid=$(printf '%s' "$rec" | jq -r .id)
 admin_rec=$(admin_users se | jq -c --arg u "$U_AUTO" '.[] | select(.login == $u) | {id, login, source_id, login_name}')
 info "How Forgejo records an auto-registered SceneID user" "$admin_rec (SceneID sub = $SUB_AUTO)"
 hyp "login_name holds the SceneID sub" "$(is "$(printf '%s' "$admin_rec" | jq -r .login_name)" "$SUB_AUTO")"

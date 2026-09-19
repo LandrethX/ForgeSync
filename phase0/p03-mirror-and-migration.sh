@@ -54,7 +54,7 @@ if [ "$(ok_status)" = true ]; then
   api POST dk "/repos/$MIRROR/mirror-sync" >/dev/null
   sync_status=$(status)
   got=""
-  for i in $(seq 1 30); do
+  for _ in $(seq 1 30); do
     got=$(branch_sha dk "$MIRROR" main)
     [ "$got" = "$want" ] && break
     sleep 1

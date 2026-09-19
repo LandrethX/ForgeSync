@@ -1,0 +1,60 @@
+# What the linters are held to, and what was looked at and kept.
+#
+# Run it with a golangci-lint v2 binary; nothing in the build needs one, so
+# it's installed where it doesn't become a dependency:
+#
+#   GOBIN=/tmp/bin go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+#   /tmp/bin/golangci-lint run ./...
+#
+# `make check` stays the gate that must pass on every change (vet, gofmt,
+# the Go and UI tests). This is the slower pass before a release, together
+# with govulncheck, gosec and shellcheck -- see README.md.
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+  exclusions:
+    rules:
+      # A test that ignores an error is saying the call is setup, not the
+      # thing under test; a failed setup shows up as the assertion below it
+      # failing. Insisting on a check in every fixture line makes the tests
+      # harder to read for no safety.
+      - path: _test\.go
+        linters: [errcheck]
+
+      # Writing to an http.ResponseWriter: there's nobody left to tell. The
+      # handler has already sent a status, and the client going away mid-body
+      # isn't this server's problem to report.
+      - path: internal/(api|cli)/
+        linters: [errcheck]
+        source: (fmt\.Fprint|io\.WriteString|\.Write\(|\.Flush\(|enc\.Encode)
+
+      # Draining a body before closing it, so the connection can be reused:
+      # the read is the point, not its result.
+      - linters: [errcheck]
+        source: io\.Copy\(io\.Discard
+
+      # Cleanup that runs when something has already gone wrong: a deferred
+      # Close or Rollback, a temporary file being removed. There is no useful
+      # action left for the caller.
+      - linters: [errcheck]
+        source: (defer |tmp\.Close\(\)|os\.Remove\(tmp\.Name)
+
+      # "Forgejo" is a proper noun, which ST1005 can't know.
+      - path: internal/issues/items\.go
+        linters: [staticcheck]
+        text: ST1005
+
+      # git --version into two ints: a version it can't parse leaves zeros,
+      # and the check below rejects them, which is the behaviour wanted.
+      - path: internal/replication/git\.go
+        linters: [errcheck]
+        source: fmt\.Sscanf
+
+    presets: [comments, std-error-handling]

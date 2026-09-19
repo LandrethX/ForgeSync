@@ -242,7 +242,7 @@ func oneLine(s string) string {
 
 func (f *historyFlags) runExport(cmd *cobra.Command, o *options, params url.Values) error {
 	params.Set("format", f.export)
-	var w io.Writer = cmd.OutOrStdout()
+	w := cmd.OutOrStdout()
 	if f.file != "" {
 		file, err := os.OpenFile(f.file, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 		if err != nil {

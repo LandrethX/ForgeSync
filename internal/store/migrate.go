@@ -72,11 +72,11 @@ func (s *Store) Migrate(ctx context.Context) (applied []string, err error) {
 			return applied, err
 		}
 		if _, err := tx.Exec(ctx, m.sql); err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx) // the transaction is already lost
 			return applied, fmt.Errorf("migration %s: %w", m.name, err)
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`, m.version, m.name); err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx) // the transaction is already lost
 			return applied, err
 		}
 		if err := tx.Commit(ctx); err != nil {

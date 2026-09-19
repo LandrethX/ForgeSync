@@ -1,0 +1,117 @@
+# ForgeSync controller, production example.
+#
+# Copy this next to your secrets, change what's marked, and read
+# deploy/prod/README.md for how it's meant to be run: two controllers
+# sharing one PostgreSQL database, each on its own host.
+#
+# Every secret is a file. ForgeSync never takes one from the config or
+# the environment, so nothing leaks into a process list or a log.
+# Paths are resolved against this file's directory.
+
+controller:
+  # What this controller is called, in the UI, the log and the audit
+  # trail. Give the two different names.
+  name: forgesync-a
+  # Where people reach *this* controller, so the other's UI can send
+  # them here when this one is the one doing the work.
+  url: https://forgesync-a.example.org
+  # Lower leads. The pair settles on the same controller after a
+  # failover instead of wherever leadership happened to land; the other
+  # hands the work back when this one returns.
+  priority: 1
+  # The longest a failover takes, and the longest a controller that has
+  # lost the database keeps acting. Renew defaults to a third of it.
+  lease: 15s
+
+database:
+  # The one thing to back up. Both controllers use the same database;
+  # that's what pairs them.
+  url_file: /etc/forgesync/secrets/database.url
+
+http:
+  listen: 0.0.0.0:8090
+  # The bearer token for the CLI, and the break-glass sign-in that makes
+  # the first ForgeSync account. Keep it somewhere a person can reach in
+  # an emergency.
+  admin_token_file: /etc/forgesync/secrets/admin.token
+  # Serving HTTPS here: with tls_listen, `listen` above stays plain HTTP
+  # for a reverse proxy on the same host while browsers use HTTPS
+  # directly. Without tls_listen, the certificate takes `listen` over.
+  # Leave all three out when something in front terminates TLS.
+  tls_listen: 0.0.0.0:8443
+  tls_cert_file: /etc/forgesync/tls/fullchain.pem
+  tls_key_file: /etc/forgesync/tls/privkey.pem
+  # systemctl reload forgesyncd re-reads the certificate in place.
+
+log:
+  level: info
+  format: json
+
+health:
+  interval: 15s
+  timeout: 5s
+  failure_threshold: 3
+
+inventory:
+  # The safety net, not the fast path: webhooks report changes within
+  # seconds. Keep this comfortably longer than a full round takes (see
+  # "What it costs at scale" in CLAUDE.md; a round logs its own
+  # duration), because a round that outlasts the interval just runs
+  # continuously.
+  interval: 30m
+  branch_concurrency: 4
+
+webhooks:
+  # How the Forgejo nodes reach *this* controller. Each leader installs
+  # its own; the nodes need this host in [webhook] ALLOWED_HOST_LIST.
+  url: https://forgesync-a.example.org/api/v1/hooks/forgejo
+  secret_file: /etc/forgesync/secrets/webhook.secret
+
+replication:
+  enabled: true
+  work_dir: /var/lib/forgesync/git # a cache; safe to lose, not to share
+  concurrency: 2
+  # What is kept the same on every node. Start with git and add the rest
+  # once you've watched a round: each one costs API calls per item per
+  # node.
+  create_missing: true
+  auto_fix: true
+  hand_off_conflicts: true
+  protect_replicas: true
+  branch_protection: true
+  metadata: true
+  collaborators: true
+  organizations: true
+  releases: true
+  wiki: true
+  lfs: true
+  packages: true
+  actions: true
+  issues: true
+  pull_requests: true
+  reviews: true
+  reactions: true
+  attachments: true
+  # How long a replica's own version is kept after the owner chooses the
+  # primary's, and how long an archived copy of a deleted repository is
+  # kept before it goes for good.
+  backup_days: 30
+
+nodes:
+  - name: se
+    site: SE
+    url: https://git-se.example.org
+    token_file: /etc/forgesync/secrets/se.token
+    # The id of the SceneID login source on that node (they differ per
+    # node): forgejo admin auth list.
+    sceneid_source_id: 1
+  - name: dk
+    site: DK
+    url: https://git-dk.example.org
+    token_file: /etc/forgesync/secrets/dk.token
+    sceneid_source_id: 1
+  - name: de
+    site: DE
+    url: https://git-de.example.org
+    token_file: /etc/forgesync/secrets/de.token
+    sceneid_source_id: 1

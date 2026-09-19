@@ -1,0 +1,59 @@
+# systemd unit for a ForgeSync controller.
+#
+#   useradd --system --home /var/lib/forgesync --shell /usr/sbin/nologin forgesync
+#   install -d -o forgesync -g forgesync -m 0750 /var/lib/forgesync /etc/forgesync
+#   install -d -o root -g forgesync -m 0750 /etc/forgesync/secrets
+#   install -m 0755 bin/forgesyncd /usr/local/bin/forgesyncd
+#   systemctl enable --now forgesyncd
+#
+# systemctl reload forgesyncd re-reads the TLS certificate without
+# dropping connections or restarting, for a renewal.
+
+[Unit]
+Description=ForgeSync controller
+Documentation=https://scenegit.org/forgesync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=forgesync
+Group=forgesync
+ExecStart=/usr/local/bin/forgesyncd -config /etc/forgesync/forgesync.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5s
+# A stop gives the lease up, so the other controller takes over in about
+# one renewal rather than waiting for the lease to run out.
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+
+# It needs: its own state directory, the git cache, and its config.
+# Nothing else.
+StateDirectory=forgesync
+ReadWritePaths=/var/lib/forgesync
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Only needed if you bind to a port below 1024 instead of using a proxy:
+# AmbientCapabilities=CAP_NET_BIND_SERVICE
+# CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

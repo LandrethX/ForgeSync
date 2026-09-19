@@ -33,9 +33,12 @@ type fakeAPI struct {
 	failTransfer bool
 }
 
+// fakePull is a pull request as this fake keeps it: what it was opened
+// with, and what a reader gets back. They are separate types with the same
+// field names, so the result is held under a name of its own.
 type fakePull struct {
 	forgejo.CreatePullRequestOption
-	forgejo.PullRequest
+	pr forgejo.PullRequest
 }
 
 func newFakeAPI(g *gitNode) *fakeAPI {
@@ -120,7 +123,7 @@ func (f *fakeAPI) GetPullRequest(_ context.Context, _, _ string, n int64) (forge
 	if n < 1 || int(n) > len(f.pulls) {
 		return forgejo.PullRequest{}, false, nil
 	}
-	return f.pulls[n-1].PullRequest, true, nil
+	return f.pulls[n-1].pr, true, nil
 }
 func (f *fakeAPI) Comment(_ context.Context, _, _ string, n int64, body string) error {
 	f.mu.Lock()

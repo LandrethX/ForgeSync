@@ -18,6 +18,11 @@ import (
 // API is the part of the Forgejo REST API issue replication uses.
 type API interface {
 	ListIssues(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.Issue, error)
+	ListIssuesAndPulls(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.Issue, error)
+	ListPulls(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.PullRequest, error)
+	CreatePullRequest(ctx context.Context, owner, repo string, opt forgejo.CreatePullRequestOption) (forgejo.PullRequest, error)
+	BranchExists(ctx context.Context, owner, repo, branch string) (bool, error)
+	Issue(ctx context.Context, owner, repo string, number int64) (forgejo.Issue, bool, error)
 	ListRepoComments(ctx context.Context, owner, repo string, page, limit int) ([]forgejo.IssueComment, error)
 	CreateIssue(ctx context.Context, owner, repo, title, body string, closed bool, labels []int64, milestone int64,
 		assignees []string) (forgejo.Issue, error)
@@ -96,6 +101,13 @@ type Options struct {
 	// (default 16 MiB); a bigger one is left where it is, with a warning.
 	Attachments   bool
 	AttachmentMax int64
+	// PullRequests takes pull requests in as well: their conversation, and
+	// their title and body, merged as an issue's are. Their state never is
+	// -- ForgeSync closes a copy when the primary's is closed or merged,
+	// and never merges or reopens one, because merging twice makes two
+	// different merge commits. A copy is opened on a node only once the
+	// branches it is between are there.
+	PullRequests bool
 	// EnsureUser makes an author exist on a node as on another, as for
 	// repository owners (replication.Engine.EnsureUser). nil: authors must
 	// exist already.
@@ -214,6 +226,10 @@ type snapshot struct {
 	// likewise. Empty unless Options.Attachments.
 	attachments        map[int64]map[string]forgejo.Attachment
 	commentAttachments map[int64]map[string]forgejo.Attachment
+	// pulls are the pull requests by number, for the branches they are
+	// between and whether they have been merged, which the issue listing
+	// doesn't carry. Empty unless Options.PullRequests.
+	pulls map[int64]forgejo.PullRequest
 }
 
 func (s *Syncer) read(ctx context.Context, n Node, owner, name string) (*snapshot, error) {
@@ -251,17 +267,40 @@ func (s *Syncer) read(ctx context.Context, n Node, owner, name string) (*snapsho
 		}
 	}
 	for page := 1; ; page++ {
-		list, err := n.API.ListIssues(ctx, owner, name, page, pageSize)
+		var list []forgejo.Issue
+		var err error
+		if s.opts.PullRequests {
+			list, err = n.API.ListIssuesAndPulls(ctx, owner, name, page, pageSize)
+		} else {
+			list, err = n.API.ListIssues(ctx, owner, name, page, pageSize)
+		}
 		if err != nil {
 			return nil, err
 		}
 		for _, is := range list {
-			if is.PullRequest == nil {
+			if is.PullRequest == nil || s.opts.PullRequests {
 				sn.issues[is.ID], sn.byNumber[is.Number] = is, is
 			}
 		}
 		if len(list) < pageSize {
 			break
+		}
+	}
+	// A pull request's branches and whether it has been merged: the issue
+	// listing carries neither.
+	if s.opts.PullRequests {
+		sn.pulls = map[int64]forgejo.PullRequest{}
+		for page := 1; ; page++ {
+			list, err := n.API.ListPulls(ctx, owner, name, page, pageSize)
+			if err != nil {
+				return nil, err
+			}
+			for _, pr := range list {
+				sn.pulls[pr.Number] = pr
+			}
+			if len(list) < pageSize {
+				break
+			}
 		}
 	}
 	for page := 1; ; page++ {
@@ -270,9 +309,15 @@ func (s *Syncer) read(ctx context.Context, n Node, owner, name string) (*snapsho
 			return nil, err
 		}
 		for _, c := range list {
-			if _, onIssue := sn.byNumber[c.IssueNumber()]; onIssue && c.PRURL == "" {
-				sn.comments[c.ID] = c
+			// On a pull request Forgejo leaves issue_url empty, so the
+			// number comes from pull_request_url instead.
+			if _, known := sn.byNumber[c.Number()]; !known {
+				continue
 			}
+			if c.PRURL != "" && !s.opts.PullRequests {
+				continue
+			}
+			sn.comments[c.ID] = c
 		}
 		if len(list) < pageSize {
 			break
@@ -643,6 +688,10 @@ func (r *run) issues(ctx context.Context, recs []store.IssueRecord) ([]store.Iss
 		rec := store.IssueRecord{RepositoryID: r.rec.ID, OriginNode: f.node, Author: f.is.User.Login, CreatedAt: f.is.Created,
 			BaseTitle: f.is.Title, BaseBody: f.is.Body, BaseState: f.is.State,
 			Copies: map[string]store.IssueCopy{f.node: {Number: f.is.Number, ForgejoID: f.is.ID}}}
+		if pr, ok := r.snaps[f.node].pulls[f.is.Number]; ok && f.is.PullRequest != nil {
+			rec.IsPull = true
+			rec.HeadBranch, rec.BaseBranch = forgejo.BranchOf(pr.Head), forgejo.BranchOf(pr.Base)
+		}
 		id, err := r.s.store.SaveIssue(ctx, rec)
 		if err != nil {
 			return nil, err
@@ -728,7 +777,9 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 	}{
 		{"title", &rec.BaseTitle, func(_ string, i forgejo.Issue) string { return i.Title }, nil, nil, nil, nil},
 		{"body", &rec.BaseBody, func(_ string, i forgejo.Issue) string { return i.Body }, nil, nil, nil, nil},
-		{"state", &rec.BaseState, func(_ string, i forgejo.Issue) string { return i.State }, nil, nil, nil, nil},
+		// A pull request's state is never merged: see followPullState.
+		{"state", &rec.BaseState, func(_ string, i forgejo.Issue) string { return i.State }, nil, nil,
+			func(string, forgejo.Issue) bool { return rec.IsPull }, nil},
 		{"labels", &rec.BaseLabels, r.labelsValue,
 			func(ctx context.Context, n string, number int64, v string, is forgejo.Issue) error {
 				fids, ok := r.labels.labelFIDs(n, v, &is, r.kept[n])
@@ -869,8 +920,17 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 				"repository", r.rec.FullName, "node", n, "issue", ref, "assignees", want["assignees"])
 			r.complete = false
 		}
-		is, err := r.s.nodes[n].As(rec.Author).CreateIssue(ctx, r.owner, r.name, want["title"], want["body"], want["state"] == "closed",
-			labelIDs, milestone, assignees)
+		var is forgejo.Issue
+		var err error
+		if rec.IsPull {
+			is, err = r.openPullCopy(ctx, n, rec, ref, want)
+			if is.Number == 0 && err == nil {
+				continue // its branches aren't there yet
+			}
+		} else {
+			is, err = r.s.nodes[n].As(rec.Author).CreateIssue(ctx, r.owner, r.name, want["title"], want["body"],
+				want["state"] == "closed", labelIDs, milestone, assignees)
+		}
 		if err != nil {
 			r.s.log.Warn("issues: creating a copy failed", "repository", r.rec.FullName, "node", n, "issue", ref, "error", err)
 			r.complete = false
@@ -883,6 +943,9 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 		if _, err := r.s.store.SaveIssue(ctx, *rec); err != nil {
 			return false, err
 		}
+	}
+	if rec.IsPull {
+		r.followPullState(ctx, rec, ref, present)
 	}
 	// Reactions last, so a copy made in this run gets them too.
 	if r.s.opts.Reactions {
@@ -1011,7 +1074,7 @@ func (r *run) comments(ctx context.Context, issues []store.IssueRecord, recs []s
 			if known[n][c.ID] {
 				continue
 			}
-			if is := byNumber[n][c.IssueNumber()]; is != nil {
+			if is := byNumber[n][c.Number()]; is != nil {
 				news = append(news, fresh{n, c, is})
 			}
 		}
@@ -1222,6 +1285,77 @@ func (r *run) comment(ctx context.Context, c *store.CommentRecord, issue *store.
 	}
 	_, err := r.s.store.SaveComment(ctx, *c)
 	return err
+}
+
+// openPullCopy opens a copy of a pull request on a node, once both of its
+// branches are there -- replication puts them there, and until it has, the
+// copy waits. A zero Issue with no error means exactly that.
+func (r *run) openPullCopy(ctx context.Context, node string, rec *store.IssueRecord, ref string,
+	want map[string]string) (forgejo.Issue, error) {
+	if rec.HeadBranch == "" || rec.BaseBranch == "" {
+		// A pull request from a fork, or one whose branch is already gone:
+		// ForgeSync has nowhere to put a copy.
+		r.s.log.Debug("issues: a pull request has no branches to copy", "repository", r.rec.FullName,
+			"node", node, "issue", ref)
+		return forgejo.Issue{}, nil
+	}
+	api := r.s.nodes[node].API
+	for _, branch := range []string{rec.HeadBranch, rec.BaseBranch} {
+		there, err := api.BranchExists(ctx, r.owner, r.name, branch)
+		if err != nil {
+			return forgejo.Issue{}, err
+		}
+		if !there {
+			r.s.log.Debug("issues: a pull request's copy waits for its branches", "repository", r.rec.FullName,
+				"node", node, "issue", ref, "branch", branch)
+			r.complete = false
+			return forgejo.Issue{}, nil
+		}
+	}
+	pr, err := r.s.nodes[node].As(rec.Author).CreatePullRequest(ctx, r.owner, r.name, forgejo.CreatePullRequestOption{
+		Head: rec.HeadBranch, Base: rec.BaseBranch, Title: want["title"], Body: want["body"]})
+	if err != nil {
+		return forgejo.Issue{}, err
+	}
+	r.s.log.Info("pull request copied", "repository", r.rec.FullName, "node", node, "issue", ref,
+		"number", pr.Number, "head", rec.HeadBranch, "base", rec.BaseBranch)
+	// A pull request's own id isn't the id the issue listing gives it, and
+	// that is what a copy is recorded under, so read it back.
+	is, found, err := api.Issue(ctx, r.owner, r.name, pr.Number)
+	if err != nil || !found {
+		return forgejo.Issue{}, err
+	}
+	return is, nil
+}
+
+// followPullState closes a copy once the pull request is closed or merged
+// on the primary. It goes one way only: ForgeSync never merges a pull
+// request and never reopens one, because merging it twice would make two
+// different merge commits, and that is history for a person to decide.
+func (r *run) followPullState(ctx context.Context, rec *store.IssueRecord, ref string, present map[string]forgejo.Issue) {
+	on, ok := present[r.primary]
+	if !ok || on.State != "closed" {
+		return
+	}
+	closed := "closed"
+	for _, n := range r.nodes {
+		if n == r.primary {
+			continue
+		}
+		copy, has := present[n]
+		if !has || copy.State == "closed" {
+			continue
+		}
+		if err := r.s.nodes[n].API.EditIssue(ctx, r.owner, r.name, rec.Copies[n].Number, nil, nil, &closed); err != nil {
+			r.s.log.Warn("issues: closing a pull request's copy failed", "repository", r.rec.FullName,
+				"node", n, "issue", ref, "error", err)
+			r.complete = false
+			continue
+		}
+		merged := r.snaps[r.primary].pulls[rec.Copies[r.primary].Number].Merged
+		r.s.log.Info("pull request copy closed as on the primary", "repository", r.rec.FullName, "node", n,
+			"issue", ref, "merged_on_primary", merged)
+	}
 }
 
 // errNoSource: no node ForgeSync could read has the attachment any more.

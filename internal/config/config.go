@@ -113,6 +113,13 @@ type Replication struct {
 	// AttachmentMaxBytes is the largest file replication carries. A bigger
 	// one is left where it is, with a warning. Default 16 MiB.
 	AttachmentMaxBytes int64 `yaml:"attachment_max_bytes"`
+	// PullRequests takes pull requests in as well: their conversation and
+	// their title and body, merged as an issue's are. Their state is not:
+	// a copy is closed once the primary's is closed or merged, and
+	// ForgeSync never merges or reopens one. A copy is opened on a node
+	// only once the branches it is between are there. Off by default, and
+	// it needs Issues.
+	PullRequests bool `yaml:"pull_requests"`
 	// ArchiveOrg is the private organization ForgeSync moves the copies of a
 	// repository deleted on its primary into. Default "forgesync-archive".
 	ArchiveOrg string `yaml:"archive_org"`
@@ -388,6 +395,9 @@ func (c *Config) validate() error {
 	}
 	if c.Replication.Attachments && !c.Replication.Issues {
 		errs = append(errs, errors.New("replication.attachments needs replication.issues"))
+	}
+	if c.Replication.PullRequests && !c.Replication.Issues {
+		errs = append(errs, errors.New("replication.pull_requests needs replication.issues"))
 	}
 	if c.Replication.AttachmentMaxBytes < 0 {
 		errs = append(errs, errors.New("replication.attachment_max_bytes must not be negative"))

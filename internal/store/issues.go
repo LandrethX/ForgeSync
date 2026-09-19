@@ -31,10 +31,15 @@ type IssueRecord struct {
 	// BaseReactions is the sorted "<login>:<content>" pairs of its
 	// reactions, comma-separated; BaseAttachments the "<size>:<name>" pairs
 	// of its files.
-	BaseReactions   string               `json:"-"`
-	BaseAttachments string               `json:"-"`
-	DeletedAt       *time.Time           `json:"deleted_at,omitempty"` // deleted on the primary
-	Copies          map[string]IssueCopy `json:"copies"`
+	BaseReactions   string `json:"-"`
+	BaseAttachments string `json:"-"`
+	// IsPull marks a pull request. HeadBranch and BaseBranch are the
+	// branches it is between, which a copy on another node needs.
+	IsPull     bool                 `json:"is_pull,omitempty"`
+	HeadBranch string               `json:"head_branch,omitempty"`
+	BaseBranch string               `json:"base_branch,omitempty"`
+	DeletedAt  *time.Time           `json:"deleted_at,omitempty"` // deleted on the primary
+	Copies     map[string]IssueCopy `json:"copies"`
 }
 
 // CommentRecord is one replicated comment.
@@ -60,7 +65,7 @@ func (s *Store) Issues(ctx context.Context, repositoryID string) ([]IssueRecord,
 	rows, err := s.pool.Query(ctx, `
 		SELECT i.id::text, i.origin_node, i.author, i.created_at, i.base_title, i.base_body, i.base_state, i.deleted_at,
 			i.base_labels, i.base_milestone, i.base_assignees, i.base_reactions, i.base_attachments,
-			c.node, c.number, c.forgejo_id
+			i.is_pull, i.head_branch, i.base_branch, c.node, c.number, c.forgejo_id
 		FROM issues i LEFT JOIN issue_copies c ON c.issue_id = i.id
 		WHERE i.repository_id = $1::uuid
 		ORDER BY i.created_at, i.id, c.node`, repositoryID)
@@ -74,7 +79,7 @@ func (s *Store) Issues(ctx context.Context, repositoryID string) ([]IssueRecord,
 		var number, fid *int64
 		if err := rows.Scan(&r.ID, &r.OriginNode, &r.Author, &r.CreatedAt, &r.BaseTitle, &r.BaseBody, &r.BaseState, &r.DeletedAt,
 			&r.BaseLabels, &r.BaseMilestone, &r.BaseAssignees, &r.BaseReactions, &r.BaseAttachments,
-			&node, &number, &fid); err != nil {
+			&r.IsPull, &r.HeadBranch, &r.BaseBranch, &node, &number, &fid); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
@@ -133,10 +138,12 @@ func (s *Store) SaveIssue(ctx context.Context, r IssueRecord) (string, error) {
 	if r.ID == "" {
 		err = tx.QueryRow(ctx, `
 			INSERT INTO issues (repository_id, origin_node, author, created_at, base_title, base_body, base_state, deleted_at,
-				base_labels, base_milestone, base_assignees, base_reactions, base_attachments)
-			VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id::text`,
+				base_labels, base_milestone, base_assignees, base_reactions, base_attachments,
+				is_pull, head_branch, base_branch)
+			VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id::text`,
 			r.RepositoryID, r.OriginNode, r.Author, r.CreatedAt, r.BaseTitle, r.BaseBody, r.BaseState, r.DeletedAt,
-			r.BaseLabels, r.BaseMilestone, r.BaseAssignees, r.BaseReactions, r.BaseAttachments).Scan(&r.ID)
+			r.BaseLabels, r.BaseMilestone, r.BaseAssignees, r.BaseReactions, r.BaseAttachments,
+			r.IsPull, r.HeadBranch, r.BaseBranch).Scan(&r.ID)
 	} else {
 		_, err = tx.Exec(ctx, `
 			UPDATE issues SET base_title = $2, base_body = $3, base_state = $4, deleted_at = $5,

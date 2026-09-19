@@ -376,10 +376,31 @@ func (c *Client) ListUsers(ctx context.Context, sourceID int64, page, limit int)
 
 // PullRequest is the part of a Forgejo pull request ForgeSync reads.
 type PullRequest struct {
-	Number  int64  `json:"number"`
-	HTMLURL string `json:"html_url"`
-	State   string `json:"state"` // open or closed
-	Merged  bool   `json:"merged"`
+	Number  int64     `json:"number"`
+	HTMLURL string    `json:"html_url"`
+	State   string    `json:"state"` // open or closed
+	Merged  bool      `json:"merged"`
+	Title   string    `json:"title"`
+	Body    string    `json:"body"`
+	Draft   bool      `json:"draft"`
+	User    User      `json:"user"`
+	Head    *PRBranch `json:"head"`
+	Base    *PRBranch `json:"base"`
+}
+
+// PRBranch is one side of a pull request.
+type PRBranch struct {
+	Ref string `json:"ref"` // the branch name
+	SHA string `json:"sha"`
+}
+
+// BranchOf is a pull request's branch name on one side, or "" if Forgejo
+// didn't say: the branch is gone, or it came from a fork.
+func BranchOf(b *PRBranch) string {
+	if b == nil {
+		return ""
+	}
+	return b.Ref
 }
 
 // CreatePullRequestOption is the body of POST /repos/{owner}/{repo}/pulls
@@ -416,6 +437,17 @@ func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, number 
 func (c *Client) Comment(ctx context.Context, owner, repo string, number int64, body string) error {
 	return c.do(ctx, http.MethodPost, fmt.Sprintf("%s/issues/%d/comments", repoPath(owner, repo), number), true,
 		map[string]string{"body": body}, nil)
+}
+
+// BranchExists reports whether a branch is on the node. ForgeSync opens a
+// copy of a pull request only once both its branches are there.
+func (c *Client) BranchExists(ctx context.Context, owner, repo, branch string) (bool, error) {
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/branches/%s", repoPath(owner, repo), url.PathEscape(branch)),
+		true, nil, nil)
+	if isNotFound(err) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // SetDefaultBranch changes a repository's default branch.
@@ -562,19 +594,63 @@ type IssueComment struct {
 	Created  time.Time `json:"created_at"`
 }
 
-// IssueNumber is the number of the issue the comment belongs to (0 if the
-// URL doesn't say).
-func (c IssueComment) IssueNumber() int64 {
-	i := strings.LastIndex(c.IssueURL, "/")
-	n, _ := strconv.ParseInt(c.IssueURL[i+1:], 10, 64)
+// Number is the number of the issue or pull request the comment belongs to
+// (0 if neither URL says). On a pull request Forgejo leaves issue_url empty
+// and fills pull_request_url instead, so both are read.
+func (c IssueComment) Number() int64 {
+	if n := numberIn(c.IssueURL); n != 0 {
+		return n
+	}
+	return numberIn(c.PRURL)
+}
+
+func numberIn(url string) int64 {
+	i := strings.LastIndex(url, "/")
+	if i < 0 {
+		return 0
+	}
+	n, _ := strconv.ParseInt(url[i+1:], 10, 64)
 	return n
 }
 
 // ListIssues returns one page of a repository's issues (not pull requests),
 // open and closed.
 func (c *Client) ListIssues(ctx context.Context, owner, repo string, page, limit int) ([]Issue, error) {
+	return c.listIssues(ctx, owner, repo, "issues", page, limit)
+}
+
+// ListIssuesAndPulls returns them with the pull requests among them, which
+// carry their own issue id and are marked by PullRequest being set.
+func (c *Client) ListIssuesAndPulls(ctx context.Context, owner, repo string, page, limit int) ([]Issue, error) {
+	return c.listIssues(ctx, owner, repo, "all", page, limit)
+}
+
+func (c *Client) listIssues(ctx context.Context, owner, repo, kind string, page, limit int) ([]Issue, error) {
 	var out []Issue
-	err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/issues?state=all&type=issues&page=%d&limit=%d", repoPath(owner, repo), page, limit), true, nil, &out)
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/issues?state=all&type=%s&page=%d&limit=%d",
+		repoPath(owner, repo), kind, page, limit), true, nil, &out)
+	return out, err
+}
+
+// Issue returns one issue or pull request by number; found is false if
+// it's gone. A pull request has its own id here, the one the issue
+// listing gives it, which is not the pull request's own.
+func (c *Client) Issue(ctx context.Context, owner, repo string, number int64) (Issue, bool, error) {
+	var is Issue
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/issues/%d", repoPath(owner, repo), number), true, nil, &is)
+	if isNotFound(err) {
+		return Issue{}, false, nil
+	}
+	return is, err == nil, err
+}
+
+// ListPulls returns one page of a repository's pull requests, open and
+// closed. It's read for what the issue listing doesn't carry: which
+// branches each one is between, and whether it has been merged.
+func (c *Client) ListPulls(ctx context.Context, owner, repo string, page, limit int) ([]PullRequest, error) {
+	var out []PullRequest
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/pulls?state=all&page=%d&limit=%d",
+		repoPath(owner, repo), page, limit), true, nil, &out)
 	return out, err
 }
 

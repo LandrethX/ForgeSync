@@ -118,8 +118,9 @@ func TestHandOff(t *testing.T) {
 			t.Fatalf("pulls = %+v", seAPI.pulls)
 		}
 		pr := seAPI.pulls[0]
-		if pr.Head != "forgesync/conflict/dk/main" || pr.Base != "main" || strings.Join(pr.Assignees, ",") != "alice" ||
-			!strings.Contains(pr.Body, "@alice") || !strings.Contains(pr.Body, "for 30 days") || strings.Contains(pr.Body, "share no history") {
+		if pr.Head != "forgesync/conflict/dk/main" || pr.Base != "main" ||
+			strings.Join(pr.Assignees, ",") != "alice" || !strings.Contains(pr.Body, "@alice") || !strings.Contains(pr.Body, "for 30 days") ||
+			strings.Contains(pr.Body, "share no history") {
 			t.Errorf("pull request = %+v", pr)
 		}
 		if len(st.found) != 1 || st.found[0].Kind != string(Diverged) || st.found[0].Details["handoffs"] == nil {
@@ -138,7 +139,7 @@ func TestHandOff(t *testing.T) {
 		runGit(t, w.dir, "merge", "--quiet", "--no-edit", "-X", "ours", c)
 		m := strings.TrimSpace(runGit(t, w.dir, "rev-parse", "HEAD"))
 		w.push(se, "alice/demo", "merge:refs/heads/main")
-		seAPI.pulls[0].State, seAPI.pulls[0].Merged = "closed", true
+		seAPI.pulls[0].pr.State, seAPI.pulls[0].pr.Merged = "closed", true
 		e.RunRepo(ctx, st.rec)
 		if dk.refs("alice/demo")["refs/heads/main"] != m || len(st.found) != 0 {
 			t.Fatalf("dk main %s, want the merge %s; conflicts %+v", dk.refs("alice/demo")["refs/heads/main"], m, st.found)
@@ -150,7 +151,7 @@ func TestHandOff(t *testing.T) {
 
 	t.Run("closed: the replica is reset and the backup kept for 30 days", func(t *testing.T) {
 		e, st, se, dk, seAPI, _, b, c := open(t)
-		seAPI.pulls[0].State = "closed"
+		seAPI.pulls[0].pr.State = "closed"
 		now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
 		e.now = func() time.Time { return now }
 		e.RunRepo(ctx, st.rec)
@@ -181,7 +182,7 @@ func TestHandOff(t *testing.T) {
 		// Someone pushes again right as the owner closes it: that replica isn't reset.
 		e2 := w.commit("e on dk")
 		w.push(dk, "alice/demo", "dkwork:refs/heads/main")
-		seAPI.pulls[0].State = "closed"
+		seAPI.pulls[0].pr.State = "closed"
 		st.mu.Lock()
 		h := st.handoffs[0]
 		st.mu.Unlock()

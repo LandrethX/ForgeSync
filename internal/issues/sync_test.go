@@ -45,6 +45,10 @@ type fakeNode struct {
 	commentFile map[int64][]*fakeFile
 	nextFile    int64
 	rejects     string
+	// pulls are the pull requests by number, and branches the branches the
+	// node has; a copy is only opened once both of a pull request's are.
+	pulls    map[int64]*forgejo.PullRequest
+	branches map[string]bool
 }
 
 // fakeFile is one attachment on the node.
@@ -62,13 +66,15 @@ func newFakeNode(name string) *fakeNode {
 		commentReactions: map[int64]map[string]bool{},
 		files:            map[int64][]*fakeFile{},
 		commentFile:      map[int64][]*fakeFile{},
+		pulls:            map[int64]*forgejo.PullRequest{},
+		branches:         map[string]bool{"main": true},
 		nextID:           map[string]int64{"se": 1000, "dk": 2000, "de": 3000}[name], clock: time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)}
 }
 
 func (f *fakeNode) tick() time.Time { f.clock = f.clock.Add(time.Second); return f.clock }
 
-// pull takes a number for a pull request.
-func (f *fakeNode) pull() { f.mu.Lock(); f.next++; f.mu.Unlock() }
+// skipNumber is a pull request taking a number in the shared sequence.
+func (f *fakeNode) skipNumber() { f.mu.Lock(); f.next++; f.mu.Unlock() }
 
 // open is a user opening an issue directly on the node.
 func (f *fakeNode) open(author, title string) *forgejo.Issue {
@@ -98,8 +104,14 @@ func (f *fakeNode) say(author string, number int64, body string) *forgejo.IssueC
 
 func (f *fakeNode) addComment(author string, number int64, body string) *forgejo.IssueComment {
 	f.nextID++
-	c := &forgejo.IssueComment{ID: f.nextID, IssueURL: fmt.Sprintf("http://%s/api/v1/repos/alice/demo/issues/%d", f.name, number),
+	url := fmt.Sprintf("http://%s/api/v1/repos/alice/demo/issues/%d", f.name, number)
+	c := &forgejo.IssueComment{ID: f.nextID, IssueURL: url,
 		User: forgejo.User{Login: author}, Body: body, Created: f.tick()}
+	// On a pull request Forgejo fills pull_request_url and leaves issue_url
+	// empty, which is the only way to tell from the comment alone.
+	if f.pulls[number] != nil {
+		c.IssueURL, c.PRURL = "", fmt.Sprintf("http://%s/api/v1/repos/alice/demo/pulls/%d", f.name, number)
+	}
 	f.comments[c.ID] = c
 	return c
 }
@@ -127,7 +139,7 @@ func (f *fakeNode) commentIDs(number int64) []int64 {
 	defer f.mu.Unlock()
 	var ids []int64
 	for _, c := range f.comments {
-		if c.IssueNumber() == number {
+		if c.Number() == number {
 			ids = append(ids, c.ID)
 		}
 	}
@@ -140,7 +152,7 @@ func (f *fakeNode) commentsOn(number int64) []string {
 	defer f.mu.Unlock()
 	var cs []*forgejo.IssueComment
 	for _, c := range f.comments {
-		if c.IssueNumber() == number {
+		if c.Number() == number {
 			cs = append(cs, c)
 		}
 	}
@@ -159,10 +171,22 @@ type fakeAPI struct {
 }
 
 func (a fakeAPI) ListIssues(_ context.Context, _, _ string, page, limit int) ([]forgejo.Issue, error) {
+	return a.listIssues(page, limit, false)
+}
+
+// ListIssuesAndPulls is Forgejo's type=all: the pull requests come too.
+func (a fakeAPI) ListIssuesAndPulls(_ context.Context, _, _ string, page, limit int) ([]forgejo.Issue, error) {
+	return a.listIssues(page, limit, true)
+}
+
+func (a fakeAPI) listIssues(page, limit int, withPulls bool) ([]forgejo.Issue, error) {
 	a.n.mu.Lock()
 	defer a.n.mu.Unlock()
 	var all []forgejo.Issue
 	for _, is := range a.n.issues {
+		if is.PullRequest != nil && !withPulls {
+			continue
+		}
 		all = append(all, *is)
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].Number > all[j].Number })
@@ -171,6 +195,78 @@ func (a fakeAPI) ListIssues(_ context.Context, _, _ string, page, limit int) ([]
 		return nil, nil
 	}
 	return all[start:min(start+limit, len(all))], nil
+}
+
+func (a fakeAPI) ListPulls(_ context.Context, _, _ string, page, _ int) ([]forgejo.PullRequest, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	if page > 1 {
+		return nil, nil
+	}
+	var out []forgejo.PullRequest
+	for _, pr := range a.n.pulls {
+		out = append(out, *pr)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Number < out[j].Number })
+	return out, nil
+}
+
+func (a fakeAPI) Issue(_ context.Context, _, _ string, number int64) (forgejo.Issue, bool, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	is := a.n.issues[number]
+	if is == nil {
+		return forgejo.Issue{}, false, nil
+	}
+	return *is, true, nil
+}
+
+func (a fakeAPI) BranchExists(_ context.Context, _, _, branch string) (bool, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	return a.n.branches[branch], nil
+}
+
+func (a fakeAPI) CreatePullRequest(_ context.Context, _, _ string, opt forgejo.CreatePullRequestOption) (forgejo.PullRequest, error) {
+	a.n.mu.Lock()
+	defer a.n.mu.Unlock()
+	is := a.n.create(a.as, opt.Title, opt.Body, false)
+	is.PullRequest = &struct{}{}
+	pr := &forgejo.PullRequest{Number: is.Number, Title: opt.Title, Body: opt.Body, State: "open",
+		User: forgejo.User{Login: a.as}, Head: &forgejo.PRBranch{Ref: opt.Head}, Base: &forgejo.PRBranch{Ref: opt.Base}}
+	a.n.pulls[is.Number] = pr
+	a.n.writes = append(a.n.writes, "open pull request "+opt.Title+" as "+a.as)
+	return *pr, nil
+}
+
+// openPull is someone opening a pull request on the node.
+func (f *fakeNode) openPull(author, title, head, base string) *forgejo.Issue {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	is := f.create(author, title, "", false)
+	is.PullRequest = &struct{}{}
+	f.branches[head] = true
+	f.pulls[is.Number] = &forgejo.PullRequest{Number: is.Number, Title: title, State: "open",
+		User: forgejo.User{Login: author}, Head: &forgejo.PRBranch{Ref: head}, Base: &forgejo.PRBranch{Ref: base}}
+	return is
+}
+
+// pullOn is a pull request's state on the node, or "" if it has none.
+func (f *fakeNode) pullOn(number int64) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if pr := f.pulls[number]; pr != nil {
+		return pr.State
+	}
+	return ""
+}
+
+// mergePull is someone merging a pull request on the node.
+func (f *fakeNode) mergePull(number int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pulls[number].State, f.pulls[number].Merged = "closed", true
+	f.issues[number].State = "closed"
 }
 func (a fakeAPI) ListRepoComments(_ context.Context, _, _ string, page, limit int) ([]forgejo.IssueComment, error) {
 	a.n.mu.Lock()
@@ -707,6 +803,11 @@ func (a fakeAPI) EditIssue(_ context.Context, _, _ string, number int64, title, 
 	}
 	if state != nil {
 		is.State = *state
+		// Closing a pull request through the issue endpoint closes the pull
+		// request; it never merges it.
+		if pr := a.n.pulls[number]; pr != nil {
+			pr.State = *state
+		}
 		a.n.writes = append(a.n.writes, fmt.Sprintf("state #%d", number))
 	}
 	return nil
@@ -1001,7 +1102,7 @@ func TestEditsAreMergedPerField(t *testing.T) {
 
 func TestNumbersCanDiffer(t *testing.T) {
 	s, st, f, _ := setup(t, "se", "dk")
-	f["dk"].pull() // a pull request took #1 on dk only
+	f["dk"].skipNumber() // a pull request took #1 on dk only
 	f["se"].open("alice", "first")
 	s.run(t)
 	var rec store.IssueRecord

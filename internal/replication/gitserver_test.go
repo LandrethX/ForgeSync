@@ -66,6 +66,20 @@ func (n *gitNode) create(name string) string {
 	return dir
 }
 
+// createWithCommit makes a repository that already has one commit on
+// main, as Forgejo's first wiki page does.
+func (n *gitNode) createWithCommit(name, msg string) string {
+	n.t.Helper()
+	dir := n.create(name)
+	work := n.t.TempDir()
+	runGit(n.t, "", "init", "--quiet", "--initial-branch=main", work)
+	os.WriteFile(filepath.Join(work, "Home.md"), []byte(msg+"\n"), 0o644)
+	runGit(n.t, work, "add", "Home.md")
+	runGit(n.t, work, "commit", "--quiet", "-m", msg)
+	runGit(n.t, work, "push", "--quiet", dir, "main:main")
+	return dir
+}
+
 func (n *gitNode) remote(name string) Remote {
 	return Remote{URL: n.srv.URL + "/" + name + ".git", User: testUser, Token: testToken}
 }

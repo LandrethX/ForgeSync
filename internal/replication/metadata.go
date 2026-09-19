@@ -42,14 +42,12 @@ const MetadataConflictKind = "repo_metadata"
 
 // metaFields are the settings that travel, in the order they're written.
 //
-// The toggles for the wiki, projects and actions are not among them, and
-// has_issues is: issues, their comments and everything on them do
-// replicate, so saying the tab is there is true. A wiki is a second git
-// repository, projects are boards and cards, actions are workflow runs,
-// and ForgeSync copies none of those. Turning those tabs on everywhere
-// would promise something that isn't there -- a page written on one node
-// and an empty wiki on the next -- which is worse than leaving each node's
-// own setting alone.
+// A toggle is carried only when ForgeSync carries what it promises.
+// has_issues and has_pull_requests are, and so is has_wiki once
+// replication.wiki is on -- the wiki's own pages travel then, so saying
+// the tab is there is true. Projects are boards and cards and actions are
+// workflow runs, neither of which ForgeSync copies, so those two toggles
+// stay where each node has them.
 var metaFields = []string{
 	"description", "website", "has_issues", "has_pull_requests",
 	"allow_merge_commits", "allow_rebase", "allow_rebase_explicit",
@@ -60,6 +58,7 @@ func metaOf(r forgejo.Repository) map[string]string {
 	return map[string]string{
 		"description": r.Description, "website": r.Website,
 		"has_issues": yes(r.HasIssues), "has_pull_requests": yes(r.HasPullRequests),
+		"has_wiki":            yes(r.HasWiki),
 		"allow_merge_commits": yes(r.AllowMergeCommits), "allow_rebase": yes(r.AllowRebase),
 		"allow_rebase_explicit": yes(r.AllowRebaseExplicit), "allow_squash_merge": yes(r.AllowSquashMerge),
 		"default_merge_style": r.DefaultMergeStyle, "delete_branch_after_merge": yes(r.DeleteBranchAfterMerge),
@@ -76,6 +75,15 @@ func asField(name, value string) any {
 	default:
 		return value == "true"
 	}
+}
+
+// fieldsCarried is metaFields plus the ones that depend on what else is
+// turned on.
+func (e *Engine) fieldsCarried() []string {
+	if e.opts.Wiki {
+		return append(append([]string(nil), metaFields...), "has_wiki")
+	}
+	return metaFields
 }
 
 // syncMetadata brings one repository's settings and topics together.
@@ -118,7 +126,7 @@ func (e *Engine) syncMetadata(ctx context.Context, rec store.RepositoryRecord, h
 	// Built fresh, so a setting ForgeSync no longer carries doesn't linger.
 	base := map[string]string{}
 	var found []store.FoundConflict
-	for _, field := range metaFields {
+	for _, field := range e.fieldsCarried() {
 		vals := map[string]string{}
 		for n, r := range at {
 			vals[n] = metaOf(r)[field]

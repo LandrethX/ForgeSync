@@ -29,6 +29,7 @@ type memStore struct {
 	// renamedTo is what RenamedTo answers.
 	renamedTo string
 	orgs      map[string]store.OrgRecord
+	wikiRefs  map[string]map[string]string
 	// onSave, if set, runs whenever a replica's state is saved.
 	onSave func()
 }
@@ -46,6 +47,22 @@ func (m *memStore) MarkRepositoryDeleted(_ context.Context, _ string, at time.Ti
 	}
 	return nil
 }
+func (m *memStore) WikiRefs(_ context.Context, _, node string) (map[string]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.wikiRefs[node], nil
+}
+
+func (m *memStore) SaveWikiRefs(_ context.Context, _, node string, refs map[string]string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.wikiRefs == nil {
+		m.wikiRefs = map[string]map[string]string{}
+	}
+	m.wikiRefs[node] = refs
+	return nil
+}
+
 func (m *memStore) SetRepositoryReleases(_ context.Context, _, releases, assets string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -33,11 +33,17 @@ function itemName(c: Conflict, kind: string): string {
   return c.details.item ? `the ${kind} ${c.details.item}` : `the ${kind}`;
 }
 
+/** A wiki's branch is written wiki:refs/heads/main, so it can't be taken
+ *  for the repository's own. */
+function inWiki(c: Conflict): boolean {
+  return c.details.wiki === true || c.ref.startsWith("wiki:");
+}
+
 function refName(c: Conflict): string {
   return (
     c.details.branch ??
     c.details.tag ??
-    c.ref.replace(/^refs\/(heads|tags)\//, "")
+    c.ref.replace(/^wiki:/, "").replace(/^refs\/(heads|tags)\//, "")
   );
 }
 
@@ -63,6 +69,7 @@ export function conflictTitle(c: Conflict): string {
     c.details.tag !== undefined || c.ref.startsWith("refs/tags/")
       ? `tag ${refName(c)}`
       : refName(c);
+  if (inWiki(c)) return `${label}: ${what} in the wiki`;
   return `${label}: ${what}`;
 }
 

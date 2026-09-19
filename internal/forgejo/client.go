@@ -8,6 +8,7 @@ package forgejo
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -545,6 +546,27 @@ func (c *Client) RemoveTeamMember(ctx context.Context, id int64, login string) e
 		return nil
 	}
 	return err
+}
+
+// HasWiki reports whether the repository has a wiki with anything in it.
+// The wiki's git endpoint answers 200 whether or not the repository is
+// there, so the page listing is what says: it is 404 until a first page
+// exists, and 404 too when the wiki is switched off.
+func (c *Client) HasWiki(ctx context.Context, owner, repo string) (bool, error) {
+	var pages []struct{}
+	err := c.do(ctx, http.MethodGet, repoPath(owner, repo)+"/wiki/pages", true, nil, &pages)
+	if isNotFound(err) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// CreateWikiPage writes a page, which is also what makes Forgejo create
+// the wiki's git repository the first time.
+func (c *Client) CreateWikiPage(ctx context.Context, owner, repo, title, content, message string) error {
+	return c.do(ctx, http.MethodPost, repoPath(owner, repo)+"/wiki/new", true, map[string]string{
+		"title": title, "content_base64": base64.StdEncoding.EncodeToString([]byte(content)),
+		"message": message}, nil)
 }
 
 // Collaborators lists the people a repository is shared with, which is not

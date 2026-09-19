@@ -155,6 +155,12 @@ type Replication struct {
 	// git replication has already put everywhere. Files are bounded by
 	// AttachmentMaxBytes. Off by default.
 	Releases bool `yaml:"releases"`
+	// Wiki replicates each repository's wiki -- a second git repository --
+	// from its primary to the replicas, the way the repository itself is
+	// replicated. A node that has no wiki yet gets one page written through
+	// the API so Forgejo makes the repository, which is then replaced by
+	// the primary's history. Off by default.
+	Wiki bool `yaml:"wiki"`
 	// ArchiveOrg is the private organization ForgeSync moves the copies of a
 	// repository deleted on its primary into. Default "forgesync-archive".
 	ArchiveOrg string `yaml:"archive_org"`

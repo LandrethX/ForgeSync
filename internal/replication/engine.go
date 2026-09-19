@@ -56,6 +56,8 @@ type Store interface {
 	SetRepositoryProtection(ctx context.Context, id, value string) error
 	SetRepositoryMetadata(ctx context.Context, id string, fields map[string]string, topics string) error
 	SetRepositoryReleases(ctx context.Context, id, releases, assets string) error
+	WikiRefs(ctx context.Context, repositoryID, node string) (map[string]string, error)
+	SaveWikiRefs(ctx context.Context, repositoryID, node string, refs map[string]string) error
 	Org(ctx context.Context, name string) (store.OrgRecord, error)
 	SaveOrg(ctx context.Context, rec store.OrgRecord) error
 	DeleteRepository(ctx context.Context, id string) error
@@ -105,6 +107,9 @@ type Options struct {
 	// file it carries; default 16 MiB.
 	Releases bool
 	AssetMax int64
+	// Wiki replicates each repository's wiki, which is a second git
+	// repository, from its primary to the replicas (wiki.go).
+	Wiki bool
 	// BackupFor is how long ForgeSync keeps what it takes away: a replica's
 	// branch after the owner chose the primary's version, and the archived
 	// copies of a repository deleted on its primary. Default 30 days.
@@ -484,6 +489,9 @@ func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again
 	}
 	if e.opts.Releases && !again {
 		e.syncReleases(ctx, rec, healthy)
+	}
+	if e.opts.Wiki && !again {
+		e.syncWiki(ctx, rec, primary, healthy)
 	}
 	if !again {
 		// The owner's rules first, so the guard isn't mistaken for one.

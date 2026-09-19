@@ -65,6 +65,31 @@ type fakeOrg struct {
 
 // meta is what this node's repository settings and topics are.
 // releases and files are what this node has published, by repository.
+// HasWiki answers from whether the wiki's repository is there, as
+// Forgejo's page listing does.
+func (f *fakeAPI) HasWiki(_ context.Context, owner, repo string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.git == nil {
+		return false, nil
+	}
+	_, err := os.Stat(filepath.Join(f.git.root, owner, repo+".wiki.git"))
+	return err == nil, nil
+}
+
+// CreateWikiPage is what makes Forgejo create the wiki's repository.
+func (f *fakeAPI) CreateWikiPage(_ context.Context, owner, repo, title, _, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "wiki page "+title)
+	if f.git != nil {
+		// Forgejo's first page brings the repository into being with a
+		// commit already in it, which is what ForgeSync then replaces.
+		f.git.createWithCommit(owner+"/"+repo+".wiki", "ForgeSync: preparing the wiki")
+	}
+	return nil
+}
+
 func (f *fakeAPI) Releases(_ context.Context, owner, repo string, page, _ int) ([]forgejo.Release, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

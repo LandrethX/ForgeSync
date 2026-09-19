@@ -265,6 +265,8 @@ export interface Conflict {
     blocked?: string[];
     /** org_metadata: the organization whose profile differs. */
     organization?: string;
+    /** Set when the difference is in the repository's wiki, not its own refs. */
+    wiki?: boolean;
   };
   detected_at: string;
   last_seen_at: string;

@@ -73,6 +73,8 @@ replication:
   organizations: true
   # The owner's own branch protection rules, kept the same everywhere.
   branch_protection: true
+  # A repository's settings and topics, kept the same everywhere.
+  metadata: true
   # ForgeSync's guard on the replicas: people work on the primary, and a
   # guard someone removes is put back (Phase 0 p02).
   protect_replicas: true

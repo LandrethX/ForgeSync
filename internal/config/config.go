@@ -143,6 +143,13 @@ type Replication struct {
 	// BranchProtection keeps the owner's own protection rules the same on
 	// every node. Off by default.
 	BranchProtection bool `yaml:"branch_protection"`
+	// Metadata keeps a repository's settings -- description, website, the
+	// units it offers, its merge styles -- and its topics the same on every
+	// node. The default branch isn't among them (replication already
+	// follows the primary's) and neither is archived. A repository private
+	// anywhere becomes private everywhere; the other way is a person's
+	// decision. Off by default.
+	Metadata bool `yaml:"metadata"`
 	// ArchiveOrg is the private organization ForgeSync moves the copies of a
 	// repository deleted on its primary into. Default "forgesync-archive".
 	ArchiveOrg string `yaml:"archive_org"`

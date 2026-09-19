@@ -215,7 +215,8 @@ export type ConflictKind =
   | "git_replica_changed"
   | "git_replica_extra_ref"
   | "issue_conflict"
-  | "org_metadata";
+  | "org_metadata"
+  | "repo_metadata";
 
 export interface Handoff {
   pr_number: number;

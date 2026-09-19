@@ -50,6 +50,7 @@ type Store interface {
 	UndeleteRepository(ctx context.Context, id string) error
 	SetRepositoryCollaborators(ctx context.Context, id, value string) error
 	SetRepositoryProtection(ctx context.Context, id, value string) error
+	SetRepositoryMetadata(ctx context.Context, id string, fields map[string]string, topics string) error
 	Org(ctx context.Context, name string) (store.OrgRecord, error)
 	SaveOrg(ctx context.Context, rec store.OrgRecord) error
 	DeleteRepository(ctx context.Context, id string) error
@@ -91,6 +92,9 @@ type Options struct {
 	// keeps the owner's own rules the same everywhere.
 	ProtectReplicas  bool
 	BranchProtection bool
+	// Metadata keeps a repository's settings and topics the same on every
+	// node (metadata.go).
+	Metadata bool
 	// BackupFor is how long ForgeSync keeps what it takes away: a replica's
 	// branch after the owner chose the primary's version, and the archived
 	// copies of a repository deleted on its primary. Default 30 days.
@@ -461,6 +465,9 @@ func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again
 	}
 	if e.opts.Collaborators && !again {
 		e.syncCollaborators(ctx, rec, primary, healthy)
+	}
+	if e.opts.Metadata && !again {
+		e.syncMetadata(ctx, rec, healthy)
 	}
 	if !again {
 		// The owner's rules first, so the guard isn't mistaken for one.

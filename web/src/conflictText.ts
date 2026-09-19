@@ -9,6 +9,7 @@ export const KIND_LABEL: Record<Conflict["kind"], string> = {
   git_replica_extra_ref: "Only on the replica",
   issue_conflict: "Issue changed differently",
   org_metadata: "Organization changed differently",
+  repo_metadata: "Setting changed differently",
 };
 
 /**
@@ -44,6 +45,9 @@ function refName(c: Conflict): string {
 export function conflictTitle(c: Conflict): string {
   const label = KIND_LABEL[c.kind] ?? c.kind;
   if (c.kind === "default_branch_mismatch") return label;
+  if (c.kind === "repo_metadata") {
+    return `${label}: ${c.details.field ?? c.ref}`;
+  }
   if (c.kind === "org_metadata") {
     return `${label}: ${c.details.organization ?? ""} ${c.details.field ?? ""}`.trimEnd();
   }
@@ -96,6 +100,8 @@ export function conflictExplanation(c: Conflict): string | undefined {
       return "This ref was changed on a replica after replication wrote it, or a tag there points somewhere else.";
     case "git_replica_extra_ref":
       return `This ref exists only on a replica; it wasn't created on ${primary}.`;
+    case "repo_metadata":
+      return `The repository's ${c.details.field ?? "setting"} was set differently on different nodes since they last agreed. ForgeSync doesn't pick one, so none of them was changed.`;
     case "org_metadata":
       return `The ${c.details.field ?? "profile"} of the organization ${c.details.organization ?? ""} was set differently on different nodes since they last agreed. ForgeSync doesn't pick one, so none of them was changed.`;
     case "issue_conflict": {
@@ -171,6 +177,8 @@ export function conflictFix(c: Conflict): string {
       }
       return `Edit the ${c.details.field ?? "field"} on one of the nodes so it matches another; ForgeSync then copies that value everywhere.`;
     }
+    case "repo_metadata":
+      return `Set the ${c.details.field ?? "setting"} on one of the nodes so it matches another; ForgeSync then copies that everywhere. The default branch isn't settled here -- replication follows the primary's -- and a repository private on any node is made private on all of them.`;
     case "org_metadata":
       return `Set the ${c.details.field ?? "field"} on one of the nodes so it matches another; ForgeSync then copies that everywhere. An organization's profile has no primary: whichever value someone settles on wins.`;
     case "default_branch_mismatch":

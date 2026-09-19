@@ -17,6 +17,9 @@ type NodeAPI interface {
 	UsersByLoginName(ctx context.Context, sourceID int64, loginName string) ([]forgejo.User, error)
 	AdminCreateUser(ctx context.Context, opt forgejo.CreateUserOption) (forgejo.User, error)
 	AdminCreateRepo(ctx context.Context, owner string, opt forgejo.CreateRepoOption) (forgejo.Repository, error)
+	EditRepoFields(ctx context.Context, owner, repo string, fields map[string]any) error
+	Topics(ctx context.Context, owner, repo string) ([]string, error)
+	SetTopics(ctx context.Context, owner, repo string, topics []string) error
 	BranchProtections(ctx context.Context, owner, repo string) ([]forgejo.BranchProtection, error)
 	CreateBranchProtection(ctx context.Context, owner, repo string, r forgejo.BranchProtection) (forgejo.BranchProtection, error)
 	EditBranchProtection(ctx context.Context, owner, repo, rule string, r forgejo.BranchProtection) error

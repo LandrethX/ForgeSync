@@ -36,8 +36,10 @@ type fakeAPI struct {
 	// do; refusesGrant is a login this node won't take.
 	collabs      map[string]string
 	refusesGrant string
-	// rules are this node's branch protection rules, by rule name.
-	rules map[string]forgejo.BranchProtection
+	// rules are this node's branch protection rules, by rule name, and
+	// topics its repositories' topics.
+	rules  map[string]forgejo.BranchProtection
+	topics map[string][]string
 	// orgState is each organization this node has, with its teams and who
 	// is in them; orgs above is only what IsOrg answers.
 	orgState map[string]*fakeOrg
@@ -49,6 +51,65 @@ type fakeOrg struct {
 	org     forgejo.Org
 	teams   map[string]*forgejo.Team // by name
 	members map[int64]map[string]bool
+}
+
+// meta is what this node's repository settings and topics are.
+func (f *fakeAPI) EditRepoFields(_ context.Context, owner, repo string, fields map[string]any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.repos[owner+"/"+repo]
+	for k, v := range fields {
+		switch k {
+		case "description":
+			r.Description, _ = v.(string)
+		case "website":
+			r.Website, _ = v.(string)
+		case "default_merge_style":
+			r.DefaultMergeStyle, _ = v.(string)
+		case "private":
+			r.Private, _ = v.(bool)
+		case "has_issues":
+			r.HasIssues, _ = v.(bool)
+		case "has_wiki":
+			r.HasWiki, _ = v.(bool)
+		case "has_projects":
+			r.HasProjects, _ = v.(bool)
+		case "has_pull_requests":
+			r.HasPullRequests, _ = v.(bool)
+		case "has_actions":
+			r.HasActions, _ = v.(bool)
+		case "allow_merge_commits":
+			r.AllowMergeCommits, _ = v.(bool)
+		case "allow_rebase":
+			r.AllowRebase, _ = v.(bool)
+		case "allow_rebase_explicit":
+			r.AllowRebaseExplicit, _ = v.(bool)
+		case "allow_squash_merge":
+			r.AllowSquashMerge, _ = v.(bool)
+		case "delete_branch_after_merge":
+			r.DeleteBranchAfterMerge, _ = v.(bool)
+		}
+		f.calls = append(f.calls, "set "+k)
+	}
+	f.repos[owner+"/"+repo] = r
+	return nil
+}
+
+func (f *fakeAPI) Topics(_ context.Context, owner, repo string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.topics[owner+"/"+repo]...), nil
+}
+
+func (f *fakeAPI) SetTopics(_ context.Context, owner, repo string, topics []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.topics == nil {
+		f.topics = map[string][]string{}
+	}
+	f.topics[owner+"/"+repo] = append([]string(nil), topics...)
+	f.calls = append(f.calls, "set topics")
+	return nil
 }
 
 func (f *fakeAPI) BranchProtections(_ context.Context, _, _ string) ([]forgejo.BranchProtection, error) {

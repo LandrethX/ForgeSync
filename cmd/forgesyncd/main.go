@@ -137,6 +137,7 @@ func run(configPath string) error {
 			Organizations:    cfg.Replication.Organizations,
 			ProtectReplicas:  cfg.Replication.ProtectReplicas,
 			BranchProtection: cfg.Replication.BranchProtection,
+			Metadata:         cfg.Replication.Metadata,
 			BackupFor:        time.Duration(cfg.Replication.BackupDays) * 24 * time.Hour,
 			ArchiveOrg:       cfg.Replication.ArchiveOrg,
 			// Rescan so the inventory shows the result. Forgejo updates some
@@ -151,7 +152,7 @@ func run(configPath string) error {
 			"hand_off_conflicts", *cfg.Replication.HandOffConflicts, "backup_days", cfg.Replication.BackupDays,
 			"collaborators", cfg.Replication.Collaborators, "organizations", cfg.Replication.Organizations,
 			"protect_replicas", cfg.Replication.ProtectReplicas,
-			"branch_protection", cfg.Replication.BranchProtection)
+			"branch_protection", cfg.Replication.BranchProtection, "metadata", cfg.Replication.Metadata)
 	}
 	// Renames and primaries are assigned after scans and after webhooks;
 	// one at a time.

@@ -201,6 +201,19 @@ type Repository struct {
 	DefaultBranch string `json:"default_branch"`
 	Description   string `json:"description"`
 	Template      bool   `json:"template"`
+	// The settings ForgeSync keeps the same on every node.
+	Website                string `json:"website"`
+	HasIssues              bool   `json:"has_issues"`
+	HasWiki                bool   `json:"has_wiki"`
+	HasProjects            bool   `json:"has_projects"`
+	HasPullRequests        bool   `json:"has_pull_requests"`
+	HasActions             bool   `json:"has_actions"`
+	AllowMergeCommits      bool   `json:"allow_merge_commits"`
+	AllowRebase            bool   `json:"allow_rebase"`
+	AllowRebaseExplicit    bool   `json:"allow_rebase_explicit"`
+	AllowSquashMerge       bool   `json:"allow_squash_merge"`
+	DefaultMergeStyle      string `json:"default_merge_style"`
+	DeleteBranchAfterMerge bool   `json:"delete_branch_after_merge"`
 	// ObjectFormatName is sha1 or sha256; a copy must use the same.
 	ObjectFormatName string    `json:"object_format_name"`
 	Size             int       `json:"size"`
@@ -621,6 +634,30 @@ func (c *Client) OrgOwners(ctx context.Context, org string) ([]string, error) {
 type EditRepoOption struct {
 	Name     *string `json:"name,omitempty"`
 	Archived *bool   `json:"archived,omitempty"`
+}
+
+// EditRepoFields changes the named settings and nothing else. Forgejo
+// leaves out what isn't sent.
+func (c *Client) EditRepoFields(ctx context.Context, owner, repo string, fields map[string]any) error {
+	return c.do(ctx, http.MethodPatch, repoPath(owner, repo), true, fields, nil)
+}
+
+// Topics lists a repository's topics.
+func (c *Client) Topics(ctx context.Context, owner, repo string) ([]string, error) {
+	var out struct {
+		Topics []string `json:"topics"`
+	}
+	err := c.do(ctx, http.MethodGet, repoPath(owner, repo)+"/topics", true, nil, &out)
+	return out.Topics, err
+}
+
+// SetTopics replaces them.
+func (c *Client) SetTopics(ctx context.Context, owner, repo string, topics []string) error {
+	if topics == nil {
+		topics = []string{}
+	}
+	return c.do(ctx, http.MethodPut, repoPath(owner, repo)+"/topics", true,
+		map[string][]string{"topics": topics}, nil)
 }
 
 // EditRepo changes a repository's settings.

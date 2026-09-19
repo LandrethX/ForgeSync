@@ -155,3 +155,38 @@ func TestOrganizationLabelsAreLeftAlone(t *testing.T) {
 		t.Errorf("dk #1 repository labels = %q", got)
 	}
 }
+
+// Deleting a label on a replica takes it off that node's issues too.
+// That's Forgejo tidying up after the deletion, not someone unlabelling the
+// issue, so the label comes back and the issues keep it everywhere.
+func TestLabelDeletedOnReplicaKeepsIssueLabels(t *testing.T) {
+	s, st, f, _ := setup(t)
+	bug := f["se"].label("bug", "ee0701")
+	f["se"].setLabels(f["se"].open("alice", "labelled"), []int64{bug})
+	s.run(t)
+	for _, n := range []string{"se", "dk", "de"} {
+		if got := f[n].labelNames(1); got != "bug" {
+			t.Fatalf("%s #1 before: %q", n, got)
+		}
+	}
+
+	fakeAPI{f["de"], "carol"}.DeleteLabel(nil, "", "", mustID(t, f["de"], "bug"))
+	s.run(t)
+	if f["de"].labelNamed("bug") == nil {
+		t.Fatal("the label wasn't recreated on de")
+	}
+	for _, n := range []string{"se", "dk", "de"} {
+		if got := f[n].labelNames(1); got != "bug" {
+			t.Errorf("%s #1 after the deletion on de: %q", n, got)
+		}
+	}
+	// A second run finds everything agreeing.
+	writes(f)
+	s.run(t)
+	if n := writes(f); n != 0 {
+		t.Errorf("a settled run wrote %d times", n)
+	}
+	if len(st.found) != 0 {
+		t.Errorf("conflicts: %+v", st.found)
+	}
+}

@@ -206,6 +206,7 @@ func (r *run) item(ctx context.Context, k itemKind, it *store.RepoItem) (bool, e
 		}
 		if n != r.primary {
 			delete(it.Copies, n) // deleted there: recreated below
+			r.itemVanished(n)
 			continue
 		}
 		deleted = true
@@ -279,7 +280,8 @@ func (r *run) item(ctx context.Context, k itemKind, it *store.RepoItem) (bool, e
 				r.complete = false
 				continue
 			}
-			r.s.log.Info(k.name+" updated", "repository", r.rec.FullName, "node", n, k.key, value, "field", field)
+			r.s.log.Info(k.name+" updated", "repository", r.rec.FullName, "node", n, k.key, it.Base[k.key],
+				"field", field, "value", value)
 		}
 		base[field] = value
 	}
@@ -304,6 +306,20 @@ func (r *run) item(ctx context.Context, k itemKind, it *store.RepoItem) (bool, e
 	}
 	_, err := r.s.store.SaveRepoItem(ctx, *it)
 	return false, err
+}
+
+// itemVanished notes that a label or milestone was deleted on this node and
+// is being recreated. Forgejo took it off that node's issues as well, and
+// the snapshot was read before the copy came back, so the node can't be
+// compared on labels or milestones in this run: leaving it out keeps a
+// deletion there from being read as someone unlabelling the issues, and the
+// next run sees the truth.
+func (r *run) itemVanished(node string) {
+	if r.restored == nil {
+		r.restored = map[string]bool{}
+	}
+	r.restored[node] = true
+	r.complete = false
 }
 
 func sameFields(a, b map[string]string, fields []string) bool {

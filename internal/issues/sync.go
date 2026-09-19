@@ -243,6 +243,9 @@ type run struct {
 	complete    bool
 	labels      itemIndex
 	milestones  itemIndex
+	// restored are the nodes where a label or milestone deleted there is
+	// being recreated in this run; see itemVanished.
+	restored map[string]bool
 }
 
 func (s *Syncer) runOnce(ctx context.Context, id string) error {
@@ -482,10 +485,13 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 		base *string
 		get  func(node string, is forgejo.Issue) string
 		set  func(ctx context.Context, node string, number int64, value string, is forgejo.Issue) error
+		// items: the value names labels or milestones, so a node whose copy
+		// of one is being recreated can't be compared in this run.
+		items bool
 	}{
-		{"title", &rec.BaseTitle, func(_ string, i forgejo.Issue) string { return i.Title }, nil},
-		{"body", &rec.BaseBody, func(_ string, i forgejo.Issue) string { return i.Body }, nil},
-		{"state", &rec.BaseState, func(_ string, i forgejo.Issue) string { return i.State }, nil},
+		{"title", &rec.BaseTitle, func(_ string, i forgejo.Issue) string { return i.Title }, nil, false},
+		{"body", &rec.BaseBody, func(_ string, i forgejo.Issue) string { return i.Body }, nil, false},
+		{"state", &rec.BaseState, func(_ string, i forgejo.Issue) string { return i.State }, nil, false},
 		{"labels", &rec.BaseLabels, r.labels.labelsValue,
 			func(ctx context.Context, n string, number int64, v string, is forgejo.Issue) error {
 				fids, ok := r.labels.labelFIDs(n, v, &is)
@@ -493,7 +499,7 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 					return errNotThereYet
 				}
 				return r.s.nodes[n].API.ReplaceIssueLabels(ctx, r.owner, r.name, number, fids)
-			}},
+			}, true},
 		{"milestone", &rec.BaseMilestone, r.milestones.milestoneValue,
 			func(ctx context.Context, n string, number int64, v string, _ forgejo.Issue) error {
 				fid, ok := r.milestones.milestoneFID(n, v)
@@ -501,12 +507,15 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 					return errNotThereYet
 				}
 				return r.s.nodes[n].API.SetIssueMilestone(ctx, r.owner, r.name, number, fid)
-			}},
+			}, true},
 	}
 	want := map[string]string{} // for new copies
 	for _, f := range fields {
 		vals := map[string]string{}
 		for n, is := range present {
+			if f.items && r.restored[n] {
+				continue // a copy coming back, not someone's change
+			}
 			vals[n] = f.get(n, is)
 		}
 		value, writes, conflict := merge(vals, *f.base)
@@ -521,6 +530,17 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 			continue
 		}
 		want[f.name] = value
+		// A node whose label or milestone was just recreated lost it from
+		// its issues; give it the agreed value back instead of reading its
+		// loss as a change.
+		if f.items {
+			for n, is := range present {
+				if r.restored[n] && f.get(n, is) != value {
+					writes = append(writes, n)
+				}
+			}
+			sort.Strings(writes)
+		}
 		for _, n := range writes {
 			set := f.set
 			if set == nil {

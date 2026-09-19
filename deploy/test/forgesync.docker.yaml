@@ -44,6 +44,7 @@ webhooks:
   secret_file: /etc/forgesync/tokens/webhook.secret
 replication:
   enabled: true
-  # Issues and their comments, both directions (internal/issues).
+  # Issues and their comments, with the repositories' labels and
+  # milestones, both directions (internal/issues).
   issues: true
   work_dir: /var/lib/forgesync/git

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"scenegit.org/forgesync/internal/auth"
+	"scenegit.org/forgesync/internal/leader"
 	"scenegit.org/forgesync/internal/store"
 )
 
@@ -120,5 +121,57 @@ func TestReplicationSources(t *testing.T) {
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"enabled":false`) ||
 		!strings.Contains(rec.Body.String(), `"pairs":[]`) {
 		t.Fatalf("with replication off = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// The dashboard shows a card per controller, so a person can see both
+// without signing in to each: where it is, and which one is acting.
+func TestOverviewListsEveryController(t *testing.T) {
+	f, admin := sessionAs(t, auth.Viewer)
+	f.srv.ControllerName = "forgesync-b"
+	f.srv.ControllerBeat = 5 * time.Second
+	f.srv.Leader = &fakeLeader{leader.State{Leading: false, Name: "forgesync-a", URL: "http://a:8090"}}
+	now := time.Now()
+	f.db.controllers = []store.ControllerRecord{
+		{Name: "forgesync-a", URL: "http://a:8090", Address: "10.0.0.1", Version: "dev",
+			StartedAt: now.Add(-time.Hour), LastSeenAt: now.Add(-2 * time.Second)},
+		{Name: "forgesync-b", URL: "http://b:8091", Address: "10.0.0.2", Version: "dev",
+			StartedAt: now.Add(-time.Minute), LastSeenAt: now.Add(-time.Second)},
+		{Name: "forgesync-old", URL: "http://old:8090", Address: "10.0.0.9",
+			StartedAt: now.Add(-48 * time.Hour), LastSeenAt: now.Add(-time.Hour)},
+	}
+
+	rec := f.do(req{path: "/api/v1/overview", cookie: admin})
+	if rec.Code != 200 {
+		t.Fatalf("GET overview = %d %s", rec.Code, rec.Body)
+	}
+	var out struct {
+		Controllers []struct {
+			Name, Role, Address string
+			Self                bool
+		} `json:"controllers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Controllers) != 3 {
+		t.Fatalf("controllers = %+v", out.Controllers)
+	}
+	roles := map[string]string{}
+	for _, c := range out.Controllers {
+		roles[c.Name] = c.Role
+	}
+	// The one holding the lease leads; the other is standing by; one that
+	// stopped checking in isn't promised to be ready.
+	if roles["forgesync-a"] != "leader" || roles["forgesync-b"] != "standby" || roles["forgesync-old"] != "unknown" {
+		t.Errorf("roles = %v", roles)
+	}
+	for _, c := range out.Controllers {
+		if (c.Name == "forgesync-b") != c.Self {
+			t.Errorf("%s: self = %v", c.Name, c.Self)
+		}
+	}
+	if out.Controllers[0].Address != "10.0.0.1" {
+		t.Errorf("no address: %+v", out.Controllers[0])
 	}
 }

@@ -27,18 +27,25 @@ type auditEntry struct {
 }
 
 type fakeDB struct {
-	pingErr   error
-	mu        sync.Mutex
-	audit     []auditEntry
-	repos     []store.RepositoryRecord
-	scans     []store.NodeScan
-	conflicts []store.Conflict
-	syncs     []store.ReplicaSync
-	users     []store.UserRecord
-	archives  []store.Archive
-	issues    []store.IssueRecord
-	comments  []store.CommentRecord
-	pairs     []store.SourcePair
+	pingErr     error
+	mu          sync.Mutex
+	audit       []auditEntry
+	repos       []store.RepositoryRecord
+	scans       []store.NodeScan
+	conflicts   []store.Conflict
+	syncs       []store.ReplicaSync
+	users       []store.UserRecord
+	archives    []store.Archive
+	issues      []store.IssueRecord
+	comments    []store.CommentRecord
+	pairs       []store.SourcePair
+	controllers []store.ControllerRecord
+}
+
+func (f *fakeDB) Controllers(context.Context) ([]store.ControllerRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.controllers, nil
 }
 
 func (f *fakeDB) SourcePairs(context.Context) ([]store.SourcePair, error) {

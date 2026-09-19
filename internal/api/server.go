@@ -51,6 +51,7 @@ type DB interface {
 	ReplicaSyncs(ctx context.Context, repositoryID string) ([]store.ReplicaSync, error)
 	ReplicationCounts(ctx context.Context) (map[string]int, error)
 	SourcePairs(ctx context.Context) ([]store.SourcePair, error)
+	Controllers(ctx context.Context) ([]store.ControllerRecord, error)
 	History(ctx context.Context, f store.EventFilter) ([]store.Event, string, error)
 	HistoryEach(ctx context.Context, f store.EventFilter, max int, fn func(store.Event) error) error
 	HistoryActors(ctx context.Context) ([]string, error)
@@ -92,6 +93,11 @@ type Server struct {
 	Leader           Leadership
 	Inventory        Inventory
 	Replication      Replicator // nil when replication is off
+	// ControllerName is this controller's own name, so the dashboard can
+	// mark it among the others. ControllerBeat is how often each writes
+	// its heartbeat, which says when one has been quiet too long.
+	ControllerName string
+	ControllerBeat time.Duration
 	// Users creates accounts on the nodes for Administrators; nil when
 	// replication is off, since then ForgeSync has no node tokens.
 	Users UserProvisioner
@@ -273,6 +279,25 @@ type Overview struct {
 	// OpenConflicts is -1 when it couldn't be counted.
 	OpenConflicts int                `json:"open_conflicts"`
 	Replication   ReplicationSummary `json:"replication"`
+	// Controllers is every controller sharing this database, with the one
+	// that is acting marked. It's empty when the database can't be read.
+	Controllers []ControllerInfo `json:"controllers"`
+}
+
+// ControllerInfo is one ForgeSync controller, for the dashboard: where it
+// is, what it's doing, and when it was last heard from.
+type ControllerInfo struct {
+	Name    string `json:"name"`
+	URL     string `json:"url,omitempty"`
+	Address string `json:"address,omitempty"`
+	Version string `json:"version,omitempty"`
+	// Role is "leader" (doing the work), "standby" (ready to take over),
+	// or "unknown" when the controller hasn't been heard from lately.
+	Role string `json:"role"`
+	// Self marks the controller answering this request.
+	Self       bool      `json:"self"`
+	StartedAt  time.Time `json:"started_at"`
+	LastSeenAt time.Time `json:"last_seen_at"`
 }
 
 // LeaderInfo names the controller doing the work, for the other one's UI.
@@ -365,7 +390,48 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		o.Nodes[string(n.State)]++
 		o.Nodes["total"]++
 	}
+	o.Controllers = s.controllers(ctx, o.Leader)
 	writeJSON(w, http.StatusOK, o)
+}
+
+// controllers lists every controller sharing the database, saying which
+// one is acting. A controller that hasn't written its heartbeat for
+// several rounds is "unknown" rather than standby: it may be stopped, and
+// saying it's ready to take over would be a promise nobody can keep.
+func (s *Server) controllers(ctx context.Context, leading *LeaderInfo) []ControllerInfo {
+	recs, err := s.DB.Controllers(ctx)
+	if err != nil {
+		s.Log.Warn("listing controllers failed", "error", err)
+		return []ControllerInfo{}
+	}
+	out := make([]ControllerInfo, 0, len(recs))
+	for _, c := range recs {
+		info := ControllerInfo{Name: c.Name, URL: c.URL, Address: c.Address, Version: c.Version,
+			StartedAt: c.StartedAt, LastSeenAt: c.LastSeenAt, Role: "standby"}
+		switch {
+		case time.Since(c.LastSeenAt) > s.controllerStale():
+			info.Role = "unknown"
+		case leading != nil && leading.Name == c.Name:
+			info.Role = "leader"
+		case leading == nil:
+			// A single controller: it holds the lease on its own.
+			info.Role = "leader"
+		}
+		if s.ControllerName != "" && c.Name == s.ControllerName {
+			info.Self = true
+		}
+		out = append(out, info)
+	}
+	return out
+}
+
+// controllerStale is how long a controller can go unheard-of before its
+// role is no longer worth reporting: three heartbeats.
+func (s *Server) controllerStale() time.Duration {
+	if s.ControllerBeat > 0 {
+		return 3 * s.ControllerBeat
+	}
+	return 45 * time.Second
 }
 
 // events streams the node list as server-sent events after every health

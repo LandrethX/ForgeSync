@@ -1,0 +1,41 @@
+/* A plain background, in both colour schemes. Keycloak's default paints a
+   low-poly pattern over the whole page; this replaces it with one colour
+   and nothing else. */
+:root {
+  --sceneid-bg: #f4f4f5;
+  --sceneid-text: #1b1b1f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --sceneid-bg: #1b1b1f;
+    --sceneid-text: #f4f4f5;
+  }
+}
+
+html,
+body,
+body.login-pf,
+.login-pf body,
+.login-pf-page,
+.pf-v5-c-background-image,
+.pf-v5-c-login,
+.pf-v5-c-login__main {
+  background-image: none !important;
+}
+
+html,
+body,
+body.login-pf,
+.login-pf body,
+.login-pf-page {
+  background-color: var(--sceneid-bg) !important;
+}
+
+/* The heading above the card is the realm's display name; keep it legible
+   against a light background, which Keycloak's own theme doesn't expect. */
+#kc-header-wrapper,
+.login-pf-page .login-pf-brand,
+.pf-v5-c-login__header {
+  color: var(--sceneid-text) !important;
+}

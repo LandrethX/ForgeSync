@@ -702,6 +702,54 @@ td.details {
   margin-top: 0.25rem;
 }
 
+/* Cards: one per controller on the dashboard. */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.card-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.card-rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.9rem;
+  margin: 0 0 0.6rem;
+  font-size: 0.9rem;
+}
+
+.card-rows dt {
+  color: var(--muted);
+}
+
+.card-rows dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.mono {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
 /* A form laid out one field under another: adding a user. */
 .stack {
   display: grid;

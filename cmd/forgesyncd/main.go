@@ -76,8 +76,9 @@ func run(configPath string) error {
 	// One controller acts at a time. On its own it simply holds the lease
 	// from the start; with a second one, whichever holds it does the work
 	// and the other stands by, ready to take over when it runs out.
+	holder := leader.NewHolderID()
 	elector := leader.New(db, leader.Options{
-		Holder: leader.NewHolderID(), Name: cfg.Controller.Name, URL: cfg.Controller.URL,
+		Holder: holder, Name: cfg.Controller.Name, URL: cfg.Controller.URL,
 		TTL: cfg.Controller.Lease, Renew: cfg.Controller.Renew,
 	}, log)
 	log.Info("controller", "name", cfg.Controller.Name, "url", cfg.Controller.URL,
@@ -246,8 +247,16 @@ func run(configPath string) error {
 	monitorDone := make(chan struct{})
 	go func() {
 		var wg sync.WaitGroup
-		wg.Add(3)
+		wg.Add(4)
 		go func() { defer wg.Done(); elector.Run(ctx) }()
+		// Every controller says it's there, leader or not, so the UI can
+		// show them all and say which one is acting. On the same beat as
+		// the lease, so a controller that has stopped shows as stale at
+		// about the same time as its lease runs out.
+		go func() {
+			defer wg.Done()
+			recordController(ctx, db, holder, cfg, startedAt, log)
+		}()
 		// The health monitor runs on both controllers, so the standby's
 		// pages are live too; only the leader writes what it finds (see
 		// leaderRecorder).
@@ -310,6 +319,8 @@ func run(configPath string) error {
 			Inventory:           scanner,
 			Replication:         replicator,
 			Users:               userProvisioner(engine),
+			ControllerName:      cfg.Controller.Name,
+			ControllerBeat:      cfg.Controller.Renew,
 			ReplicationFeatures: replicationFeatures(cfg),
 			DB:                  db,
 			Log:                 log,
@@ -446,4 +457,34 @@ type userAdmin struct{ *replication.Engine }
 func (u userAdmin) CreateUser(ctx context.Context, login, subject, fullName, email, home string) ([]string, map[string]string, error) {
 	return u.Engine.CreateUser(ctx, replication.NewUser{
 		Login: login, Subject: subject, FullName: fullName, Email: email, Home: home})
+}
+
+// recordController writes this controller's heartbeat until ctx ends, and
+// says it has gone on the way out, so a planned stop doesn't leave a
+// controller looking merely late.
+func recordController(ctx context.Context, db *store.Store, holder string, cfg *config.Config, startedAt time.Time, log *slog.Logger) {
+	rec := store.ControllerRecord{Name: cfg.Controller.Name, Holder: holder, URL: cfg.Controller.URL,
+		Version: buildinfo.Version, StartedAt: startedAt.UTC()}
+	write := func() {
+		wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if err := db.RecordController(wctx, rec); err != nil && ctx.Err() == nil {
+			log.Warn("recording this controller failed", "error", err)
+		}
+	}
+	write()
+	beat := cfg.Controller.Renew
+	if beat <= 0 {
+		beat = cfg.Controller.Lease / 3
+	}
+	ticker := time.NewTicker(beat)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			write()
+		}
+	}
 }

@@ -351,6 +351,23 @@ export interface Overview {
     /** What replication covers here, besides branches and tags. */
     features?: string[];
   };
+  /** Every controller sharing this database, with the one that is acting. */
+  controllers?: Controller[];
+}
+
+/** One ForgeSync controller: where it is and what it's doing. */
+export interface Controller {
+  name: string;
+  url?: string;
+  /** Where the database sees it connect from. */
+  address?: string;
+  version?: string;
+  /** "leader" does the work, "standby" is ready to, "unknown" has been quiet. */
+  role: "leader" | "standby" | "unknown";
+  /** True for the controller answering this request. */
+  self: boolean;
+  started_at: string;
+  last_seen_at: string;
 }
 
 export type Role = "viewer" | "operator" | "administrator";

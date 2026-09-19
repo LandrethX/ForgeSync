@@ -66,6 +66,9 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${SCENEID_ADMIN_PASSWORD}
     volumes:
       - ./sceneid/realm-sceneid.json:/opt/keycloak/data/import/realm-sceneid.json:ro
+      # The realm's own login theme: Keycloak's, with the patterned
+      # background taken off (sceneid/theme/sceneid/login).
+      - ./sceneid/theme/sceneid:/opt/keycloak/themes/sceneid:ro
     ports:
       - "${PUBLIC_BIND:-127.0.0.1}:8080:8080"
     networks:

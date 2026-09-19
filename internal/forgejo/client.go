@@ -190,13 +190,17 @@ func (c *Client) CurrentUser(ctx context.Context) (User, error) {
 
 // Repository is a Forgejo repository as listed by /repos/search.
 type Repository struct {
-	ID            int64  `json:"id"`
-	FullName      string `json:"full_name"`
-	Owner         User   `json:"owner"`
-	Name          string `json:"name"`
-	Private       bool   `json:"private"`
-	Fork          bool   `json:"fork"`
-	Mirror        bool   `json:"mirror"`
+	ID       int64  `json:"id"`
+	FullName string `json:"full_name"`
+	Owner    User   `json:"owner"`
+	Name     string `json:"name"`
+	Private  bool   `json:"private"`
+	Fork     bool   `json:"fork"`
+	// Parent is what this was forked from, on this node.
+	Parent *Repository `json:"parent"`
+	Mirror bool        `json:"mirror"`
+	// OriginalURL is where a migrated or mirrored repository came from.
+	OriginalURL   string `json:"original_url"`
 	Archived      bool   `json:"archived"`
 	Empty         bool   `json:"empty"`
 	DefaultBranch string `json:"default_branch"`
@@ -1097,4 +1101,19 @@ func (c *Client) DeleteMilestone(ctx context.Context, owner, repo string, id int
 		return nil
 	}
 	return err
+}
+
+// ForkRepo forks owner/repo on this node into the account the client is
+// acting as (Sudo picks who), or into an organization. The fork keeps
+// Forgejo's own idea of where it came from, which is the point of making
+// it a fork rather than a plain copy.
+func (c *Client) ForkRepo(ctx context.Context, owner, repo, into, name string, intoOrg bool) (Repository, error) {
+	body := map[string]any{"name": name}
+	if intoOrg {
+		body["organization"] = into
+	}
+	var out Repository
+	err := c.do(ctx, http.MethodPost,
+		"/api/v1/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/forks", true, body, &out)
+	return out, err
 }

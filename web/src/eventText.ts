@@ -72,6 +72,8 @@ export function describe(e: HistoryEvent): string {
     }
     case "repo.created_on_node":
       return `Created on ${str(d.node)}, copied from ${str(d.from || d.primary)}`;
+    case "repo.forked_on_node":
+      return `Forked from ${str(d.parent)} on ${str(d.node)}, as ${str(d.as)}`;
     case "user.created_on_node":
       return `SceneID user created on ${str(d.node)} (as on ${str(d.from)}), linked on first sign-in`;
     case "repo.collaborator_granted":

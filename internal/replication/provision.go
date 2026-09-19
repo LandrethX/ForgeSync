@@ -2,6 +2,7 @@ package replication
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -17,6 +18,7 @@ type NodeAPI interface {
 	UsersByLoginName(ctx context.Context, sourceID int64, loginName string) ([]forgejo.User, error)
 	AdminCreateUser(ctx context.Context, opt forgejo.CreateUserOption) (forgejo.User, error)
 	AdminCreateRepo(ctx context.Context, owner string, opt forgejo.CreateRepoOption) (forgejo.Repository, error)
+	ForkRepo(ctx context.Context, owner, repo, into, name string, intoOrg bool) (forgejo.Repository, error)
 	Packages(ctx context.Context, owner string, page, limit int) ([]forgejo.Package, error)
 	PackageFiles(ctx context.Context, owner, typ, name, version string) ([]forgejo.PackageFile, error)
 	DeletePackage(ctx context.Context, owner, typ, name, version string) error
@@ -96,11 +98,13 @@ func (e *Engine) createOnReplica(ctx context.Context, fullName string, from, to 
 	if !found {
 		return blocked("the repository doesn't exist on " + from.Name)
 	}
-	switch {
-	case src.Mirror:
-		return blocked("it's a pull mirror on " + from.Name + "; ForgeSync doesn't create mirrors on other nodes")
-	case src.Fork:
-		return blocked("it's a fork on " + from.Name + "; ForgeSync doesn't create forks on other nodes yet")
+	if src.Mirror {
+		// A pull mirror is already a copy of somewhere else, and Forgejo
+		// makes it read-only, so there's nothing for ForgeSync to push
+		// into. Making a second mirror would need whatever credentials
+		// the first one uses, which ForgeSync doesn't have and shouldn't.
+		return blocked("it's a pull mirror on " + from.Name + ", which keeps itself up to date from " +
+			mirrorSource(src) + "; set the same mirror up on " + to.Name + " if it should be there too")
 	}
 	owner, name = src.Owner.Login, src.Name // the source node's spelling
 
@@ -120,6 +124,22 @@ func (e *Engine) createOnReplica(ctx context.Context, fullName string, from, to 
 		return err
 	}
 
+	// A fork is made as a fork where it can be, so the replica shows the
+	// same relationship the primary does -- and pull requests between the
+	// two repositories keep working there. The parent has to be on the
+	// node already; it usually is, being replicated itself, and if it
+	// isn't this waits for the run that puts it there.
+	if src.Fork && src.Parent != nil {
+		switch err := e.forkOnReplica(ctx, src, owner, name, isOrg, to); {
+		case err == nil:
+			return nil
+		case errors.As(err, new(blocked)):
+			return err
+		default:
+			e.log.Warn("couldn't fork on the replica; creating a plain copy instead",
+				"repository", fullName, "node", to.Name, "error", err)
+		}
+	}
 	_, err = to.API.AdminCreateRepo(ctx, owner, forgejo.CreateRepoOption{
 		Name: name, Description: src.Description, Private: src.Private, Template: src.Template,
 		DefaultBranch: src.DefaultBranch, ObjectFormatName: src.ObjectFormatName,
@@ -224,4 +244,51 @@ func (e *Engine) EnsureUser(ctx context.Context, login, from, to string) error {
 		return fmt.Errorf("no API for %s or %s", from, to)
 	}
 	return e.ensureUser(ctx, login, f, t)
+}
+
+// forkOnReplica makes the copy a fork of the same parent, as the owner
+// themselves (Sudo), so Forgejo records who forked it.
+func (e *Engine) forkOnReplica(ctx context.Context, src forgejo.Repository, owner, name string, isOrg bool, to Node) error {
+	parent := src.Parent
+	if _, found, err := to.API.GetRepo(ctx, parent.Owner.Login, parent.Name); err != nil {
+		return err
+	} else if !found {
+		return blocked(fmt.Sprintf("it's a fork of %s, which isn't on %s yet; it's created once that is",
+			parent.FullName, to.Name))
+	}
+	// Forking is done by somebody: the owner for a person's fork, and a
+	// member of the organization for one of its own.
+	as := to.API
+	actor := owner
+	if isOrg {
+		owners, err := to.API.OrgOwners(ctx, owner)
+		if err != nil || len(owners) == 0 {
+			return blocked(fmt.Sprintf("the organization %s has no owner on %s to fork as", owner, to.Name))
+		}
+		actor = owners[0]
+	}
+	if to.As != nil {
+		as = to.As(actor)
+	}
+	_, err := as.ForkRepo(ctx, parent.Owner.Login, parent.Name, owner, name, isOrg)
+	if forgejo.IsConflict(err) {
+		return nil // forked in the meantime
+	}
+	if err != nil {
+		return err
+	}
+	e.log.Info("forked repository on node", "repository", owner+"/"+name, "parent", parent.FullName, "node", to.Name)
+	if err := e.store.Audit(ctx, "forgesync", "repo.forked_on_node", owner+"/"+name,
+		map[string]any{"node": to.Name, "parent": parent.FullName, "as": actor}); err != nil {
+		e.log.Error("writing audit log failed", "error", err)
+	}
+	return nil
+}
+
+// mirrorSource names where a pull mirror pulls from, when Forgejo says.
+func mirrorSource(r forgejo.Repository) string {
+	if r.OriginalURL != "" {
+		return r.OriginalURL
+	}
+	return "its upstream"
 }

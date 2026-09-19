@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -70,6 +71,28 @@ type fakeOrg struct {
 
 // meta is what this node's repository settings and topics are.
 // releases and files are what this node has published, by repository.
+// ForkRepo makes a fork of a repository this node has, recording what it
+// came from, as Forgejo does.
+func (f *fakeAPI) ForkRepo(_ context.Context, owner, repo, into, name string, intoOrg bool) (forgejo.Repository, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	parent, ok := f.repos[owner+"/"+repo]
+	if !ok {
+		return forgejo.Repository{}, &forgejo.APIError{StatusCode: http.StatusNotFound, Message: "no such repository"}
+	}
+	if _, taken := f.repos[into+"/"+name]; taken {
+		return forgejo.Repository{}, &forgejo.APIError{StatusCode: http.StatusConflict, Message: "already exists"}
+	}
+	fork := forgejo.Repository{FullName: into + "/" + name, Name: name, Owner: forgejo.User{Login: into},
+		Fork: true, Parent: &parent, DefaultBranch: parent.DefaultBranch}
+	f.repos[fork.FullName] = fork
+	f.calls = append(f.calls, "fork "+parent.FullName+" as "+f.as+" into "+fork.FullName)
+	if intoOrg {
+		f.calls[len(f.calls)-1] += " (org)"
+	}
+	return fork, nil
+}
+
 // Packages, PackageFiles and DeletePackage read the same registry the
 // node serves over HTTP, as Forgejo's API and registry are one node.
 func (f *fakeAPI) Packages(_ context.Context, owner string, page, limit int) ([]forgejo.Package, error) {
@@ -952,4 +975,84 @@ func TestSeedPrimary(t *testing.T) {
 			t.Errorf("state = %+v", s)
 		}
 	})
+}
+
+// A fork is created as a fork on the replica, so the copy shows the same
+// relationship the primary does and pull requests between the two keep
+// working there. It's made as the owner, not as ForgeSync.
+func TestAForkIsCreatedAsAFork(t *testing.T) {
+	se, dk := newFakeAPI(nil), newFakeAPI(nil)
+	parent := forgejo.Repository{FullName: "demoscene/intro", Name: "intro",
+		Owner: forgejo.User{Login: "demoscene"}, DefaultBranch: "main"}
+	fork := forgejo.Repository{FullName: "alice/intro", Name: "intro", Owner: forgejo.User{Login: "alice"},
+		Fork: true, Parent: &parent, DefaultBranch: "main"}
+	se.repos["demoscene/intro"], se.repos["alice/intro"] = parent, fork
+	dk.repos["demoscene/intro"] = parent // the parent is already replicated
+	for _, api := range []*fakeAPI{se, dk} {
+		api.users["alice"] = forgejo.User{Login: "alice", SourceID: 1, LoginName: "alice-sub"}
+	}
+	e := NewEngine([]Node{
+		{Name: "se", API: se, SceneIDSourceID: 1},
+		// Acting as someone is the same node, remembering who asked.
+		{Name: "dk", API: dk, SceneIDSourceID: 1, As: func(login string) NodeAPI { dk.as = login; return dk }},
+	}, testGit(t), newMemStore(store.RepositoryRecord{ID: "11111111-1111-1111-1111-111111111111", FullName: "alice/intro"}),
+		fixedHealth{"se": health.Healthy, "dk": health.Healthy}, Options{CreateMissing: true}, slog.New(slog.DiscardHandler))
+
+	if err := e.createOnReplica(context.Background(), "alice/intro", e.nodes["se"], e.nodes["dk"]); err != nil {
+		t.Fatalf("creating the fork: %v", err)
+	}
+	made, ok := dk.repos["alice/intro"]
+	if !ok || !made.Fork || made.Parent == nil || made.Parent.FullName != "demoscene/intro" {
+		t.Fatalf("dk has %+v", made)
+	}
+	if got := strings.Join(dk.calls, ","); !strings.Contains(got, "fork demoscene/intro as alice") {
+		t.Errorf("dk was asked: %q", got)
+	}
+}
+
+// Without the parent there's nothing to fork from, so the copy waits for
+// the run that puts the parent there rather than being made as a plain
+// repository that only looks the same.
+func TestAForkWaitsForItsParent(t *testing.T) {
+	se, dk := newFakeAPI(nil), newFakeAPI(nil)
+	parent := forgejo.Repository{FullName: "demoscene/intro", Name: "intro", Owner: forgejo.User{Login: "demoscene"}}
+	se.repos["demoscene/intro"] = parent
+	se.repos["alice/intro"] = forgejo.Repository{FullName: "alice/intro", Name: "intro",
+		Owner: forgejo.User{Login: "alice"}, Fork: true, Parent: &parent}
+	for _, api := range []*fakeAPI{se, dk} {
+		api.users["alice"] = forgejo.User{Login: "alice", SourceID: 1, LoginName: "alice-sub"}
+	}
+	e := NewEngine([]Node{{Name: "se", API: se, SceneIDSourceID: 1}, {Name: "dk", API: dk, SceneIDSourceID: 1}},
+		testGit(t), newMemStore(store.RepositoryRecord{ID: "11111111-1111-1111-1111-111111111111", FullName: "alice/intro"}),
+		fixedHealth{"se": health.Healthy, "dk": health.Healthy}, Options{CreateMissing: true}, slog.New(slog.DiscardHandler))
+
+	err := e.createOnReplica(context.Background(), "alice/intro", e.nodes["se"], e.nodes["dk"])
+	var why blocked
+	if !errors.As(err, &why) || !strings.Contains(why.Error(), "demoscene/intro") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, made := dk.repos["alice/intro"]; made {
+		t.Error("something was created anyway")
+	}
+}
+
+// A pull mirror keeps itself up to date from somewhere else and Forgejo
+// makes it read-only, so ForgeSync says where it comes from instead of
+// making a second one with credentials it doesn't have.
+func TestAPullMirrorIsLeftToItsOwner(t *testing.T) {
+	se, dk := newFakeAPI(nil), newFakeAPI(nil)
+	se.repos["alice/mirror"] = forgejo.Repository{FullName: "alice/mirror", Name: "mirror",
+		Owner: forgejo.User{Login: "alice"}, Mirror: true, OriginalURL: "https://example.invalid/alice/mirror.git"}
+	e := NewEngine([]Node{{Name: "se", API: se}, {Name: "dk", API: dk}}, testGit(t),
+		newMemStore(store.RepositoryRecord{ID: "11111111-1111-1111-1111-111111111111", FullName: "alice/mirror"}),
+		fixedHealth{"se": health.Healthy, "dk": health.Healthy}, Options{CreateMissing: true}, slog.New(slog.DiscardHandler))
+
+	err := e.createOnReplica(context.Background(), "alice/mirror", e.nodes["se"], e.nodes["dk"])
+	var why blocked
+	if !errors.As(err, &why) || !strings.Contains(why.Error(), "example.invalid") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(dk.calls) != 0 {
+		t.Errorf("dk was written to: %v", dk.calls)
+	}
 }

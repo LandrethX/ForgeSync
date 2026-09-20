@@ -1,5 +1,4 @@
 .git
-.claude
 **/node_modules
 bin
 deploy

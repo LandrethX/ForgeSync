@@ -30,6 +30,7 @@ type Recorder interface {
 	RecordRepoObservation(ctx context.Context, node string, at time.Time, fullName string, found bool, r store.ScannedRepo) error
 }
 
+// Target is one node to scan, and the client to scan it with.
 type Target struct {
 	Name   string
 	Client Lister
@@ -38,6 +39,8 @@ type Target struct {
 	SceneIDSourceID int64
 }
 
+// Options are how often a full scan runs and how many default branches
+// are read from one node at a time.
 type Options struct {
 	Interval          time.Duration
 	BranchConcurrency int           // parallel branch lookups per node
@@ -66,6 +69,8 @@ type Scanner struct {
 	running atomic.Bool
 }
 
+// NewScanner lists the repositories on each target and records what it
+// found in rec.
 func NewScanner(targets []Target, opts Options, rec Recorder, log *slog.Logger) *Scanner {
 	if opts.BranchConcurrency < 1 {
 		opts.BranchConcurrency = 4

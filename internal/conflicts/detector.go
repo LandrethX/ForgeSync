@@ -47,6 +47,8 @@ type Store interface {
 	Audit(ctx context.Context, actor, action, target string, details map[string]any) error
 }
 
+// Detector compares what the nodes hold and records the differences a
+// person has to settle. It never changes anything on a node.
 type Detector struct {
 	nodes   []string
 	clients map[string]Comparer
@@ -60,6 +62,8 @@ type Detector struct {
 	ReplicationOwnsPrimaries bool
 }
 
+// NewDetector checks the named nodes through their Forgejo clients and
+// records what it finds in st.
 func NewDetector(nodes []string, clients map[string]Comparer, st Store, log *slog.Logger) *Detector {
 	return &Detector{nodes: nodes, clients: clients, store: st, log: log, now: time.Now}
 }

@@ -1,0 +1,8 @@
+ForgeSync
+Copyright 2026 Landreth
+
+This product includes software developed as an external control plane for
+Forgejo. Forgejo is separate software, licensed under the GNU General Public
+License version 3 or later from v9 onward, and no part of it is included here:
+ForgeSync speaks to a Forgejo server over its REST API, its webhooks and the
+Git and LFS protocols.

@@ -21,7 +21,7 @@ allowed to do.
 
 ### Actions secrets
 **Write-only by design.** Forgejo gives back a secret's name and when it was set, never its
-value — which is the correct behaviour for a secret store. No client can copy one, and
+value, which is the correct behaviour for a secret store. No client can copy one, and
 neither can ForgeSync.
 
 *What ForgeSync does instead:* it notices a node that hasn't got a secret the others have
@@ -52,8 +52,8 @@ node. Copying either would spread credentials ForgeSync was never given.
 ### Pull mirrors
 A pull mirror already keeps itself up to date from somewhere else, and Forgejo makes it
 read-only, so there is nothing for ForgeSync to push into. Making a second mirror on another
-node would need whatever credentials the first one uses — which ForgeSync doesn't hold and
-shouldn't ask for — and would double the load on whoever is being mirrored.
+node would need whatever credentials the first one uses, which ForgeSync doesn't hold and
+shouldn't ask for, and would double the load on whoever is being mirrored.
 
 *What ForgeSync does instead:* the replica stays `missing` with the upstream named in the
 reason, so a person can set the same mirror up if that's what they want.
@@ -89,13 +89,13 @@ never force-push over history on its own judgement.
 ## Not yet: could be done, hasn't been
 
 ### PostgreSQL is a single point of failure
-The controllers fail over; the database doesn't. ForgeSync behaves well without it — a
+The controllers fail over; the database doesn't. ForgeSync behaves well without it: a
 controller that can't renew its lease stops acting *before* the lease expires, the pages
-stay up, and `/metrics` reports `forgesync_database_up 0` — but nothing is synced while it
+stay up, and `/metrics` reports `forgesync_database_up 0`. But nothing is synced while it
 is down.
 
-*What to do about it:* put something under it — a managed PostgreSQL with failover, or
-streaming replication with a promotion tool — and point both controllers at whatever fronts
+*What to do about it:* put something under it, a managed PostgreSQL with failover or
+streaming replication with a promotion tool, and point both controllers at whatever fronts
 it. They reconnect by themselves; there is nothing to restart afterwards.
 [deploy/prod/README.md](../deploy/prod/README.md) has the options.
 
@@ -104,7 +104,7 @@ Measured at 203 repositories on each of five nodes: a push reaches all four repl
 about five seconds (that path replicates one repository, told by a webhook), and a full
 round takes about three minutes. The round grows with repositories times nodes, so at a few
 thousand it would need an interval longer than the default and the per-item passes (issues,
-reactions, attachments — one API call per item per node) would want looking at. Nobody has
+reactions, attachments, at one API call per item per node) would want looking at. Nobody has
 run it at that size.
 
 *What to do about it:* keep `inventory.interval` comfortably above what a round takes (a
@@ -123,5 +123,5 @@ anywhere real, which is the one thing a 1.0 should be able to claim.
 ForgeSync never pretends. Anything it can't carry, or can't decide, comes back as a conflict
 naming the repository, the nodes and the reason, and stays until it's settled or dismissed.
 A dismissed conflict is kept with who dismissed it and why, stops being counted, and comes
-back if what it says changes — so the number on the dashboard is one somebody can actually
+back if what it says changes, so the number on the dashboard is one somebody can actually
 bring to zero.

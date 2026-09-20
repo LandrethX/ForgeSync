@@ -1,6 +1,6 @@
 # Running ForgeSync on Debian
 
-ForgeSync runs as a plain systemd service on Debian — no container needed. This is the
+ForgeSync runs as a plain systemd service on Debian, with no container needed. This is the
 path that was actually walked on a Debian 13 LXC while writing it: every command below was
 run, and what it printed is what's quoted.
 
@@ -53,7 +53,7 @@ sudo -u postgres psql -c "ALTER ROLE forgesync CREATEDB"
 ForgeSync itself never creates a database, so leave this out if you'd rather verify dumps
 with a role that already can.
 
-Check which port the cluster took — Debian gives the next free one, and something else may
+Check which port the cluster took. Debian gives the next free one, and something else may
 already hold 5432:
 
 ```sh
@@ -124,7 +124,7 @@ curl -s localhost:8090/healthz     # {"status":"ok"}
 The unit runs as the `forgesync` user with `ProtectSystem=strict`, no capabilities and a
 system-call filter; it can write to `/var/lib/forgesync` and nothing else.
 `systemctl reload` sends SIGHUP, which re-reads the TLS certificate without dropping
-connections — and does nothing harmful when there is no certificate to re-read.
+connections, and does nothing harmful when there is no certificate to re-read.
 
 ## 7. Signing in
 
@@ -154,8 +154,8 @@ forgesync conflict list
 
 ## 8. TLS
 
-Either something in front terminates it — leave the `tls_*` settings out and let the proxy
-talk HTTP to `listen` — or ForgeSync does it itself:
+Either something in front terminates it, in which case you leave the `tls_*` settings out
+and let the proxy talk HTTP to `listen`, or ForgeSync does it itself:
 
 ```yaml
 http:
@@ -165,6 +165,24 @@ http:
   tls_key_file: /etc/forgesync/tls/privkey.pem
 ```
 
+With a proxy in front, two things need saying. Name the proxy in `http.trusted_proxies`,
+or every request looks as though it came from it: the history records the proxy for every
+sign-in, and the sign-in limiter counts everyone's failures together, so ten wrong
+passwords lock everybody out for five minutes.
+
+```yaml
+http:
+  trusted_proxies:
+    - 127.0.0.1               # the proxy on this host
+    - 10.0.0.0/8              # or a range that holds only proxies
+```
+
+Name only proxies. What the setting decides is whose claim about the client's address is
+believed, so a range users can reach from would let anyone write their own address into
+the history. The second thing is `Strict-Transport-Security`: ForgeSync sends it on
+requests that arrive over TLS, which behind a proxy means the proxy has to send it, since
+what reaches ForgeSync is plain HTTP.
+
 Without `tls_listen`, the certificate takes `listen` over. The pair is checked at startup
 (both files, and they must make a keypair) and re-read on `systemctl reload`, so a renewal
 needs no restart; a pair that won't load leaves the one in use rather than taking the
@@ -173,7 +191,7 @@ forgesyncd`.
 
 ## 9. The Forgejo nodes
 
-Each node needs a site-admin account for ForgeSync — `forgesync` — with an API token, and
+Each node needs a site-admin account for ForgeSync, called `forgesync`, with an API token, and
 the controllers' hosts in `[webhook] ALLOWED_HOST_LIST` so the webhooks can reach whichever
 is leading. ForgeSync installs one system webhook per node itself and keeps it right.
 
@@ -223,7 +241,7 @@ repositories, ForgeSync's accounts and the audit log.
 ./backup.sh /var/backups/forgesync --verify   # weekly: restores it into a scratch database
 ```
 
-Not backed up, on purpose: the git cache under `replication.work_dir` (it is a cache —
+Not backed up, on purpose: the git cache under `replication.work_dir` (it is a cache:
 delete it and the next run refetches, and don't share it between controllers), the Forgejo
 nodes (whoever runs them backs those up), and the secrets (they belong wherever your
 secrets live).
@@ -247,27 +265,27 @@ after, accounts still signing in, no errors.
 
 Nothing on the nodes is damaged, and ForgeSync rebuilds most of itself from them: it
 rediscovers every repository, assigns primaries by the rules, and replication carries on.
-Tried too — from an empty database the test environment came back with all replicas in sync
+Tried too: from an empty database the test environment came back with all replicas in sync
 and nothing overwritten.
 
 What is gone is everything nobody can infer from the nodes: **every choice a person made**
-(a primary set by hand goes back to the rule — worth writing down somewhere outside the
-database — and a user's chosen home site with it), the merge bases (so ForgeSync adopts
+(a primary set by hand goes back to the rule, which is worth writing down somewhere outside
+the database, and a user's chosen home site with it), the merge bases (so ForgeSync adopts
 what it finds, and "deleted everywhere" can become "here on one node, so copy it back"),
 hand-offs in flight, the conflict history, the archived copies' deadlines, ForgeSync's
 accounts and the audit log.
 
 ## 12. The database is the single point of failure
 
-The controllers fail over; PostgreSQL doesn't. ForgeSync behaves well when it's gone — a
+The controllers fail over; PostgreSQL doesn't. ForgeSync behaves well when it's gone: a
 controller that can't renew its lease stops acting before the lease expires, so nothing acts
-on stale information — but nothing is synced while it's down. ForgeSync doesn't manage this;
+on stale information. But nothing is synced while it's down, and ForgeSync doesn't manage this;
 use what your operations already do:
 
 - a managed PostgreSQL with failover (simplest, and someone else's pager);
 - streaming replication with a promotion tool (Patroni, repmgr), the controllers pointed at
   whatever fronts it;
-- or one server and a nightly dump, if an outage until someone restores it is acceptable —
+- or one server and a nightly dump, if an outage until someone restores it is acceptable:
   replication stops, nothing breaks, nobody loses work on the nodes.
 
 ## 13. Upgrades
@@ -275,4 +293,4 @@ use what your operations already do:
 Migrations run at startup under an advisory lock. Roll one controller at a time: stop it
 (which gives the lease up, so the other takes over in about one renewal), put the new binary
 in place, start it, watch `forgesync_leader` and the log, then do the other. Downgrades
-aren't supported — a migration that has run has run — so keep the dump from before.
+aren't supported, because a migration that has run has run, so keep the dump from before.

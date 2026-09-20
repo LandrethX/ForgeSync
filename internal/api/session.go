@@ -35,6 +35,8 @@ type Sessions struct {
 	log *slog.Logger
 }
 
+// NewSessions keeps sessions in db: ttl is how long one lasts whatever
+// happens, idle how long it survives without a request.
 func NewSessions(ttl, idle time.Duration, db SessionStore, log *slog.Logger) *Sessions {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -140,6 +142,8 @@ func (l *loginLimiter) Blocked(addr string) (bool, time.Duration) {
 	return w.failures >= l.Max, left
 }
 
+// Fail counts one failed sign-in against addr, and forgets windows that
+// have run out.
 func (l *loginLimiter) Fail(addr string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -157,6 +161,7 @@ func (l *loginLimiter) Fail(addr string) {
 	w.failures++
 }
 
+// Reset forgets addr's failures, which a successful sign-in does.
 func (l *loginLimiter) Reset(addr string) {
 	l.mu.Lock()
 	delete(l.m, addr)

@@ -135,6 +135,8 @@ type NodeScan struct {
 	LastSuccessAt *time.Time `json:"last_success_at,omitempty"`
 }
 
+// NodeScans is the last scan of each node: when it ran, whether it
+// worked, and how many repositories it found.
 func (s *Store) NodeScans(ctx context.Context) ([]NodeScan, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT node, started_at, finished_at, ok, error, repositories, last_success_at

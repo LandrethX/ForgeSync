@@ -31,6 +31,8 @@ type Target struct {
 	Client      Checker
 }
 
+// Options are how often the nodes are contacted, how long each contact
+// may take, and how many failures in a row make a node unreachable.
 type Options struct {
 	Interval         time.Duration
 	Timeout          time.Duration
@@ -52,6 +54,7 @@ type Monitor struct {
 	subs   map[chan struct{}]struct{}
 }
 
+// NewMonitor watches targets and reports every change to rec.
 func NewMonitor(targets []Target, opts Options, rec Recorder, log *slog.Logger) *Monitor {
 	m := &Monitor{
 		targets: targets,

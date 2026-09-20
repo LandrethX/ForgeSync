@@ -11,6 +11,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -24,6 +25,9 @@ import (
 // EnvDatabaseURL overrides database.url / database.url_file when set.
 const EnvDatabaseURL = "FORGESYNC_DATABASE_URL"
 
+// Config is the whole of the controller's configuration file. Unknown
+// keys are an error, so a mistyped setting is reported rather than
+// silently doing nothing.
 type Config struct {
 	Controller  Controller  `yaml:"controller"`
 	Log         Log         `yaml:"log"`
@@ -200,11 +204,14 @@ type Inventory struct {
 
 // RoleNames lists the SceneID role/group values that grant each ForgeSync role.
 
+// Log is how the controller writes its log.
 type Log struct {
 	Level  string `yaml:"level"`  // debug, info, warn, error
 	Format string `yaml:"format"` // text, json
 }
 
+// HTTP is the admin API and the web UI: where they listen, how they are
+// authenticated, and whether this controller serves TLS itself.
 type HTTP struct {
 	Listen string `yaml:"listen"`
 	// AdminTokenFile holds the bearer token for /api/v1. Without it the
@@ -227,6 +234,15 @@ type HTTP struct {
 	// directly over HTTPS on the other. Without it, a configured
 	// certificate makes Listen itself HTTPS.
 	TLSListen string `yaml:"tls_listen"`
+	// TrustedProxies are the addresses ForgeSync will believe an
+	// X-Forwarded-For from, as IPs or CIDRs. With a reverse proxy in
+	// front and this left empty, every request appears to come from the
+	// proxy: the history then records the proxy's address for every
+	// sign-in, and the sign-in limiter counts everyone's failures
+	// together, so ten wrong passwords lock out the whole installation.
+	// Name only the proxies, never a range users can reach from: what
+	// this decides is whose claim about the client's address is believed.
+	TrustedProxies []string `yaml:"trusted_proxies"`
 }
 
 // TLS reports that the controller should serve HTTPS itself.
@@ -241,6 +257,30 @@ func (h HTTP) PlainListen() string {
 	return h.Listen
 }
 
+// ProxyPrefixes parses TrustedProxies. A bare address is taken as itself
+// (a /32 or /128), which is what naming one proxy means.
+func (h HTTP) ProxyPrefixes() ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(h.TrustedProxies))
+	for _, s := range h.TrustedProxies {
+		s = strings.TrimSpace(s)
+		if strings.Contains(s, "/") {
+			p, err := netip.ParsePrefix(s)
+			if err != nil {
+				return nil, fmt.Errorf("http.trusted_proxies %q: %w", s, err)
+			}
+			out = append(out, p.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(s)
+		if err != nil {
+			return nil, fmt.Errorf("http.trusted_proxies %q: want an IP address or a CIDR", s)
+		}
+		addr = addr.Unmap()
+		out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	return out, nil
+}
+
 // HTTPSListen is the address served over HTTPS, if any.
 func (h HTTP) HTTPSListen() string {
 	switch {
@@ -252,11 +292,14 @@ func (h HTTP) HTTPSListen() string {
 	return h.Listen
 }
 
+// Database is ForgeSync's own PostgreSQL, which both controllers share.
 type Database struct {
 	URL     string `yaml:"url"`
 	URLFile string `yaml:"url_file"`
 }
 
+// Health is how often each node is contacted and how many failures in a
+// row make it unreachable rather than merely suspect.
 type Health struct {
 	Interval time.Duration `yaml:"interval"`
 	Timeout  time.Duration `yaml:"timeout"`
@@ -265,6 +308,7 @@ type Health struct {
 	FailureThreshold int `yaml:"failure_threshold"`
 }
 
+// Node is one Forgejo server ForgeSync keeps in sync with the others.
 type Node struct {
 	Name      string `yaml:"name"`
 	URL       string `yaml:"url"`
@@ -476,6 +520,9 @@ func (c *Config) validate() error {
 		errs = append(errs, fmt.Errorf("log.format %q: want text or json", c.Log.Format))
 	}
 	errs = append(errs, c.HTTP.validateTLS()...)
+	if _, err := c.HTTP.ProxyPrefixes(); err != nil {
+		errs = append(errs, err)
+	}
 	if c.Database.URL == "" {
 		errs = append(errs, fmt.Errorf("database: set url, url_file or %s", EnvDatabaseURL))
 	}

@@ -306,6 +306,16 @@ func run(configPath string) error {
 	if engine != nil {
 		replicator = engine
 	}
+	// The config was validated at load, so these parse; the error is kept
+	// rather than dropped because a proxy list that silently came out empty
+	// would record every sign-in as coming from the proxy.
+	proxies, err := cfg.HTTP.ProxyPrefixes()
+	if err != nil {
+		return err
+	}
+	if len(proxies) > 0 {
+		log.Info("trusting X-Forwarded-For from configured proxies", "proxies", cfg.HTTP.TrustedProxies)
+	}
 	srv := &http.Server{
 		Addr: cfg.HTTP.Listen,
 		Handler: (&api.Server{
@@ -323,6 +333,7 @@ func run(configPath string) error {
 			Log:                 log,
 			StartedAt:           startedAt,
 			SecureCookies:       *cfg.HTTP.SecureCookies,
+			TrustedProxies:      proxies,
 			Frontend:            webui.Handler(),
 			Webhooks:            hooks,
 			WebhookStatus:       statusOrNil(hookStatus),
@@ -422,6 +433,8 @@ type leaderRecorder struct {
 	leading func() bool
 }
 
+// RecordNodeStatus records the transition only while this controller is
+// the one acting, so a standby watching the same nodes writes nothing.
 func (l leaderRecorder) RecordNodeStatus(ctx context.Context, s health.Status, prev health.State) error {
 	if !l.leading() {
 		return nil
@@ -437,6 +450,8 @@ type leaderDispatcher struct {
 	log     *slog.Logger
 }
 
+// Changed replicates what a node reported, unless this controller is on
+// standby, in which case the leader has had the same delivery.
 func (d leaderDispatcher) Changed(ctx context.Context, c webhook.Change) {
 	if !d.leading() {
 		d.log.Debug("webhook ignored: this controller is on standby", "repository", c.Repository, "node", c.Node)
@@ -499,6 +514,8 @@ func userProvisioner(engine *replication.Engine) api.UserProvisioner {
 // package doesn't depend on the replication package's options.
 type userAdmin struct{ *replication.Engine }
 
+// CreateUser makes a SceneID account on the nodes, taking the API's
+// arguments rather than the replication package's options struct.
 func (u userAdmin) CreateUser(ctx context.Context, login, subject, fullName, email, home string) ([]string, map[string]string, error) {
 	return u.Engine.CreateUser(ctx, replication.NewUser{
 		Login: login, Subject: subject, FullName: fullName, Email: email, Home: home})

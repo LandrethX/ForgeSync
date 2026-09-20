@@ -331,6 +331,7 @@ type httpError struct {
 	Code                  int
 }
 
+// Error is what the CLI prints when the controller refuses a request.
 func (e *httpError) Error() string {
 	return strings.TrimSpace(fmt.Sprintf("%s: %s %s", e.Path, e.Status, e.Message))
 }

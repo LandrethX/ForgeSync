@@ -65,6 +65,7 @@ type APIError struct {
 	Message    string
 }
 
+// Error is the status and what Forgejo said about it.
 func (e *APIError) Error() string {
 	msg := e.Message
 	if msg == "" {

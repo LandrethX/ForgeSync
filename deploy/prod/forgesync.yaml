@@ -42,6 +42,17 @@ http:
   tls_cert_file: /etc/forgesync/tls/fullchain.pem
   tls_key_file: /etc/forgesync/tls/privkey.pem
   # systemctl reload forgesyncd re-reads the certificate in place.
+  #
+  # With a reverse proxy in front, name it here. Without this every
+  # request looks as though it came from the proxy: the history records
+  # the proxy's address for every sign-in, and the sign-in limiter counts
+  # everyone's failures together, so ten wrong passwords from anyone lock
+  # out the whole installation for five minutes. Name only the proxies,
+  # as addresses or CIDRs; what this decides is whose claim about the
+  # client's address is believed.
+  # trusted_proxies:
+  #   - 127.0.0.1
+  #   - 10.0.0.0/8
 
 log:
   level: info
@@ -55,7 +66,7 @@ health:
 inventory:
   # The safety net, not the fast path: webhooks report changes within
   # seconds. Keep this comfortably longer than a full round takes (see
-  # "What it costs at scale" in CLAUDE.md; a round logs its own
+  # docs/PERFORMANCE.md has the measurements; a round logs its own
   # duration), because a round that outlasts the interval just runs
   # continuously.
   interval: 30m

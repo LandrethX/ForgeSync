@@ -75,6 +75,8 @@ type NodeAPI interface {
 // yet. It's shown to people; it isn't an error in ForgeSync.
 type blocked string
 
+// Error says why a replica could not be created, in words meant for the
+// person reading the conflict.
 func (b blocked) Error() string { return string(b) }
 
 // createOnReplica creates the repository on node to, where it's missing,

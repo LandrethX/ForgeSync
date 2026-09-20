@@ -63,6 +63,8 @@ type Tracker struct {
 	order []string
 }
 
+// NewTracker counts deliveries and rejections per node, for the
+// webhook page and the metrics.
 func NewTracker(nodes []string) *Tracker {
 	t := &Tracker{nodes: map[string]*Status{}, order: nodes}
 	for _, n := range nodes {

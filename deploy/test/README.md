@@ -44,7 +44,7 @@ echo '127.0.0.1 sceneid.test forgesync.test forgejo-se.test forgejo-dk.test forg
 PUBLIC_BIND=0.0.0.0 ./setup.sh --all
 ```
 
-`PUBLIC_BIND=0.0.0.0` publishes SceneID (8080), Forgejo (3001–3003, SSH 2221–2223) and the
+`PUBLIC_BIND=0.0.0.0` publishes SceneID (8080), Forgejo (3001-3003, SSH 2221-2223) and the
 ForgeSync UI (8090) on the server's network interfaces. The database and webhook sink stay on
 localhost. On each machine whose browser should use it, point the names at the server:
 
@@ -66,8 +66,8 @@ PUBLIC_BIND=0.0.0.0 PUBLIC_HOST=10.0.0.5 ./setup.sh --all --standby
 `PUBLIC_HOST` makes everything a browser sees use that name instead of the `*.test` ones:
 Keycloak's hostname, the nodes' `ROOT_URL` and their SceneID login sources, both
 controllers' issuer, redirect and webhook URLs, and the callbacks registered with the realm.
-It has to be one name everywhere — OIDC checks the issuer in the token against the one the
-controller was configured with — and the `*.test` aliases keep working inside the compose
+It has to be one name everywhere, since OIDC checks the issuer in the token against the one
+the controller was configured with, and the `*.test` aliases keep working inside the compose
 network, which is what container-to-container traffic uses either way. Pass the same
 `PUBLIC_HOST` to every later `docker compose ... up` and to the scripts below.
 
@@ -87,7 +87,7 @@ itself, picks a repository whose Actions are on, and takes a few minutes because
 for five scan rounds.
 
 `scale.sh` is for finding out what a round costs at a size you care about; the numbers from
-203 repositories on five nodes are in CLAUDE.md under "What it costs at scale". Deleting
+203 repositories on five nodes are in `docs/PERFORMANCE.md`. Deleting
 them exercises the archive flow on every other node, which is worth watching once.
 
 Both take `PUBLIC_HOST=<host or IP>` when the environment isn't on the `*.test` names.

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -100,9 +101,56 @@ func unauthorized(w http.ResponseWriter) {
 	writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "not signed in"})
 }
 
-func clientAddr(r *http.Request) string {
-	// RemoteAddr only: forwarded headers are client-controlled unless a
-	// trusted proxy is configured, which this server doesn't support yet.
+// clientAddr is who the request came from, as the history records it and
+// as the sign-in limiter counts. The connection's own address is the only
+// thing that can't be forged, so it's what counts unless a proxy ForgeSync
+// was told to trust is the one connecting: then the address that proxy
+// reports is better, because otherwise everyone shares one.
+func (s *Server) clientAddr(r *http.Request) string {
+	host := remoteHost(r)
+	if len(s.TrustedProxies) == 0 {
+		return host
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil || !s.trustedProxy(ip) {
+		// Not one of ours: whatever it claims about other addresses is
+		// the claim of whoever is connecting.
+		return host
+	}
+	// Read X-Forwarded-For from the right: each trusted proxy appends the
+	// address it saw, so the right-most address that isn't a proxy of ours
+	// is the client as our own proxies saw it. Anything further left was
+	// supplied by the client and proves nothing.
+	var chain []string
+	for _, v := range r.Header.Values("X-Forwarded-For") {
+		chain = append(chain, strings.Split(v, ",")...)
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		claimed, err := netip.ParseAddr(strings.TrimSpace(chain[i]))
+		if err != nil {
+			// A header we can't read is a header we can't trust any of.
+			return host
+		}
+		if claimed = claimed.Unmap(); !s.trustedProxy(claimed) {
+			return claimed.String()
+		}
+	}
+	return host
+}
+
+// trustedProxy reports whether addr is one of the proxies in the config.
+func (s *Server) trustedProxy(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	for _, p := range s.TrustedProxies {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// remoteHost is the address the connection itself came from.
+func remoteHost(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -145,7 +193,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"message": "missing " + csrfHeader + " header"})
 		return
 	}
-	addr := clientAddr(r)
+	addr := s.clientAddr(r)
 	if blocked, retry := s.limiter.Blocked(addr); blocked {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"message": "too many failed sign-ins; try again later"})
@@ -256,12 +304,12 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sessionInfo{Identity: id, ExpiresAt: expires.UTC()})
 }
 
-// deleteSession signs out: the session is held in this controller's
-// memory, so forgetting it is the whole of it.
+// deleteSession signs out. The session is in the database both
+// controllers share, so this signs out of both at once.
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		if id, _, ok := s.Sessions.Get(r.Context(), c.Value); ok {
-			s.audit(r.Context(), id.Actor(), "session.sign_out", clientAddr(r), nil)
+			s.audit(r.Context(), id.Actor(), "session.sign_out", s.clientAddr(r), nil)
 		}
 		s.Sessions.Delete(r.Context(), c.Value)
 	}

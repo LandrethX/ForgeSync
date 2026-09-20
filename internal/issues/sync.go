@@ -94,6 +94,9 @@ type HealthSource interface {
 // ConflictKind is the conflict kind issue replication owns.
 const ConflictKind = "issue_conflict"
 
+// Options say which parts of a conversation travel: issues and their
+// comments always, then pull requests, reviews, reactions and
+// attachments as each is turned on.
 type Options struct {
 	Concurrency int // repositories in parallel
 	// Reactions also replicates the reactions on issues and comments.
@@ -141,6 +144,8 @@ type Syncer struct {
 	again   map[string]bool
 }
 
+// NewSyncer replicates conversations between the nodes, keeping its
+// record of what each node holds in st.
 func NewSyncer(nodes []Node, st Store, h HealthSource, opts Options, log *slog.Logger) *Syncer {
 	if opts.Concurrency < 1 {
 		opts.Concurrency = 2

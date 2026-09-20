@@ -6,7 +6,7 @@
 #   ./scale.sh drop            # remove every scale-* repository, everywhere
 #
 # What was measured on the LXC test server (five nodes, 203 repositories
-# each, one commit apiece) is in CLAUDE.md; the short version is that the
+# each, one commit apiece) is in docs/PERFORMANCE.md; the short version is that the
 # fast path stays a few seconds and the full round grows with
 # repositories times nodes.
 #

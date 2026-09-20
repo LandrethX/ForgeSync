@@ -1,0 +1,38 @@
+# What a secret scan of this repository finds, and why what remains is not a
+# secret. Run it over the working tree and over the history:
+#
+#   gitleaks dir . --config .gitleaks.toml
+#   gitleaks git . --config .gitleaks.toml
+#
+# Nothing here exempts a file. The allowlist matches one shape of string, so
+# a real credential committed to the same file is still reported, which is
+# worth re-checking after any change here: paste a token-shaped string into
+# one of those files and watch the scan fail.
+
+[extend]
+useDefault = true
+
+[[rules]]
+# The default rules do not recognise the one credential ForgeSync itself
+# holds: a Forgejo API token is 40 hexadecimal characters, which is also
+# what a commit hash looks like, so this rule asks for the assignment as
+# well. Tokens are read from files at runtime and belong in no source file.
+id = "forgejo-api-token"
+description = "A Forgejo personal access token (40 hex characters)"
+regex = '''(?i)(?:forgejo|gitea|node|admin)[_-]?token['"]?\s*[:=]\s*['"]?([0-9a-f]{40})['"]?'''
+secretGroup = 1
+keywords = ["token"]
+
+[allowlist]
+description = """
+The names of the accounts the Phase 0 probes created in the test
+environment: p01u09182034-se-dk and the like. They are usernames printed in
+a results table, not credentials. Every probe suffixes what it makes with
+the run id so a run can be repeated, which leaves a high-entropy-looking
+string that the generic-api-key rule reads as a key. The accounts exist only
+in the throwaway environment deploy/test brings up, and setup.sh recreates
+that from nothing.
+"""
+regexes = [
+  '''p0[0-9][a-z]*[0-9]{8}-[a-z]{2}-[a-z]{2}''',
+]

@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// State is what ForgeSync believes about one node: healthy, suspect after
+// a failed contact, unreachable after failure_threshold of them, or
+// unknown before the first.
 type State string
 
 const (

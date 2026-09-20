@@ -1,9 +1,11 @@
 # ForgeSync
 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 ForgeSync keeps several independent, **stock** Forgejo servers in step, so that people can
 work on whichever one is nearest and find the same thing there. It is an external control
 plane: it never patches Forgejo, never touches its database, and uses only what Forgejo
-offers anyone — the REST API, webhooks, the Git and LFS protocols.
+offers anyone: the REST API, webhooks, the Git and LFS protocols.
 
 It is built around one rule: **never lose work, never decide for the owner.** Only
 fast-forwards and creations are pushed, every push is leased against what ForgeSync last
@@ -21,7 +23,7 @@ missing on a node is created, with its SceneID owner; one deleted on its primary
 on the others rather than deleted; a rename keeps the repository's identity.
 
 What it deliberately doesn't, and what Forgejo won't let it, is in
-[docs/LIMITATIONS.md](docs/LIMITATIONS.md) — with the reason for each.
+[docs/LIMITATIONS.md](docs/LIMITATIONS.md), with the reason for each.
 
 ## Where to start
 
@@ -31,7 +33,9 @@ What it deliberately doesn't, and what Forgejo won't let it, is in
 | Try it, with five Forgejo nodes in Docker | [deploy/test/README.md](deploy/test/README.md) |
 | Know what it can't do, and why | [docs/LIMITATIONS.md](docs/LIMITATIONS.md) |
 | Understand the design | [docs/ForgeSync_Solution_Architecture.md](docs/ForgeSync_Solution_Architecture.md) |
-| Work on the code | [CLAUDE.md](CLAUDE.md) — the layout, the decisions and why |
+| Work on the code | [CONTRIBUTING.md](CONTRIBUTING.md): the commands, the test environment, the conventions |
+| Find your way around the source | [docs/CODE_REFERENCE.md](docs/CODE_REFERENCE.md): what each package does, and its entry points |
+| Know how it is secured | [SECURITY.md](SECURITY.md), and [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) for the last review |
 
 ## Building
 
@@ -56,13 +60,16 @@ become one (`GOBIN=/tmp/bin go install ...`):
 golangci-lint run ./...                      # errcheck, govet, ineffassign, staticcheck, unused
 govulncheck ./...                            # known vulnerabilities in what we import
 gosec -exclude-dir=web ./...                 # security patterns in the Go source
+gitleaks dir . --config .gitleaks.toml       # secrets, in the tree and in the history
+osv-scanner scan source -r .                 # Go and npm dependencies
 shellcheck -S warning $(git ls-files '*.sh') # the setup, probe and deploy scripts
 cd web && npm audit                          # and the UI's dependencies
 ```
 
-`.golangci.yml` says which findings were looked at and deliberately kept, and why -- an
-error ignored in a test fixture, a write to an `http.ResponseWriter` with nobody left to
-tell. Keep that file honest rather than silencing a linter in passing. `gosec` still
+`.golangci.yml` and `.gitleaks.toml` say which findings were looked at and deliberately
+kept, and why: an error ignored in a test fixture, a write to an `http.ResponseWriter` with
+nobody left to tell, the probe-generated usernames a secret scanner reads as keys. Keep
+those files honest rather than silencing a tool in passing. `gosec` still
 reports five findings by design: the session cookie's `Secure` flag is a setting (it has
 to be, for a reverse proxy terminating TLS), the git CLI is run with arguments ForgeSync
 builds, and the config and token files are read from paths the config gives.
@@ -90,3 +97,18 @@ exposes.
 
 Every script takes `PUBLIC_HOST=<host or IP>` when the environment isn't reachable under the
 `*.test` names.
+
+## This release
+
+The first release of ForgeSync was published during **[Mysdata 2026](https://mysdata.org/)**,
+in co-operation with Hagar, TST. The repository is
+<https://github.com/LandrethX/ForgeSync>.
+
+## Licence
+
+Apache License 2.0; see [LICENSE](LICENSE). Copyright 2026 Landreth.
+
+Forgejo itself is separate software under the GPL, version 3 or later, from v9 onward.
+ForgeSync neither includes nor links any of it: it is a client that speaks to a Forgejo
+server over the REST API, webhooks and the Git and LFS protocols, which is why the two
+licences do not meet.

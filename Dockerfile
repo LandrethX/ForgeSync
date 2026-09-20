@@ -30,6 +30,12 @@ RUN apk add --no-cache git ca-certificates \
  && mkdir -p /var/lib/forgesync /etc/forgesync \
  && chown forgesync /var/lib/forgesync
 COPY --from=build /out/forgesyncd /out/forgesync /usr/local/bin/
-USER forgesync
+# By number, so it means the same thing wherever the image runs: a host
+# reading the filesystem has no /etc/passwd of ours to look the name up in.
+USER 10001
 EXPOSE 8090
+# The same readiness the compose file and systemd watch: answering means
+# the process is up and the database is reachable.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:8090/readyz || exit 1
 ENTRYPOINT ["forgesyncd", "-config", "/etc/forgesync/forgesync.yaml"]

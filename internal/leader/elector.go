@@ -97,6 +97,8 @@ type Elector struct {
 	subs  map[chan struct{}]struct{}
 }
 
+// New makes the elector that takes and renews the lease in s. Supervise
+// runs the leader-only work under it.
 func New(s Store, opts Options, log *slog.Logger) *Elector {
 	if opts.TTL <= 0 {
 		opts.TTL = 15 * time.Second

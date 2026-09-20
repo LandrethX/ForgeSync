@@ -79,6 +79,9 @@ type HealthSource interface {
 	Snapshot() []health.Status
 }
 
+// Options are what replication copies and what it may do about a
+// difference: the switches for each kind of content, the concurrency,
+// and whether conflicts are fixed or handed to their owner.
 type Options struct {
 	Concurrency int // repositories replicated in parallel
 	// CreateMissing creates a repository (and its SceneID owner) on a
@@ -162,6 +165,8 @@ type Engine struct {
 	again   map[string]bool // repository id -> changed during the run: run once more
 }
 
+// NewEngine replicates each repository from its primary to the other
+// nodes, through git and the Forgejo API, recording what it wrote in st.
 func NewEngine(nodes []Node, git *Git, st Store, h HealthSource, opts Options, log *slog.Logger) *Engine {
 	if opts.Concurrency < 1 {
 		opts.Concurrency = 2

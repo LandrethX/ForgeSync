@@ -12,6 +12,8 @@ import (
 	"scenegit.org/forgesync/internal/health"
 )
 
+// Store is ForgeSync's state in PostgreSQL. Both controllers share one,
+// which is what lets either of them serve and only one of them act.
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -29,6 +31,7 @@ func Open(ctx context.Context, url string) (*Store, error) {
 	return &Store{pool: pool}, nil
 }
 
+// Close gives the connection pool back.
 func (s *Store) Close() { s.pool.Close() }
 
 // Ping reports whether the database is reachable (used by /readyz).

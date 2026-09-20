@@ -250,6 +250,7 @@ type lfsError struct {
 	Message string `json:"message"`
 }
 
+// Error is the status and message the LFS endpoint answered with.
 func (e *lfsError) Error() string { return fmt.Sprintf("%d %s", e.Code, e.Message) }
 
 const lfsMediaType = "application/vnd.git-lfs+json"

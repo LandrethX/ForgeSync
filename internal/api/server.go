@@ -3,7 +3,7 @@
 //	/healthz   liveness, always 200 while the process runs
 //	/readyz    readiness, 200 only when the database answers
 //	/api/v1/*  admin API: bearer token (CLI) or session cookie (web UI, signed
-//	           in with SceneID, or the admin token when SceneID is off)
+//	           in with a ForgeSync account, or the admin token as break-glass)
 //	/*         the embedded web UI
 //
 // The controller-to-controller (/internal/v1) and agent (/agent/v1) APIs from
@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -98,6 +99,9 @@ type Node struct {
 	health.Status
 }
 
+// Server is the controller's HTTP interface. Every field is set by the
+// caller; Handler builds the router from them, and what is nil is a
+// feature this controller does not have (no replication, no webhooks).
 type Server struct {
 	// AdminToken is the bearer token for the CLI, and the break-glass
 	// sign-in for the web UI: it's how the first ForgeSync account gets
@@ -124,7 +128,11 @@ type Server struct {
 	StartedAt           time.Time
 	Sessions            *Sessions
 	SecureCookies       bool
-	Frontend            http.Handler // nil serves nothing outside the API
+	// TrustedProxies are the proxies whose X-Forwarded-For is believed,
+	// from http.trusted_proxies. Empty means the connection's own address
+	// is what the history records and the sign-in limiter counts.
+	TrustedProxies []netip.Prefix
+	Frontend       http.Handler // nil serves nothing outside the API
 	// Webhooks receives Forgejo's deliveries at /api/v1/hooks/forgejo/{node};
 	// it checks their signatures itself. nil when webhooks are off.
 	Webhooks http.Handler
@@ -134,6 +142,9 @@ type Server struct {
 	limiter *loginLimiter
 }
 
+// Handler builds the router: the probes, the metrics, the admin API and
+// the embedded UI, with authentication, roles and the leader check around
+// the parts that need them.
 func (s *Server) Handler() http.Handler {
 	if s.Sessions == nil {
 		s.Sessions = NewSessions(8*time.Hour, 30*time.Minute, s.DB, s.Log)
@@ -402,6 +413,8 @@ type ReplicationSummary struct {
 	Features []string       `json:"features,omitempty"`
 }
 
+// DatabaseStatus is whether the controller can reach PostgreSQL, as the
+// overview reports it.
 type DatabaseStatus struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
@@ -592,6 +605,28 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("Content-Security-Policy",
 			"default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; "+
 				"connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		// Nothing here opens a window, and nothing of ForgeSync's should be
+		// loaded by another site: a page kept in its own browsing context
+		// group can't be reached by one that opened it, and a resource
+		// marked same-origin can't be embedded elsewhere.
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		h.Set("Cross-Origin-Resource-Policy", "same-origin")
+		// Everything the UI loads is its own, which the content security
+		// policy already insists on, so requiring each resource to say so
+		// costs nothing and puts the page in its own isolated context.
+		h.Set("Cross-Origin-Embedder-Policy", "require-corp")
+		// The admin UI asks the browser for none of this, so say so rather
+		// than leaving it to a default that may change.
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()")
+		if r.TLS != nil {
+			// Only on a request that arrived over TLS here. A plain-HTTP
+			// listener may be the one a reverse proxy talks to, or a local
+			// development install, and telling a browser that http://host
+			// is HTTPS-only for a year is not something a plain listener
+			// can take back. Where a proxy terminates TLS, the proxy is
+			// the one that has to send this; deploy/prod/README.md says so.
+			h.Set("Strict-Transport-Security", "max-age=31536000")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

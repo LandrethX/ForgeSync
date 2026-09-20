@@ -17,6 +17,7 @@ const (
 	Administrator
 )
 
+// String is the role's name as the API and the config write it.
 func (r Role) String() string {
 	switch r {
 	case Viewer:
@@ -29,6 +30,8 @@ func (r Role) String() string {
 	return "none"
 }
 
+// MarshalText writes the role's name, so JSON carries "viewer" rather
+// than the number behind it.
 func (r Role) MarshalText() ([]byte, error) { return []byte(r.String()), nil }
 
 // UnmarshalText reads a role back, so an identity can be stored as JSON

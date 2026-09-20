@@ -26,6 +26,35 @@ It asks whether this is the first ForgeSync machine. If it is not, it asks where
 one is and joins this one to it. `--first` and `--join <address>` answer in advance, which
 is what you want when it runs from a pipe with nothing to type into.
 
+### Adding a second or third machine
+
+Controllers share one database, and three of their secrets have to be identical or the
+installation only half works: the CLI would authenticate against one machine and not the
+others, each leader would rewrite every node's webhook on taking over, and the node tokens
+sealed in the database would not open. So the first machine hands them over as one file:
+
+```sh
+bash install.sh --join-bundle              # on the first machine
+scp /root/forgesync-join.txt root@<new machine>:/root/
+bash install.sh --bundle /root/forgesync-join.txt   # on the new one
+```
+
+The bundle carries the database URL, the admin token, the webhook secret, the node key, and
+where the first machine is. The new machine points the database URL at the first machine
+rather than its own loopback, and takes the next free `controller.priority` by asking the
+first one which are already taken.
+
+**That file is the keys to the whole installation.** It is written 0600, and the script
+shuts it to 0600 again on arrival because `scp` does not preserve the mode. Move it over ssh
+and delete it from both machines afterwards; it does not expire. If you would rather not
+have such a file exist at all, copy the four files out of `/etc/forgesync/secrets` yourself
+and run `install.sh --join <address>`, which waits for them to appear.
+
+PostgreSQL on the first machine has to accept the connection: `listen_addresses` in
+`postgresql.conf`, a `host` line for the new machine in `pg_hba.conf`, then reload it. The
+second machine gives you a controller that survives losing the first; the database is still
+one server until there are three (section 12).
+
 Reading a script before running it as root is a reasonable habit, and this one is written to
 be read:
 

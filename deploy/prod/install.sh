@@ -24,6 +24,12 @@
 #   --join 10.0.0.1                       this is not: an address or URL
 #                                         for the first one. Implies that
 #                                         PostgreSQL lives there.
+#   --join-bundle [file]                  on the first machine: write what
+#                                         another machine needs to join,
+#                                         and stop. Default file:
+#                                         /root/forgesync-join.txt
+#   --bundle <file>                        on a joining machine: the file
+#                                         --join-bundle wrote.
 #   --url https://forgesync.example.org   how the Forgejo nodes reach this
 #                                         controller for webhooks, and how
 #                                         people reach the UI. Default: the
@@ -72,12 +78,20 @@ CONTROLLER_NAME=""
 WITH_POSTGRES=1
 KEEP_BUILD=0
 ROLE=""            # first | join, asked for when not given
+BUNDLE=""          # a join bundle to read on a joining machine
+MAKE_BUNDLE=""     # a path to write one to, on the first machine
 PRIMARY=""         # where the first machine is, when joining
 PRIORITY=""         # lower leads; the first machine is 1
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --first)       ROLE="first"; shift ;;
+    --join-bundle) # the path is optional, so only take it if it is one
+                   case "${2:-}" in
+                     ""|-*) MAKE_BUNDLE=/root/forgesync-join.txt; shift ;;
+                     *)     MAKE_BUNDLE=$2; shift 2 ;;
+                   esac ;;
+    --bundle)      BUNDLE=${2:?--bundle needs a file}; ROLE="join"; shift 2 ;;
     --join)        ROLE="join"; PRIMARY=${2:?--join needs the address of the first machine}; shift 2 ;;
     --priority)    PRIORITY=${2:?--priority needs a number}; shift 2 ;;
     --url)         PUBLIC_URL=${2:?--url needs a value}; shift 2 ;;
@@ -155,6 +169,55 @@ else
   ok "${mem_mb} MB of memory"
 fi
 
+# ------------------------------------------------------- the join bundle
+
+# What another machine needs to join this installation. It is every secret
+# this one holds, so it is written to a file only root can read rather than
+# printed, and the message says what it is worth.
+SECRET_FILES="database.url admin.token webhook.secret node-key"
+
+if [ -n "$MAKE_BUNDLE" ]; then
+  step "Writing what another machine needs to join"
+  missing=""
+  for f in $SECRET_FILES; do
+    [ -s "$SECRETS/$f" ] || missing="$missing $f"
+  done
+  [ -z "$missing" ] || die "this machine is not installed yet:$missing missing from $SECRETS"
+
+  if [ -z "$PUBLIC_URL" ]; then
+    ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
+    PUBLIC_URL="http://${ip:-127.0.0.1}:8090"
+  fi
+  umask 077
+  {
+    printf 'FORGESYNC-JOIN-1 %s\n' "$PUBLIC_URL"
+    # shellcheck disable=SC2086 # the file list is ours and word-splits on purpose
+    tar -C "$SECRETS" -czf - $SECRET_FILES | base64 -w0
+    printf '\n'
+  } > "$MAKE_BUNDLE"
+  chmod 0600 "$MAKE_BUNDLE"
+  ok "wrote $MAKE_BUNDLE ($(wc -c < "$MAKE_BUNDLE") bytes, mode 0600)"
+  cat <<BUNDLE
+
+  This file is every secret this installation has: the database password,
+  the admin token, the webhook secret, and the key that opens the node
+  tokens in the database. Treat it as the keys to the whole thing.
+
+  Copy it to the new machine over ssh, which is already encrypted:
+
+    scp $MAKE_BUNDLE root@<new machine>:/root/
+
+  Then on the new machine:
+
+    curl -fsSLO https://raw.githubusercontent.com/LandrethX/ForgeSync/main/deploy/prod/install.sh
+    bash install.sh --bundle /root/$(basename "$MAKE_BUNDLE")
+
+  Delete it from both machines afterwards. It does not expire.
+
+BUNDLE
+  exit 0
+fi
+
 # --------------------------------------------------------- first or not
 
 step "Which machine is this"
@@ -173,24 +236,28 @@ if [ -z "$ROLE" ]; then
 fi
 
 if [ "$ROLE" = join ]; then
-  while [ -z "$PRIMARY" ]; do
+  if [ -z "$BUNDLE" ] && [ -t 0 ]; then
+    note "the first machine can write everything this one needs:"
+    note "  bash install.sh --join-bundle       (run it there, then copy the file here)"
+    printf '  Path to that file, or blank to copy the secrets by hand: '
+    read -r BUNDLE
+  fi
+  while [ -z "$PRIMARY" ] && [ -z "$BUNDLE" ]; do
     printf '  Address or URL of the first ForgeSync machine: '
     read -r PRIMARY
   done
-  # An address, a host name or a whole URL are all reasonable answers.
-  case "$PRIMARY" in
-    http://*|https://*) PRIMARY_URL=$PRIMARY ;;
-    *:*)                PRIMARY_URL="http://$PRIMARY" ;;
-    *)                  PRIMARY_URL="http://$PRIMARY:8090" ;;
-  esac
-  PRIMARY_HOST=${PRIMARY_URL#*://}; PRIMARY_HOST=${PRIMARY_HOST%%:*}; PRIMARY_HOST=${PRIMARY_HOST%%/*}
-  WITH_POSTGRES=0
-  ok "joining the installation at $PRIMARY_URL"
-  if curl -fsS -m 5 "$PRIMARY_URL/healthz" >/dev/null 2>&1; then
-    ok "it answers"
-  else
-    warn "$PRIMARY_URL/healthz did not answer; carrying on, but check it before this one starts"
+  # An address, a host name or a whole URL are all reasonable answers. With
+  # a bundle there may be nothing to type: it carries where it came from.
+  if [ -n "$PRIMARY" ]; then
+    case "$PRIMARY" in
+      http://*|https://*) PRIMARY_URL=$PRIMARY ;;
+      *:*)                PRIMARY_URL="http://$PRIMARY" ;;
+      *)                  PRIMARY_URL="http://$PRIMARY:8090" ;;
+    esac
+    PRIMARY_HOST=${PRIMARY_URL#*://}; PRIMARY_HOST=${PRIMARY_HOST%%:*}; PRIMARY_HOST=${PRIMARY_HOST%%/*}
+    ok "joining the installation at $PRIMARY_URL"
   fi
+  WITH_POSTGRES=0
 else
   ok "the first machine: PostgreSQL and the secrets are made here"
 fi
@@ -358,7 +425,43 @@ if [ "$WITH_POSTGRES" -eq 1 ]; then
   as_postgres psql -qc "ALTER ROLE forgesync CREATEDB" >/dev/null
   ok "the role may create a database, so backup.sh --verify can check its own dumps"
 fi
-if [ "$ROLE" = join ]; then
+if [ "$ROLE" = join ] && [ -n "$BUNDLE" ]; then
+  step "Secrets from the join bundle"
+  [ -s "$BUNDLE" ] || die "$BUNDLE is not there or is empty"
+  # Neither scp nor most copies preserve the mode, so a file holding every
+  # secret of the installation routinely lands at 0644. Shut it before
+  # reading it, and say so, because it was readable while it sat there.
+  mode=$(stat -c '%a' "$BUNDLE" 2>/dev/null || echo unknown)
+  if [ "$mode" != 600 ]; then
+    chmod 0600 "$BUNDLE"
+    warn "$BUNDLE arrived mode $mode and has been shut to 0600; it holds every secret, so copy it only over ssh"
+  fi
+  header=$(head -1 "$BUNDLE")
+  case "$header" in
+    "FORGESYNC-JOIN-1 "*) ;;
+    *) die "$BUNDLE does not look like a join bundle; --join-bundle on the first machine writes one" ;;
+  esac
+  bundle_url=${header#FORGESYNC-JOIN-1 }
+  if [ -z "$PRIMARY" ]; then
+    PRIMARY_URL=$bundle_url
+    PRIMARY_HOST=${PRIMARY_URL#*://}; PRIMARY_HOST=${PRIMARY_HOST%%:*}; PRIMARY_HOST=${PRIMARY_HOST%%/*}
+    ok "the bundle came from $PRIMARY_URL"
+  else
+    ok "the bundle came from $bundle_url; using $PRIMARY_URL as given"
+  fi
+  tail -n +2 "$BUNDLE" | base64 -d | tar -C "$SECRETS" -xzf - \
+    || die "could not unpack $BUNDLE; it may have been altered in transit"
+  for f in $SECRET_FILES; do
+    [ -s "$SECRETS/$f" ] || die "$BUNDLE did not contain $f"
+  done
+  chown root:forgesync "$SECRETS"/* 2>/dev/null || true
+  chmod 0640 "$SECRETS"/*
+  ok "unpacked the four secrets into $SECRETS"
+  note "delete $BUNDLE from this machine and the first one when you are done"
+  BUNDLE_USED=1
+fi
+
+if [ "$ROLE" = join ] && [ -z "${BUNDLE_USED:-}" ]; then
   step "Secrets from the first machine"
   note "controllers share one database, and three of these have to be identical"
   note "or the CLI works on one machine only, the webhooks are rewritten on"
@@ -378,20 +481,35 @@ if [ "$ROLE" = join ]; then
   [ "$i" -gt 0 ] && printf '\n'
   ok "all four are here"
 
-  # The first machine's own URL says 127.0.0.1, which means something else
-  # from here. Point it at the machine it actually lives on.
+fi
+
+# However the secrets arrived, the database URL came from the first
+# machine, where it says 127.0.0.1. That means this machine from here, and
+# there is no PostgreSQL on it. Point it at the machine the database
+# actually lives on.
+if [ "$ROLE" = join ]; then
   url=$(cat "$SECRETS/database.url")
   case "$url" in
     *@127.0.0.1:*|*@localhost:*)
-      printf '%s' "${url/@127.0.0.1:/@$PRIMARY_HOST:}" > "$SECRETS/database.url"
-      printf '%s' "$(sed "s|@localhost:|@$PRIMARY_HOST:|" "$SECRETS/database.url")" > "$SECRETS/database.url"
+      [ -n "${PRIMARY_HOST:-}" ] || die "no host for the first machine, so database.url cannot be pointed at it"
+      printf '%s' "$(printf '%s' "$url" | sed -e "s|@127\.0\.0\.1:|@$PRIMARY_HOST:|" -e "s|@localhost:|@$PRIMARY_HOST:|")" \
+        > "$SECRETS/database.url"
       ok "pointed database.url at $PRIMARY_HOST instead of the loopback"
-      note "PostgreSQL there has to accept it: listen_addresses in postgresql.conf"
-      note "and a host line for this machine in pg_hba.conf, then reload it"
+      note "PostgreSQL there has to accept it: listen_addresses in postgresql.conf,"
+      note "a host line for this machine in pg_hba.conf, then reload it"
       ;;
     *) ok "database.url already names a host this machine can reach" ;;
   esac
   unset url
+fi
+
+if [ "$ROLE" = join ]; then
+  [ -n "${PRIMARY_URL:-}" ] || die "no address for the first machine; pass --join <address>"
+  if curl -fsS -m 5 "$PRIMARY_URL/healthz" >/dev/null 2>&1; then
+    ok "$PRIMARY_URL answers"
+  else
+    warn "$PRIMARY_URL/healthz did not answer; carrying on, but check it before this one starts"
+  fi
 fi
 
 [ -s "$SECRETS/database.url" ] || die "no $SECRETS/database.url; with --no-postgres you have to write it yourself"

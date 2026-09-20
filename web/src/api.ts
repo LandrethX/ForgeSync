@@ -337,7 +337,7 @@ export interface Overview {
   started_at: string;
   /** single, leader or standby. */
   role: string;
-  /** Who is acting, when two controllers share a database. */
+  /** Who is acting, when several controllers share a database. */
   leader?: {
     name?: string;
     url?: string;
@@ -385,7 +385,7 @@ export type Role = "viewer" | "operator" | "administrator";
 
 /**
  * One of ForgeSync's own accounts: someone who signs in to the
- * controllers. They live in ForgeSync's database, which both controllers
+ * controllers. They live in ForgeSync's database, which every controller
  * share, and are never copied to a Forgejo node.
  */
 export interface Account {

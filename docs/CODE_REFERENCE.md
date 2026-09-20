@@ -52,7 +52,7 @@ webhook installer and receiver, and the HTTP server. It then serves plain HTTP, 
 or both, and re-reads the TLS certificate on SIGHUP.
 
 Three adapters in this package keep the standby quiet and the packages independent of
-each other: `leaderRecorder` (both controllers watch the nodes, only the leader records
+each other: `leaderRecorder` (every controller watches the nodes, only the leader records
 the transitions), `leaderDispatcher` (a delivery to a standby is dropped, since the
 leader had the same one), and `userAdmin` (lets the API create users without importing
 the replication package's options). `recordController` writes this controller's

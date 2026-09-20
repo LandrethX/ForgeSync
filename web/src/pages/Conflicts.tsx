@@ -34,9 +34,9 @@ export function Conflicts() {
         Differences between nodes that ForgeSync won't settle by itself:
         diverged history, commits made on a replica, history rewritten on a
         primary. A conflict clears on its own once a later check finds the nodes
-        agree. One that isn't ForgeSync's to fix &mdash; a secret it can't copy,
-        a difference you've decided to live with &mdash; can be dismissed: it's
-        kept, with who dismissed it and why, but stops being counted.
+        agree. One that isn't ForgeSync's to fix (a secret it can't copy, a
+        difference you've decided to live with) can be dismissed: it's kept,
+        with who dismissed it and why, but stops being counted.
       </p>
 
       <div className="segmented tabs" role="group" aria-label="Show">

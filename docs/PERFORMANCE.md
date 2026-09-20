@@ -1,6 +1,6 @@
 # What ForgeSync costs at scale
 
-Measured on one Debian LXC running five Forgejo nodes and both controllers in Docker,
+Measured on one Debian LXC running five Forgejo nodes and two controllers in Docker,
 with 203 repositories on every node, one commit each. `deploy/test/scale.sh make 200`
 creates them and `scale.sh drop` takes them away again, so the measurement can be
 repeated.

@@ -8,7 +8,7 @@ const ROLES: Role[] = ["viewer", "operator", "administrator"];
 
 /**
  * ForgeSync's own accounts: the people who sign in to the controllers
- * themselves. They live in ForgeSync's database, which both controllers
+ * themselves. They live in ForgeSync's database, which every controller
  * share, so an account works on either one and keeps working when SceneID
  * is the thing that's unreachable. Nothing copies them to a Forgejo node.
  */
@@ -32,8 +32,8 @@ export function Accounts() {
       <PageHeader title="ForgeSync accounts" />
       <p className="muted page-intro">
         Who can sign in to ForgeSync itself. These accounts are
-        ForgeSync&rsquo;s own: they live in its database, which both controllers
-        share, so they work on either one &mdash; including when SceneID
+        ForgeSync&rsquo;s own: they live in its database, which every controller
+        shares, so they work on any of them, including when SceneID
         can&rsquo;t be reached, which is when you most need them. They are never
         copied to a Forgejo node, and nobody gets an account there from having
         one here.

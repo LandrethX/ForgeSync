@@ -11,7 +11,7 @@ import (
 )
 
 // ForgeSync's own accounts are made by an administrator, live in the
-// database both controllers share, and sign in with a password.
+// database every controller shares, and sign in with a password.
 func TestAccountsAreMadeAndUsedToSignIn(t *testing.T) {
 	f, admin := sessionAs(t, auth.Administrator)
 

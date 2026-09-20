@@ -8,7 +8,7 @@
 #   KEEP_SAMPLES=1 ./check-db-failover.sh         # keep the raw samples
 #
 # Give it the same PUBLIC_HOST the environment was started with: it
-# recreates the two controllers to move them between databases, and
+# recreates the controllers to move them between databases, and
 # compose publishes their ports from these variables. PUBLIC_BIND follows
 # PUBLIC_HOST unless it is set, so an environment reachable from the LAN
 # comes back reachable from the LAN.
@@ -17,7 +17,7 @@
 # check starts the other arrangement (compose profile "ha"): two servers
 # in streaming replication with Patroni over them and etcd holding the
 # decision, with nothing in front of them. It carries the state across,
-# moves both controllers onto the pair, and then takes the primary away
+# moves every running controller onto the pair, and then takes the primary away
 # twice: once by killing it, once as a planned switchover. Afterwards it
 # carries the state back and puts the controllers on the single server
 # again, unless --keep.
@@ -29,7 +29,7 @@
 #   - no controller acts on a lease it can no longer renew: leadership
 #     stops within controller.lease of the database going, which is what
 #     fences the old leader off;
-#   - the two controllers never claim leadership at once, least of all
+#   - no two controllers ever claim leadership at once, least of all
 #     across a promotion;
 #   - when the other server is promoted the controllers find it by
 #     themselves, with no restart and nothing to point anywhere;
@@ -76,7 +76,29 @@ PAIR_URL="postgres://forgesync:$DB_PASSWORD@forgesync-db-a:5432,forgesync-db-b:5
 LEASE=$(sed -n 's/^  lease: \([0-9]*\)s$/\1/p' .work/forgesync.docker.yaml)
 LEASE=${LEASE:-15}
 
+# Whichever controllers are running: the environment has one, two or three
+# (setup.sh --standby, --three-controllers). They all have to move to the
+# new database together, because a controller left on the old one would go
+# on acting there, against a lease nothing else can see.
+CONTROLLER_SVCS=""
+CONTROLLER_URLS=""
+for pair in "forgesync $CONTROLLER" "forgesync-b $STANDBY" "forgesync-c http://$PUBLIC_HOST:8092"; do
+  svc=${pair%% *}; url=${pair##* }
+  if [ -n "$(docker compose ps -q "$svc" 2>/dev/null)" ]; then
+    CONTROLLER_SVCS="$CONTROLLER_SVCS $svc"
+    CONTROLLER_URLS="$CONTROLLER_URLS $url"
+  fi
+done
+
 metrics() { curl -fsS -m 6 -H "Authorization: Bearer $TOKEN" "$1/metrics" 2>/dev/null || true; }
+
+# How many of them claim leadership right now. More than one is the thing
+# that must never happen; none is normal while a lease is in mid-air.
+leaders_now() {
+  local n=0 u
+  for u in $CONTROLLER_URLS; do n=$((n + $(leads "$(metrics "$u")"))); done
+  echo "$n"
+}
 gauge()   { printf '%s\n' "$1" | { grep -m1 "^$2" || true; } | awk '{print $NF}'; }
 leads()   { printf '%s\n' "$1" | { grep -cm1 '^forgesync_leader{.*role="leader".*} 1' || true; }; }
 healthz() { curl -s -m 3 -o /dev/null -w '%{http_code}' "$1/healthz" || true; }
@@ -143,9 +165,7 @@ wait_ready() { # wait_ready <url> <seconds>
 wait_leading() { # wait_leading <seconds>
   local i=0
   while [ "$i" -lt "$1" ]; do
-    if [ $(( $(leads "$(metrics "$CONTROLLER")") + $(leads "$(metrics "$STANDBY")") )) -ge 1 ]; then
-      return 0
-    fi
+    [ "$(leaders_now)" -ge 1 ] && return 0
     sleep 1; i=$((i + 1))
   done
   return 1
@@ -166,7 +186,7 @@ keep_samples() {
 }
 trap cleanup EXIT
 
-# Samples both controllers twice a second. It stops once the primary has
+# Samples the controllers twice a second. It stops once the primary has
 # been taken away (the caller writes $DONE), at least ten seconds have
 # passed since, and the installation has been settled -- a controller
 # leading, the database answering -- for four samples running.
@@ -175,17 +195,18 @@ trap cleanup EXIT
 # x when the controller couldn't be asked), and whether each controller
 # claims leadership.
 observe() { # observe <seconds>
-  local deadline=$(( $(date +%s) + $1 )) settled=0 since=0 ma mb up now
+  local deadline=$(( $(date +%s) + $1 )) settled=0 since=0 ma up now claiming
   : > "$SAMPLES"
   while [ "$(date +%s)" -lt "$deadline" ]; do
     now=$(date +%s)
-    ma=$(metrics "$CONTROLLER"); mb=$(metrics "$STANDBY")
+    ma=$(metrics "$CONTROLLER")
     up=$(gauge "$ma" 'forgesync_database_up'); up=${up:-x}
-    printf '%s %s %s %s %s %s\n' "$now" "$(healthz "$CONTROLLER")" "$(readyz "$CONTROLLER")" \
-      "$up" "$(leads "$ma")" "$(leads "$mb")" >> "$SAMPLES"
+    claiming=$(leaders_now)
+    printf '%s %s %s %s %s\n' "$now" "$(healthz "$CONTROLLER")" "$(readyz "$CONTROLLER")" \
+      "$up" "$claiming" >> "$SAMPLES"
     if [ -s "$DONE" ]; then
       [ "$since" -eq 0 ] && since=$(cat "$DONE")
-      if [ "$up" = 1 ] && [ $(( $(leads "$ma") + $(leads "$mb") )) -ge 1 ]; then
+      if [ "$up" = 1 ] && [ "$claiming" -ge 1 ]; then
         settled=$((settled + 1))
       else
         settled=0
@@ -202,13 +223,13 @@ observe() { # observe <seconds>
 # reach a database taking writes. Leadership has to stop inside it, which
 # is the fencing; whether anyone leads after it is a different question.
 outage_end()        { awk -v d="$1" '$1 >= d && $4 != "1" {t = $1} END {print t + 0}' "$SAMPLES"; }
-last_claim_within() { awk -v d="$1" -v e="$2" '$1 >= d && $1 <= e && ($5 + $6) >= 1 {t = $1} END {if (t) print t - d; else print 0}' "$SAMPLES"; }
-first_claim_after() { awk -v e="$1" '$1 > e && ($5 + $6) >= 1 {print $1; exit}' "$SAMPLES"; }
+last_claim_within() { awk -v d="$1" -v e="$2" '$1 >= d && $1 <= e && $5 >= 1 {t = $1} END {if (t) print t - d; else print 0}' "$SAMPLES"; }
+first_claim_after() { awk -v e="$1" '$1 > e && $5 >= 1 {print $1; exit}' "$SAMPLES"; }
 db_down_seen()      { awk '$4 != "1" {n++} END {print n + 0}' "$SAMPLES"; }
 healthz_not_ok()    { awk '$2 != 200 {n++} END {print n + 0}' "$SAMPLES"; }
 readyz_said_no()    { awk '$3 != 200 {n++} END {print n + 0}' "$SAMPLES"; }
-both_claimed()      { awk '$5 == 1 && $6 == 1 {n++} END {print n + 0}' "$SAMPLES"; }
-claims_before()     { awk -v d="$1" '$1 < d && ($5 + $6) >= 1 {n++} END {print n + 0}' "$SAMPLES"; }
+both_claimed()      { awk '$5 > 1 {n++} END {print n + 0}' "$SAMPLES"; }
+claims_before()     { awk -v d="$1" '$1 < d && $5 >= 1 {n++} END {print n + 0}' "$SAMPLES"; }
 
 # One failover, watched: take the primary away with "$@" and report.
 watch_failover() { # watch_failover <label> <command...>
@@ -240,9 +261,9 @@ watch_failover() { # watch_failover <label> <command...>
     fail "$label: /healthz stopped answering 200 in $(healthz_not_ok) samples"
   fi
   if [ "$(both_claimed)" -eq 0 ]; then
-    ok "$label: the two controllers never claimed leadership at the same time"
+    ok "$label: no two controllers ever claimed leadership at the same time"
   else
-    fail "$label: both controllers claimed leadership in $(both_claimed) samples"
+    fail "$label: more than one controller claimed leadership in $(both_claimed) samples"
   fi
 
   # Without a leader in the samples taken before the primary went, there
@@ -286,7 +307,7 @@ watch_failover() { # watch_failover <label> <command...>
 step "The environment"
 # A controller that has just been rebuilt takes a few seconds to answer,
 # so wait rather than deciding on one probe.
-for url in "$CONTROLLER" "$STANDBY"; do
+for url in $CONTROLLER_URLS; do
   i=0
   while [ "$i" -lt 60 ] && [ "$(healthz "$url")" != 200 ]; do sleep 2; i=$((i + 2)); done
   if [ "$(healthz "$url")" != 200 ]; then
@@ -294,7 +315,7 @@ for url in "$CONTROLLER" "$STANDBY"; do
     exit 1
   fi
 done
-ok "both controllers are answering"
+ok "the controllers are answering:$CONTROLLER_SVCS"
 
 step "The two-server database"
 dc up -d --build etcd forgesync-db-a forgesync-db-b >/dev/null 2>&1
@@ -310,7 +331,8 @@ ok "Patroni made $LEADER the primary, the other is streaming from it"
 step "Moving the controllers onto it"
 BEFORE=$(numbers)
 copy_state forgesync-db "$LEADER"
-FORGESYNC_DATABASE_URL="$PAIR_URL" dc up -d --no-deps forgesync forgesync-b >/dev/null 2>&1
+# shellcheck disable=SC2086 # the service list is built here and word-splits on purpose
+FORGESYNC_DATABASE_URL="$PAIR_URL" dc up -d --no-deps $CONTROLLER_SVCS >/dev/null 2>&1
 wait_ready "$CONTROLLER" 90 || { fail "the controller didn't come ready on the pair"; exit 1; }
 wait_ready "$STANDBY" 90   || { fail "the standby didn't come ready on the pair"; exit 1; }
 AFTER=$(numbers)
@@ -340,15 +362,19 @@ esac
 restore() {
   [ "$RESTORED" -eq 1 ] && return
   RESTORED=1
+  local profiles
   if [ "$KEEP" -eq 1 ]; then
+    profiles="--profile controller --profile standby"
+    case "$CONTROLLER_SVCS" in *forgesync-c*) profiles="$profiles --profile third" ;; esac
     printf '\nLeft on the pair. Put it back with:\n'
-    printf '  docker compose --profile controller --profile standby up -d --no-deps forgesync forgesync-b\n'
+    printf '  docker compose %s up -d --no-deps%s\n' "$profiles" "$CONTROLLER_SVCS"
     return
   fi
   step "Putting it back on the single server"
   local back; back=$(patroni_leader 2>/dev/null || echo "$LEADER")
   copy_state "$back" forgesync-db
-  FORGESYNC_DATABASE_URL='' dc up -d --no-deps forgesync forgesync-b >/dev/null 2>&1
+  # shellcheck disable=SC2086 # same list, same reason
+  FORGESYNC_DATABASE_URL='' dc up -d --no-deps $CONTROLLER_SVCS >/dev/null 2>&1
   if wait_ready "$CONTROLLER" 90; then
     ok "the controllers are on forgesync-db again, with the state put back"
   else
@@ -391,7 +417,7 @@ while [ "$i" -lt 30 ]; do
 done
 case "$took" in
   1) ok "a write is accepted again by the leader (202), and the standby names it (409)" ;;
-  2) fail "both controllers took the write; only the leader should" ;;
+  2) fail "more than one controller took the write; only the leader should" ;;
   *) fail "neither controller took the write within ${i}s: $CONTROLLER -> $A_CODE, $STANDBY -> $B_CODE" ;;
 esac
 

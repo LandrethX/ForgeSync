@@ -141,8 +141,9 @@ that contains only the built UI, `fs.Stat` rejects a path containing `..` outsid
 fail when a version ages out of the repository, which is a worse failure than the one it
 prevents; the base image is pinned to `alpine:3.23` and `trivy` scans the result.
 
-**INFORMATIONAL: the sign-in limiter is per controller, in memory.** Two controllers mean
-twice the attempts before a block, and a failover clears the window. With a 12-character
+**INFORMATIONAL: the sign-in limiter is per controller, in memory.** Each controller allows
+its own window of attempts before a block, so N of them mean N times the attempts, and a
+failover clears the window. With a 12-character
 minimum and PBKDF2 at 600,000 iterations the remaining exposure is small, and moving the
 counter into the shared database would make the database a dependency of refusing a
 sign-in. Left as it is, deliberately.

@@ -74,19 +74,27 @@ reports five findings by design: the session cookie's `Secure` flag is a setting
 to be, for a reverse proxy terminating TLS), the git CLI is run with arguments ForgeSync
 builds, and the config and token files are read from paths the config gives.
 
-## Two controllers, one database
+## One controller, or three
 
-A pair of controllers share one PostgreSQL database and take a lease in it; whichever holds
-the lease does the work and the other serves the same pages, ready to take over. Which one
-should be acting is configured (`controller.priority`) and can be changed from the page of
-the controller you're looking at. Sessions and ForgeSync's own accounts live in that
-database too, so a failover doesn't sign anyone out.
+A machine is always the same thing: PostgreSQL, a controller and the git cache. Controllers
+share one database and take a lease in it; whichever holds the lease does the work and the
+rest serve the same pages, ready to take over. Which one should be acting is configured
+(`controller.priority`) and can be changed from the page of the controller you're looking
+at. Sessions and ForgeSync's own accounts live in that database too, so a failover doesn't
+sign anyone out.
+
+One machine is a fine place to start. A second gives you a controller that survives losing
+the first, though the database is still on one machine. **Three** is what makes the database
+redundant as well, for the same reason a Proxmox cluster wants three nodes: a majority of
+two is both of them, so a pair cannot promote safely. A fourth adds nothing to a quorum.
+[deploy/prod/README.md](deploy/prod/README.md) section 12 has the counts, where the machines
+should sit, and what a failover costs.
 
 ## The scripts
 
 | Script | What it does |
 |---|---|
-| `deploy/test/setup.sh` | Brings up the whole test environment: Forgejo nodes, SceneID (Keycloak), the database and one or two controllers. Safe to re-run. |
+| `deploy/test/setup.sh` | Brings up the whole test environment: Forgejo nodes, SceneID (Keycloak), the database and one, two or three controllers. Safe to re-run. |
 | `deploy/test/check-dismissal.sh` | Checks conflict dismissal end to end against a running environment: make a conflict ForgeSync can't settle, dismiss it, watch it stay dismissed, come back when it changes, and clear when it goes. |
 | `deploy/test/scale.sh` | `make N` / `drop`: many repositories on one node, for measuring what a round costs. |
 | `deploy/prod/backup.sh` | A dump of ForgeSync's database; `--verify` restores it into a scratch database and counts what came back. |

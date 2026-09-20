@@ -1264,7 +1264,7 @@ func TestPasswordHashing(t *testing.T) {
 	}
 }
 
-// Sessions are in the database so both controllers see them, and they
+// Sessions are in the database so every controller sees them, and they
 // end two ways: after their lifetime, and after long enough without a
 // request.
 func TestSessions(t *testing.T) {

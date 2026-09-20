@@ -4,8 +4,10 @@ ForgeSync runs as a plain systemd service on Debian, with no container needed. T
 path that was actually walked on a Debian 13 LXC while writing it: every command below was
 run, and what it printed is what's quoted.
 
-Two controllers, one PostgreSQL database, and the Forgejo nodes they look after. One
-controller does the work; the other serves the same pages and takes over when it stops.
+One or more controllers, one PostgreSQL database between them, and the Forgejo nodes they
+look after. One controller does the work; the rest serve the same pages and take over when
+it stops. Section 12 says how many machines to run and why the answer is one or three
+rather than two.
 
 | | |
 |---|---|
@@ -63,7 +65,7 @@ pg_lsclusters
 ```
 
 ForgeSync creates its own tables on first start and migrates them on every upgrade, under
-an advisory lock, so two controllers starting at once is safe.
+an advisory lock, so several controllers starting at once is safe.
 
 ## 3. The binaries
 
@@ -220,7 +222,7 @@ cp /etc/forgesync/secrets/admin.token /etc/prometheus/forgesync.token   # the sc
 # then merge prometheus/scrape.yml into your prometheus.yml
 ```
 
-The rules aggregate across both controllers rather than looking at one, because a standby
+The rules aggregate across the controllers rather than looking at one, because a standby
 correctly reports that it isn't leading -- an alert per instance would page you for that.
 The thresholds follow the settings they're about, named in a comment on each rule; the scan
 one assumes `inventory.interval: 30m` and wants changing with it.

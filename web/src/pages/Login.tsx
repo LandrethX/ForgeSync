@@ -6,7 +6,7 @@ import { formatDuration } from "../format";
  * Signing in to ForgeSync is a ForgeSync account. SceneID says who may
  * use the Forgejo nodes; the people who look after the controllers are a
  * different set, and their accounts live in ForgeSync's own database,
- * which both controllers share. The admin token stays as the break-glass
+ * which every controller shares. The admin token stays as the break-glass
  * way in, and is how the first account gets made.
  */
 export function Login({ onSignedIn }: { onSignedIn: (s: Session) => void }) {

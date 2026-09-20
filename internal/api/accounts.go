@@ -16,7 +16,7 @@ import (
 
 // ForgeSync's own accounts: people who sign in to the controllers
 // themselves, as opposed to the SceneID users who sign in to the Forgejo
-// nodes. They exist only in ForgeSync's database, which both controllers
+// nodes. They exist only in ForgeSync's database, which every controller
 // share, so an account made on either works on both -- and keeps working
 // when SceneID is the thing that's unreachable, which is when someone
 // most needs to get in. Nothing replicates them to a node; a node never

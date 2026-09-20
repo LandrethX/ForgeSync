@@ -15,7 +15,7 @@
 # It does not back up: the git cache under replication.work_dir (a
 # cache), the Forgejo nodes (whoever runs them backs those up), or the
 # secrets (they belong wherever your secrets live). Restoring is in
-# README.md; the short version is: stop both controllers, restore, start
+# README.md; the short version is: stop the controllers, restore, start
 # one.
 set -Eeuo pipefail
 

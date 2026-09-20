@@ -25,7 +25,7 @@ leader's failover tests.
 ## The test environment
 
 `deploy/test` brings up five Forgejo nodes, Keycloak standing in for SceneID, ForgeSync's
-PostgreSQL, a webhook sink and one or two controllers:
+PostgreSQL, a webhook sink and one, two or three controllers:
 
 ```sh
 cd deploy/test

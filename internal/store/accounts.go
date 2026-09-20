@@ -20,7 +20,7 @@ import (
 // Account is a ForgeSync account: someone who signs in to the controllers
 // themselves. They live in this database and nowhere else -- they aren't
 // Forgejo users, nothing replicates them to a node, and a node never
-// learns they exist. Both controllers share the database, so an account
+// learns they exist. Every controller shares the database, so an account
 // works on either one, which is the point: SceneID being unreachable, or
 // one controller being the broken thing, is exactly when someone needs to
 // sign in.

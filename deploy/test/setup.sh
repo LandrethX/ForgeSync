@@ -235,7 +235,7 @@ if [ -n "$THIRD" ]; then
   ok "third controller running on :8092 (forgesync-c)"
 fi
 
-# ForgeSync's own accounts live in its database, which both controllers
+# ForgeSync's own accounts live in its database, which every controller
 # share. The first one is made with the admin token, there being nobody to
 # make it otherwise; after that they're managed in the UI.
 admin_token=$(cat .tokens/admin.token)

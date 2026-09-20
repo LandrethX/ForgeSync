@@ -31,7 +31,7 @@ No secret is ever written to a log or returned by the API. A token reaches git t
 
 - **Authentication.** A bearer token (the CLI, counting as Administrator) or a session
   cookie. Sessions live in the shared database, so signing in on one controller signs you
-  in on both and a failover does not sign anyone out; the cookie is HttpOnly,
+  in on every one of them and a failover does not sign anyone out; the cookie is HttpOnly,
   SameSite=Strict and Secure unless `http.secure_cookies` is turned off for local
   development. Absolute lifetime 8 hours, idle timeout 30 minutes, and the idle clock only
   moves on a real request.

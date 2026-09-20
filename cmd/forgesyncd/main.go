@@ -273,7 +273,7 @@ func run(configPath string) error {
 			defer wg.Done()
 			recordController(ctx, db, holder, cfg, startedAt, log)
 		}()
-		// The health monitor runs on both controllers, so the standby's
+		// The health monitor runs on every controller, so a standby's
 		// pages are live too; only the leader writes what it finds (see
 		// leaderRecorder).
 		go func() { defer wg.Done(); monitor.Run(ctx) }()

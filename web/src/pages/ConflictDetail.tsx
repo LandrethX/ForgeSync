@@ -298,7 +298,7 @@ function Acknowledgement({
         <div className="dismiss">
           <h3>Not one for ForgeSync?</h3>
           <p className="muted small">
-            Some differences aren&rsquo;t ForgeSync&rsquo;s to settle &mdash; a
+            Some differences aren&rsquo;t ForgeSync&rsquo;s to settle: a
             secret it can&rsquo;t copy, a node you&rsquo;ve decided to leave as
             it is. Dismissing keeps the conflict and the note, and stops it
             being counted. It comes back if what it says changes, or if it

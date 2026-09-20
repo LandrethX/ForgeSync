@@ -100,7 +100,7 @@ refuses to work in a standby, which answers every read and accepts no write, rat
 reporting itself healthy while nothing is being replicated.
 
 That was measured, not reasoned about: `deploy/test/check-db-failover.sh` kills the primary of
-a two-server database under Patroni and watches both controllers through it. The leader stops
+a two-server database under Patroni and watches the controllers through it. The leader stops
 acting 8 to 9 seconds in, inside its 10 second lease and with nothing having taken over; a
 new primary is promoted about 20 seconds in; a controller is leading again 2 to 3 seconds
 after that; and the repositories, replicas and conflicts are the same on the other side. A

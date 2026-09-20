@@ -14,7 +14,7 @@ import (
 	"scenegit.org/forgesync/internal/auth"
 )
 
-// SessionStore is where sessions live: the database both controllers
+// SessionStore is where sessions live: the database every controller
 // share, so signing in on one and being served by the other works, and a
 // failover doesn't sign anyone out.
 type SessionStore interface {

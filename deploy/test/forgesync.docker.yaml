@@ -5,7 +5,7 @@
 #
 # The browser reaches the UI as http://forgesync.test:8090; add that name to
 # /etc/hosts next to the others (see README.md).
-# Two controllers can share this database: whichever holds the leadership
+# Any number of controllers can share this database: whichever holds the leadership
 # lease does the work and the other stands by. setup.sh --standby starts a
 # second one (forgesync-b) from this file; see README.md.
 controller:

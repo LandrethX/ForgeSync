@@ -35,7 +35,7 @@ groups:
         annotations:
           summary: Two ForgeSync controllers think they are leading
           description: >-
-            Check that both controllers share one database, and that their
+            Check that the controllers share one database, and that their
             clocks agree.
 
       - alert: ForgeSyncControllerDown

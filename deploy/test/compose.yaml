@@ -208,7 +208,7 @@ services:
     environment:
       # Empty unless check-db-failover.sh sets it, and then it names both
       # servers of the "ha" pair. It overrides database.url in the config
-      # file, so the two controllers move together without the generated
+      # file, so the controllers move together without the generated
       # config being rewritten.
       FORGESYNC_DATABASE_URL: ${FORGESYNC_DATABASE_URL:-}
     volumes:
@@ -253,7 +253,7 @@ services:
     environment:
       # Empty unless check-db-failover.sh sets it, and then it names both
       # servers of the "ha" pair. It overrides database.url in the config
-      # file, so the two controllers move together without the generated
+      # file, so the controllers move together without the generated
       # config being rewritten.
       FORGESYNC_DATABASE_URL: ${FORGESYNC_DATABASE_URL:-}
     volumes:
@@ -300,7 +300,7 @@ services:
     environment:
       # Empty unless check-db-failover.sh sets it, and then it names both
       # servers of the "ha" pair. It overrides database.url in the config
-      # file, so the two controllers move together without the generated
+      # file, so the controllers move together without the generated
       # config being rewritten.
       FORGESYNC_DATABASE_URL: ${FORGESYNC_DATABASE_URL:-}
     volumes:

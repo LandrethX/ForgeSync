@@ -754,7 +754,7 @@ func TestAStandbyServesThePagesButRefusesWrites(t *testing.T) {
 	f, admin := sessionAs(t, auth.Administrator)
 	f.srv.Leader = &fakeLeader{leader.State{Leading: false, Name: "forgesync-a", URL: "http://a:8090"}}
 
-	// Reading is the same on both controllers.
+	// Reading is the same on every controller.
 	if rec := f.do(req{path: "/api/v1/nodes", cookie: admin}); rec.Code != 200 {
 		t.Errorf("GET nodes = %d %s", rec.Code, rec.Body)
 	}

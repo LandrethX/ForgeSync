@@ -1,7 +1,7 @@
 # ForgeSync controller, production example.
 #
 # Copy this next to your secrets, change what's marked, and read
-# deploy/prod/README.md for how it's meant to be run: two controllers
+# deploy/prod/README.md for how it's meant to be run: one or three machines,
 # sharing one PostgreSQL database, each on its own host.
 #
 # Every secret is a file. ForgeSync never takes one from the config or

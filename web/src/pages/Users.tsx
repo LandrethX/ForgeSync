@@ -199,9 +199,8 @@ function AddUser({
         <p className="muted">
           People sign in with SceneID, so ForgeSync doesn&rsquo;t hold
           passwords. Adding someone here creates the account they would get at
-          their first sign-in &mdash; on every node at once, linked by their
-          SceneID subject &mdash; so they can be given access before they ever
-          visit.
+          their first sign-in (on every node at once, linked by their SceneID
+          subject), so they can be given access before they ever visit.
         </p>
       ) : (
         <form className="stack" onSubmit={add} noValidate>
@@ -212,8 +211,8 @@ function AddUser({
           </p>
           <p className="muted">
             This adds someone who uses the Forgejo nodes. ForgeSync&rsquo;s own
-            administrators are administrators of the controllers &mdash; their
-            role comes from SceneID and stays here &mdash; so they get no
+            administrators are administrators of the controllers (their role
+            comes from SceneID and stays here), so they get no
             account on a node, and the local accounts a node already has (its
             site admin, ForgeSync&rsquo;s service account) are never
             ForgeSync&rsquo;s to create.

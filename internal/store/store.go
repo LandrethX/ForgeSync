@@ -13,7 +13,7 @@ import (
 	"scenegit.org/forgesync/internal/health"
 )
 
-// Store is ForgeSync's state in PostgreSQL. Both controllers share one,
+// Store is ForgeSync's state in PostgreSQL. Every controller shares one,
 // which is what lets either of them serve and only one of them act.
 type Store struct {
 	pool *pgxpool.Pool

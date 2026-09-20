@@ -41,7 +41,7 @@ type Config struct {
 }
 
 // Controller is this controller's own identity in a ForgeSync installation.
-// Two controllers can share a database: one holds the leadership lease and
+// Controllers share a database: one holds the leadership lease and
 // does the work, the other stands by and takes over when the lease runs
 // out. Running a single controller needs none of this.
 type Controller struct {
@@ -292,7 +292,7 @@ func (h HTTP) HTTPSListen() string {
 	return h.Listen
 }
 
-// Database is ForgeSync's own PostgreSQL, which both controllers share.
+// Database is ForgeSync's own PostgreSQL, which every controller shares.
 type Database struct {
 	URL     string `yaml:"url"`
 	URLFile string `yaml:"url_file"`

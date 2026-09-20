@@ -223,7 +223,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // signInWithPassword signs in one of ForgeSync's own accounts. They're in
-// the database both controllers share, so it works on either, including
+// the database every controller shares, so it works on any of them, including
 // while SceneID is unreachable -- which is when it matters.
 func (s *Server) signInWithPassword(w http.ResponseWriter, r *http.Request, addr, username, password string) {
 	account, ok, err := s.DB.CheckPassword(r.Context(), username, password)

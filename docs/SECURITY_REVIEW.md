@@ -11,7 +11,8 @@ on 2026-09-20 against commit `335b066` plus the changes this review produced.
 | | |
 |---|---|
 | **Technology** | Go 1.27 (chi, pgx, cobra), React 19 + TypeScript + Vite, PostgreSQL 18, Alpine-based container, Docker Compose test environment |
-| **Change under review** | The whole codebase, before publication |
+| **Scope** | Whole codebase, not a diff: a first review before publication, so the system is classified by its highest exposure rather than by the most recent change |
+| **Change under review** | Every tracked file, including build, deployment, CI and script files |
 | **Exposure** | Internet-facing HTTP API and web application, plus webhook endpoints reachable by the Forgejo nodes |
 | **Data** | Site-admin API tokens for every node, account passwords, session material, an audit trail |
 | **Privilege** | A controller is the most privileged thing in a Forgejo installation: site-admin on every node, and able to act as any user |
@@ -32,7 +33,7 @@ all apply, and where a change touches several categories the highest one counts.
 | Unit and integration tests | `go test ./...` | **PASS**, 13 packages |
 | Database tests | `go test -p 1 ./internal/store ./internal/leader` against PostgreSQL | **PASS** |
 | UI tests | `vitest run` | **PASS**, 75 of 75 in 13 files |
-| Race detection | `go test -race` | **NOT RUN**: the review host has no C compiler, and the detector needs cgo. It is not part of `make check` either, so no run has ever covered it. Worth doing on a machine with a toolchain, since the controller is concurrent by design. |
+| Race detection | `go test -race` | **NOT RUN**. Reason: the review host has no C compiler and the detector needs cgo. Needs: any build host with a toolchain. Owner: whoever runs the release build. It is not part of `make check` either, so no run has ever covered it, and the controller is concurrent by design. |
 | Documentation | doc comments on exported declarations | **PASS** after this review: 467 of 467, up from 429 |
 
 ## Security
@@ -56,8 +57,31 @@ all apply, and where a change touches several categories the highest one counts.
 | Injection | Manual review of every SQL statement | **PASS**: every value is a placeholder; the only string building is placeholder names, and `ILIKE` input is escaped |
 | Cryptography | Manual review | **PASS**: PBKDF2-HMAC-SHA256 at 600,000 iterations, 16-byte salt, constant-time compare; session keys from `crypto/rand`, stored only as SHA-256; webhook HMAC compared with `hmac.Equal`; TLS 1.2 minimum |
 | Error handling and logging | Manual review | **PASS**: no secret is logged, and a server error answers with a generic message while the detail goes to the log |
-| Fuzzing | Go native fuzzing | **NOT RUN**: no parser of untrusted binary input. The one parser of outside data is a JSON webhook body behind an HMAC, and git's own output, parsed from `--porcelain`. Worth revisiting if ForgeSync ever parses a format itself. |
+| Fuzzing | Go native fuzzing | **NOT RUN**. Reason: nothing parses untrusted binary input. The only outside data parsed is a JSON webhook body behind an HMAC, and git's own `--porcelain` output. Needs: a parser worth fuzzing. Owner: revisit when ForgeSync parses a format itself. |
 | Tenant isolation | Not applicable | ForgeSync has no tenants and no per-user resources: access is by role alone, so BOLA and IDOR have no object to apply to. |
+
+## What ran
+
+| Tool | Version | Command |
+|---|---|---|
+| gosec | v2.29.0 | `gosec -quiet -exclude-dir=web ./...` |
+| semgrep | 1.176.1 | `semgrep scan --config=p/golang --config=p/javascript --config=p/security-audit --config=p/secrets` |
+| govulncheck | v1.8.0 (golang.org/x/vuln) | `govulncheck ./...` |
+| osv-scanner | v2.6.0 | `osv-scanner scan source -r .` |
+| gitleaks | v8.30.1 | `gitleaks dir .` and `gitleaks git .`, with `--config .gitleaks.toml` |
+| golangci-lint | v2.13.2 | `golangci-lint run ./...` |
+| staticcheck | 2026.2.1 | through golangci-lint |
+| shellcheck | 0.11.0 | `shellcheck -S warning $(git ls-files '*.sh')` |
+| hadolint | 2.15.1 | `hadolint Dockerfile` |
+| trivy | 0.74.0 | `trivy config .` and `trivy image forgesync:test` |
+| ZAP | zap-stable (2026-09) | `zap-baseline.py -t http://<controller>:8090 -I` |
+| Go | 1.27.1 | `go vet`, `go test`, `gofmt` |
+
+Two of these report no version of their own when installed from source, because their
+release process is what stamps one in; the versions above come from `go version -m`.
+
+Every fix below was re-tested by the check that found it, after rebuilding and
+redeploying, not in the source alone.
 
 ## Findings
 
@@ -138,6 +162,25 @@ of failure, nothing has been measured past 200 repositories, Actions secrets and
 package types whose registries need their own client cannot be replicated at all, and
 ForgeSync has not yet run in production. See `docs/LIMITATIONS.md`.
 
+## Publication readiness
+
+Run before the repository is made public, since publishing exposes every commit rather than
+the current tree.
+
+| Check | Result |
+|---|---|
+| Secrets over the full history | **PASS**, 71 commits, no findings |
+| Committed credentials are throwaway | **PASS**: `deploy/test/.env` and the realm JSON hold test-environment credentials, committed on purpose so the environment comes up without a ritual, and `CONTRIBUTING.md` says never to reuse them |
+| Internal addresses and topology | **PASS** after a change: the lab machine's address appeared in a script comment and a UI test fixture, and is now the documentation range `192.0.2.10`. The `*.test` hostnames are the compose network's own and are meant to be read |
+| Personal data, including commit metadata | **REVIEWED**: the history carries one author identity, which is the author's own and is published deliberately. Nothing else personal is in the tree |
+| Customer, vendor and ticket references | **PASS**, none |
+| Licence and copyright holder | **PASS**: Apache-2.0, Copyright 2026 Landreth, with `NOTICE` |
+| Third-party and vendored code | **PASS**: no vendored source. Dependencies are permissive (MIT, Apache-2.0, BSD-3), and no Forgejo code is included or linked |
+| Dependency and image scans current | **PASS**, against what is published |
+| Documentation honest about what is untested | **PASS**: `docs/LIMITATIONS.md` and `docs/PERFORMANCE.md` |
+| Security contact stated | **PASS**: `SECURITY.md` |
+| History rewrite verified | **PASS**: tree hash identical before and after, tag `v0.9.0` preserved, old refs cleared |
+
 ## Result
 
 **PASS with non-blocking findings.**
@@ -153,6 +196,12 @@ ForgeSync has not yet run in production. See `docs/LIMITATIONS.md`.
 Two checks are **NOT RUN** rather than passed: race detection, for want of a C compiler on
 the review host, and fuzzing, for want of anything to fuzz. Neither is recorded as a pass.
 
-No test or security control was weakened to reach this result. The one allowlist added
-(`.gitleaks.toml`) was tested by planting a credential in an allowlisted file and
-confirming the scan still reports it.
+No test or security control was weakened to reach this result.
+
+The one allowlist added (`.gitleaks.toml`) was verified rather than trusted. Its first
+version exempted the `phase0/results` paths, and a planted Forgejo token and a planted
+GitHub token in one of those files both went unreported: the scan still ran and still
+passed, and had stopped looking. It was rewritten to match the shape of the probe-generated
+usernames instead of the files that hold them, and re-tested: the planted Forgejo token is
+reported by the repository's own rule, the planted GitHub token by the default rules, and
+the real tree is still clean.

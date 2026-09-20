@@ -594,9 +594,11 @@ func (c *Config) validate() error {
 	if c.Inventory.BranchConcurrency < 1 || c.Inventory.BranchConcurrency > 32 {
 		errs = append(errs, errors.New("inventory.branch_concurrency must be 1 to 32"))
 	}
-	if len(c.Nodes) == 0 {
-		errs = append(errs, errors.New("nodes: at least one node is required"))
-	}
+	// No nodes here is not an error any more: they live in ForgeSync's
+	// database, so a fresh installation legitimately has none in this file
+	// and gets its first one from the admin UI. A controller that ends up
+	// with no nodes at all says so at startup, which is where that belongs
+	// now, because this file can no longer know.
 	seen := map[string]bool{}
 	for _, n := range c.Nodes {
 		if !nodeName.MatchString(n.Name) {

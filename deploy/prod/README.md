@@ -11,9 +11,37 @@ rather than two.
 
 | | |
 |---|---|
+| `install.sh` | does sections 1 to 7 of this file in one command |
 | `forgesync.yaml` | an annotated config; copy it and change what's marked |
 | `forgesyncd.service` | the systemd unit, with the usual hardening |
 | `backup.sh` | takes (and can verify) a dump of the database |
+
+## The short way
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/LandrethX/ForgeSync/main/deploy/prod/install.sh | bash
+```
+
+It asks whether this is the first ForgeSync machine. If it is not, it asks where the first
+one is and joins this one to it. `--first` and `--join <address>` answer in advance, which
+is what you want when it runs from a pipe with nothing to type into.
+
+Reading a script before running it as root is a reasonable habit, and this one is written to
+be read:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/LandrethX/ForgeSync/main/deploy/prod/install.sh
+less install.sh && bash install.sh
+```
+
+It builds from source on the machine, which costs less than it sounds on the usual 2 GB and
+16 GB container: about 48 seconds and 400 MB of build space, which it gives back at the end
+unless you pass `--keep-build`. Running it again is how you upgrade, and nothing already
+there is overwritten: secrets are made only when missing, the config only when missing, and
+the database role and database only when they do not exist.
+
+The rest of this file is what it does, in order, and is the reference when something needs
+doing by hand or looking at afterwards.
 
 ---
 

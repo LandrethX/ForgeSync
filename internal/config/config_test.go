@@ -288,3 +288,21 @@ func writeSelfSigned(t *testing.T, dir string) (certPath, keyPath string) {
 	keyPath = writeFile(t, dir, "key.pem", string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})))
 	return certPath, keyPath
 }
+
+// Nodes live in ForgeSync's database, so a config file with none is a
+// fresh installation waiting for its first node, not a broken one.
+func TestNoNodesIsAllowed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "forgesync.yaml")
+	if err := os.WriteFile(path, []byte("database: {url: postgres://x}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvDatabaseURL, "")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("a config with no nodes was refused: %v", err)
+	}
+	if len(cfg.Nodes) != 0 {
+		t.Errorf("got %d nodes", len(cfg.Nodes))
+	}
+}

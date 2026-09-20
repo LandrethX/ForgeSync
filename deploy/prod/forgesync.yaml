@@ -23,6 +23,23 @@ controller:
   # lost the database keeps acting. Renew defaults to a third of it.
   lease: 15s
 
+# The key that seals node tokens in ForgeSync's database, so a node can be
+# added from the admin UI instead of by editing this file on every
+# controller and restarting each of them. Every controller needs the same
+# key; the database never sees it.
+#
+#   install -d -o root -g forgesync -m 0750 /etc/forgesync/secrets
+#   openssl rand -hex 32 > /etc/forgesync/secrets/node-key
+#   chown root:forgesync /etc/forgesync/secrets/node-key
+#   chmod 0640 /etc/forgesync/secrets/node-key
+#
+# Copy the same file to every other controller. Back it up somewhere other
+# than the database dump, or the two are lost together; losing it means
+# entering the node tokens again, which is recoverable, unlike losing the
+# database. Leave this out and ForgeSync works as it always did: nodes come
+# from the list at the end of this file and their tokens from files.
+node_key_file: /etc/forgesync/secrets/node-key
+
 database:
   # The one thing to back up. Every controller uses the same database;
   # that's what pairs them.

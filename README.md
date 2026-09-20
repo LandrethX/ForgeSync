@@ -114,7 +114,7 @@ in co-operation with Hagar, TST. The repository is
 
 ## Licence
 
-Apache License 2.0; see [LICENSE](LICENSE). Copyright 2026 Landreth.
+Apache License 2.0; see [LICENSE](LICENSE).
 
 Forgejo itself is separate software under the GPL, version 3 or later, from v9 onward.
 ForgeSync neither includes nor links any of it: it is a client that speaks to a Forgejo

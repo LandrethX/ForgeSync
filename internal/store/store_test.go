@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1460,5 +1461,132 @@ func TestPingWantsTheServerThatTakesWrites(t *testing.T) {
 	}
 	if !errors.Is(err, ErrStandby) {
 		t.Fatalf("Open against a standby: %v, want ErrStandby", err)
+	}
+}
+
+// Nodes carry their credentials now, so a controller can be told about one
+// without a file being edited. The token is sealed before it gets here;
+// the store's job is only to keep the bytes and hand them back.
+func TestNodesCarryTheirCredentials(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sealed := []byte{0x01, 0x02, 0x03, 0xff, 0x00, 0x7f}
+	want := NodeRecord{Name: "se", URL: "http://se", Site: "SE", ServiceUser: "forgesync",
+		SceneIDSourceID: 3, SealedToken: sealed, Source: "api", AddedBy: "account:khav"}
+	if err := s.SaveNode(ctx, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Nodes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d nodes, want 1", len(got))
+	}
+	if got[0].Name != want.Name || got[0].URL != want.URL || got[0].Site != want.Site ||
+		got[0].ServiceUser != want.ServiceUser || got[0].SceneIDSourceID != want.SceneIDSourceID ||
+		got[0].Source != want.Source || got[0].AddedBy != want.AddedBy {
+		t.Errorf("node came back as %+v, want %+v", got[0], want)
+	}
+	if !bytes.Equal(got[0].SealedToken, sealed) {
+		t.Errorf("sealed token came back as %v, want %v", got[0].SealedToken, sealed)
+	}
+
+	// Changing the address must not mean re-entering the token.
+	moved := want
+	moved.URL = "http://se-new"
+	moved.SealedToken = nil
+	if err := s.SaveNode(ctx, moved); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Nodes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].URL != "http://se-new" {
+		t.Errorf("url is %q after the move", got[0].URL)
+	}
+	if !bytes.Equal(got[0].SealedToken, sealed) {
+		t.Error("saving without a token cleared the one that was there")
+	}
+
+	// A node registered the old way has no token of its own, which is how
+	// a controller knows to keep reading the config file for it.
+	if err := s.SyncNodes(ctx, []NodeRecord{{Name: "dk", URL: "http://dk", Site: "DK"}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Nodes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range got {
+		if n.Name == "dk" && n.SealedToken != nil {
+			t.Error("a node from the config file came back with a sealed token")
+		}
+	}
+}
+
+func TestRetiringANodeKeepsItsHistory(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncNodes(ctx, []NodeRecord{{Name: "se", URL: "http://se"}, {Name: "dk", URL: "http://dk"}}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := s.RecordNodeStatus(ctx, health.Status{Node: "dk", State: health.Healthy, LastChecked: now}, health.Unknown); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RetireNode(ctx, "dk"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Nodes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "se" {
+		t.Fatalf("after forgetting dk the nodes are %+v", got)
+	}
+	states, err := s.NodeStates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := states["dk"]; ok {
+		t.Error("dk's health row outlived the node")
+	}
+
+	// The history is not the node list: what dk did is still on record.
+	events, _, err := s.History(ctx, EventFilter{Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawDK bool
+	for _, e := range events {
+		if e.Category == "node" && e.Target == "dk" {
+			sawDK = true
+		}
+	}
+	if !sawDK {
+		t.Error("retiring dk erased its health history")
+	}
+
+	// Adding it again brings it back rather than making a second one.
+	if err := s.SaveNode(ctx, NodeRecord{Name: "dk", URL: "http://dk", Site: "DK"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Nodes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("after adding dk again there are %d nodes, want 2", len(got))
+	}
+	if err := s.RetireNode(ctx, "nothing-like-this"); err == nil {
+		t.Error("retiring a node that isn't there was accepted")
 	}
 }

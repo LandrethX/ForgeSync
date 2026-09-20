@@ -38,6 +38,12 @@ type Config struct {
 	Replication Replication `yaml:"replication"`
 	Webhooks    Webhooks    `yaml:"webhooks"`
 	Nodes       []Node      `yaml:"nodes"`
+	// NodeKeyFile holds the key that seals node tokens in the database, so
+	// a node can be added from the admin UI instead of by editing this
+	// file on every controller. Every controller needs the same key, and
+	// the database never sees it. Without it ForgeSync works exactly as it
+	// did: nodes come from the list below and their tokens from files.
+	NodeKeyFile string `yaml:"node_key_file"`
 }
 
 // Controller is this controller's own identity in a ForgeSync installation.
@@ -434,6 +440,10 @@ func (c *Config) resolveSecrets(dir string) error {
 			return fmt.Errorf("http.admin_token_file: %w", err)
 		}
 	}
+	// The node key is not read here either: only the controller that
+	// actually opens sealed tokens needs it, and it says so itself when
+	// the key is missing or wrong.
+	c.NodeKeyFile = againstConfig(dir, c.NodeKeyFile)
 	// The certificate and key aren't read here: they're re-read on every
 	// reload, so only their paths are settled.
 	c.HTTP.TLSCertFile = againstConfig(dir, c.HTTP.TLSCertFile)

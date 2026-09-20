@@ -17,7 +17,8 @@ hosts themselves.
 
 | Secret | Where it lives | What it can do |
 |---|---|---|
-| Node tokens | Files named in the config, read at startup | Everything on that Forgejo node |
+| Node tokens | A file named in the config, or sealed in the database with the node key | Everything on that Forgejo node |
+| Node key | A file named by `node_key_file`, the same on every controller | Opens the node tokens in the database |
 | Admin token | A file named in the config | The whole admin API, as Administrator |
 | Webhook secret | A file named in the config | Per-node secrets are derived from it |
 | Database URL | A file, or `FORGESYNC_DATABASE_URL` | All of ForgeSync's state |
@@ -26,6 +27,13 @@ hosts themselves.
 
 No secret is ever written to a log or returned by the API. A token reaches git through an
 `http.extraHeader` set in the environment, never in a command line and never on disk.
+
+A node's token is written down only when the node is kept in the database, and then it is
+sealed with AES-256-GCM under the node key, which the controllers hold and the database
+never sees. That is what keeps a dump, a nightly backup, a streaming standby or a restore
+into a scratch database from being a set of site-admin tokens for every node. Somebody who
+has a controller already has those tokens, because it is using them; the key adds nothing
+against them and is not meant to.
 
 ## How the interface is protected
 

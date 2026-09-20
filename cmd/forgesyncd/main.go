@@ -27,7 +27,9 @@ import (
 	"scenegit.org/forgesync/internal/inventory"
 	"scenegit.org/forgesync/internal/issues"
 	"scenegit.org/forgesync/internal/leader"
+	"scenegit.org/forgesync/internal/nodes"
 	"scenegit.org/forgesync/internal/replication"
+	"scenegit.org/forgesync/internal/secret"
 	"scenegit.org/forgesync/internal/store"
 	"scenegit.org/forgesync/internal/webhook"
 	"scenegit.org/forgesync/internal/webui"
@@ -55,7 +57,7 @@ func run(configPath string) error {
 		return err
 	}
 	log := newLogger(cfg.Log)
-	log.Info("starting forgesyncd", "version", buildinfo.Version, "commit", buildinfo.Commit, "nodes", len(cfg.Nodes))
+	log.Info("starting forgesyncd", "version", buildinfo.Version, "commit", buildinfo.Commit)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -85,6 +87,24 @@ func run(configPath string) error {
 	log.Info("controller", "name", cfg.Controller.Name, "url", cfg.Controller.URL,
 		"lease", cfg.Controller.Lease, "renew", cfg.Controller.Renew, "priority", cfg.Controller.Priority)
 
+	// Which nodes this installation has. They live in the database now, so
+	// adding one is a single write every controller sees; a config file
+	// that still lists them is taken across the first time a controller
+	// looks, which is what carries an existing installation over.
+	var nodeKey *secret.Key
+	if cfg.NodeKeyFile != "" {
+		if nodeKey, err = secret.LoadKey(cfg.NodeKeyFile); err != nil {
+			return err
+		}
+	}
+	installed, err := nodes.Resolve(ctx, db, nodeKey, cfg.Nodes, log)
+	if err != nil {
+		return err
+	}
+	if len(installed) == 0 {
+		log.Warn("no nodes: nothing to keep in sync until one is added")
+	}
+
 	var records []store.NodeRecord
 	var infos []api.NodeInfo
 	var targets []health.Target
@@ -95,12 +115,13 @@ func run(configPath string) error {
 	var hookTargets []webhook.Target
 	var issueNodes []issues.Node
 	serviceUsers := map[string]string{}
-	for _, n := range cfg.Nodes {
+	for _, n := range installed {
 		client, err := forgejo.New(n.URL, n.Token, nil)
 		if err != nil {
 			return fmt.Errorf("node %s: %w", n.Name, err)
 		}
-		records = append(records, store.NodeRecord{Name: n.Name, URL: n.URL, Site: n.Site})
+		records = append(records, store.NodeRecord{Name: n.Name, URL: n.URL, Site: n.Site,
+			ServiceUser: n.ServiceUser, SceneIDSourceID: n.SceneIDSourceID})
 		infos = append(infos, api.NodeInfo{Name: n.Name, URL: n.URL, Site: n.Site})
 		targets = append(targets, health.Target{Name: n.Name, ServiceUser: n.ServiceUser, Client: client})
 		scanTargets = append(scanTargets, inventory.Target{Name: n.Name, Client: client, SceneIDSourceID: n.SceneIDSourceID})

@@ -94,11 +94,36 @@ environment, so none of them reaches a process list, a log or a core dump:
 printf 'postgres://forgesync:%s@127.0.0.1:5433/forgesync?sslmode=disable' "$PW" \
   > /etc/forgesync/secrets/database.url
 openssl rand -hex 32 > /etc/forgesync/secrets/admin.token
+# the key that seals node tokens in the database (see below):
+openssl rand -hex 32 > /etc/forgesync/secrets/node-key
 # one API token per Forgejo node, from a site-admin account called forgesync there:
 printf '%s' "$SE_TOKEN" > /etc/forgesync/secrets/se.token
 chown root:forgesync /etc/forgesync/secrets/*
 chmod 0640 /etc/forgesync/secrets/*
 ```
+
+### The node key
+
+Nodes live in ForgeSync's database, so adding one is a single write every controller sees
+rather than a file edited on each machine and a restart of each. The token that comes with
+a node is the one secret that then has to be written down, and it is sealed with this key
+before it goes in: the database holds ciphertext, and the key is only ever on the
+controllers' disks.
+
+Three things follow, and all three matter:
+
+- **Every controller needs the same key file.** Copy it when you set the second and third
+  machines up (section 12). A controller with the wrong key cannot open the tokens and says
+  so at startup rather than running with fewer nodes than the installation has.
+- **Back it up somewhere other than the database dump**, or the two are lost together and
+  the backup is worth less than it looks. A password manager or a sealed envelope is fine;
+  it is 32 bytes.
+- **Losing it is recoverable**, unlike losing the database: enter the node tokens again and
+  ForgeSync seals them under a new key. That is a bad afternoon, not a disaster.
+
+Leaving `node_key_file` out is allowed and changes nothing: nodes then come from the config
+file and their tokens from the files above, exactly as they always did. Adding a node from
+the UI is what needs the key.
 
 ## 5. The config
 

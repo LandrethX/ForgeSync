@@ -298,3 +298,84 @@ Repeated here because this is the last gate before the repository becomes public
 - Licence, `NOTICE` and the security contact are unchanged and present.
 - `docs/LIMITATIONS.md` was updated by this change and remains honest about what has not
   been run.
+
+---
+
+# Gate: node credentials in the database
+
+Run on 2026-09-20 against the working tree on top of commit `878c720`, before committing.
+
+## Classification
+
+| | |
+|---|---|
+| **Scope** | The uncommitted diff |
+| **Change under review** | `internal/secret` (AES-256-GCM sealing of node tokens), `internal/nodes` (which nodes an installation has), migration 0033, `store.Nodes/SaveNode/RetireNode`, the `node_key_file` config option, and the startup path that uses them |
+| **Exposure** | Not reachable from the network: this is startup and storage. The admin API and UI that will let somebody add a node are not in this change |
+| **Data** | **Site-admin API tokens for every Forgejo node**, and the key that seals them |
+| **Privilege** | A node token is site-admin on that Forgejo; the key opens every one of them |
+| **Level** | **LEVEL 4, critical security code.** The escalation rules fire on cryptography, credential storage and secrets management. |
+
+## Result
+
+| Check | Tool | Result |
+|---|---|---|
+| Formatting | `gofmt -l` | **PASS** |
+| Static checks | `go vet ./...` | **PASS** |
+| Lint | `golangci-lint run` | **PASS**, 0 issues |
+| Tests | `go test ./...` | **PASS**, 15 packages (2 new) |
+| Database tests | `go test -p 1 ./internal/store ./internal/leader` | **PASS** |
+| New behaviour | `internal/secret`, `internal/nodes` tests | **PASS**: round trip, fresh nonce per seal, wrong key refused, tampering and truncation refused, key size enforced, 0600 on generate, refusal to overwrite a key, hex and base64 accepted; and for resolution, config carried across, sealed node needs no config entry, every unusable node an error rather than an omission |
+| Behaviour, end to end | five live nodes, three controllers | **PASS**: migration applied, all five nodes carried across unsealed, all healthy, 3 repositories and 12 replicas unchanged |
+| SAST | `gosec` | **PASS with findings**: 18, the baseline 16 plus 2 of an already-accepted class (below) |
+| SAST, second opinion | `semgrep p/golang p/security-audit p/secrets` | **PASS**: the same 3 as the baseline, none in the new code, and nothing from the crypto or secrets rules |
+| Dependency vulnerabilities | `govulncheck ./...` | **PASS**, none. `go.mod` is unchanged: the sealing is standard library only, so this adds no supply chain at all |
+| Secrets, working tree | `gitleaks dir .` | **PASS**, no leaks |
+| Secrets, history | `gitleaks git .` | **PASS**, no leaks |
+| Cryptographic review | by hand, below | **PASS** |
+| DAST | not run | **NOT APPLICABLE**: no HTTP surface changed. It applies to the next change, which adds the endpoints |
+| Race detection | `go test -race` | **NOT RUN**. Reason: still no C compiler on this host. Needs: a build host with a toolchain. Owner: whoever runs the release build. Third consecutive review with this gap |
+
+## Cryptographic review
+
+Taken deliberately, because a scanner passing is not the same as the construction being right.
+
+- **Algorithm**: AES-256-GCM through `crypto/cipher`, an established AEAD. Nothing invented.
+- **Key**: 32 bytes, enforced, from `crypto/rand`. `GenerateKey` writes 0600 and refuses to
+  overwrite an existing key, because replacing one silently would leave every sealed token
+  unopenable.
+- **Nonce**: 12 bytes from `crypto/rand`, fresh for every seal, carried in front of the
+  ciphertext in the standard Go idiom. Reuse is what breaks GCM, and random 96-bit nonces
+  are safe well past any number of seals this can perform: a node's token is sealed when the
+  node is added and when its token is replaced, so a busy installation might do it dozens of
+  times in its life.
+- **Authentication**: GCM authenticates, and the tests confirm a flipped byte at the front,
+  the middle and the end, and a truncated value, are all refused rather than decrypted.
+- **Errors**: one `ErrWrongKey` for a wrong key, a truncated value and a tampered one. The
+  caller can do nothing different about any of them, and telling them apart would be an
+  oracle.
+- **Additional data**: none. Binding a sealed token to its node's name was considered and
+  declined: it would stop somebody with write access to the database moving a token from one
+  node's row to another's, but that same access can simply point a node at a server they
+  control, which gets them the token either way. The mitigation is that ForgeSync's database
+  is a trusted component, which is why the sealing is aimed at *copies* of it (dumps,
+  backups, standbys, verification restores) and not at somebody who has the live one.
+- **Concurrency**: `cipher.AEAD` is safe for concurrent use, which is what the type's
+  documentation promises and what the comment on `Key` claims.
+
+## Findings
+
+**`gosec` G304 x2, reading the node key from a path in the config.** Accepted, and the same
+class the baseline already accepts for the config and token files: "from paths the config
+gives". The path comes from `node_key_file`, which only whoever writes the config file can
+set, and that is already the most privileged thing about the installation.
+
+**Nothing else new.** The other 16 `gosec` findings and all 3 `semgrep` findings are the
+baseline's, unchanged and none in the new code.
+
+## What this change deliberately does not do yet
+
+The admin API and UI that let somebody add a node are not here, and neither is picking a new
+node up without a restart. Until they are, `node_key_file` is optional and changes nothing:
+an installation that does not set it keeps its nodes in the config file with their tokens in
+files, which is what every existing installation does and what the end-to-end run confirmed.

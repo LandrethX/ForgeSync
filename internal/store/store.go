@@ -70,6 +70,21 @@ type NodeRecord struct {
 	Name string
 	URL  string
 	Site string
+	// ServiceUser is the local admin the token belongs to, and
+	// SceneIDSourceID the id of the SceneID login source on that node.
+	ServiceUser     string
+	SceneIDSourceID int64
+	// SealedToken is the node's API token, sealed with the controller's
+	// node key (internal/secret). Nil means this node's token still comes
+	// from the config file.
+	SealedToken []byte
+	// Source is 'config' or 'api', for people reading the table; AddedBy
+	// names who added one through the API.
+	Source  string
+	AddedBy string
+	// RemovedAt is set on a node that has been retired. Nodes() leaves
+	// those out; nothing watches, scans or replicates to one.
+	RemovedAt *time.Time
 }
 
 // SyncNodes registers the configured nodes, updating URL and site of
@@ -83,12 +98,92 @@ func (s *Store) SyncNodes(ctx context.Context, nodes []NodeRecord) error {
 	defer tx.Rollback(ctx)
 	for _, n := range nodes {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO nodes (name, url, site) VALUES ($1, $2, $3)
-			ON CONFLICT (name) DO UPDATE SET url = EXCLUDED.url, site = EXCLUDED.site, updated_at = now()`,
-			n.Name, n.URL, n.Site)
+			INSERT INTO nodes (name, url, site, service_user, sceneid_source_id)
+			VALUES ($1, $2, $3, COALESCE(NULLIF($4, ''), 'forgesync'), $5)
+			ON CONFLICT (name) DO UPDATE SET
+				url = EXCLUDED.url, site = EXCLUDED.site,
+				service_user = EXCLUDED.service_user,
+				sceneid_source_id = EXCLUDED.sceneid_source_id,
+				updated_at = now()`,
+			n.Name, n.URL, n.Site, n.ServiceUser, n.SceneIDSourceID)
 		if err != nil {
 			return fmt.Errorf("register node %s: %w", n.Name, err)
 		}
+	}
+	return tx.Commit(ctx)
+}
+
+// Nodes is every node ForgeSync knows, in name order. Whichever of them
+// carry a sealed token are the ones that no longer need the config file.
+func (s *Store) Nodes(ctx context.Context) ([]NodeRecord, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT name, url, site, service_user, sceneid_source_id, sealed_token, source, added_by
+		FROM nodes WHERE removed_at IS NULL ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []NodeRecord
+	for rows.Next() {
+		var n NodeRecord
+		if err := rows.Scan(&n.Name, &n.URL, &n.Site, &n.ServiceUser, &n.SceneIDSourceID,
+			&n.SealedToken, &n.Source, &n.AddedBy); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// SaveNode writes a node with its credentials, adding it or updating what
+// is there. A nil SealedToken leaves whatever token the row already has,
+// so changing a node's address doesn't mean re-entering its token.
+func (s *Store) SaveNode(ctx context.Context, n NodeRecord) error {
+	if n.ServiceUser == "" {
+		n.ServiceUser = "forgesync"
+	}
+	if n.Source == "" {
+		n.Source = "config"
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO nodes (name, url, site, service_user, sceneid_source_id, sealed_token, source, added_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (name) DO UPDATE SET
+			url = EXCLUDED.url, site = EXCLUDED.site, service_user = EXCLUDED.service_user,
+			sceneid_source_id = EXCLUDED.sceneid_source_id,
+			sealed_token = COALESCE(EXCLUDED.sealed_token, nodes.sealed_token),
+			source = EXCLUDED.source, added_by = EXCLUDED.added_by,
+			removed_at = NULL, updated_at = now()`,
+		n.Name, n.URL, n.Site, n.ServiceUser, n.SceneIDSourceID, n.SealedToken, n.Source, n.AddedBy)
+	if err != nil {
+		return fmt.Errorf("save node %s: %w", n.Name, err)
+	}
+	return nil
+}
+
+// RetireNode takes a node out of the installation: nothing watches, scans
+// or replicates to it any more, and its current health is forgotten.
+//
+// The row stays. Its health transitions are part of the history, which
+// nothing may edit, and they point at it; and what ForgeSync learned about
+// repositories there is worth keeping, because a node taken out and put
+// back should not come back a stranger. SaveNode clears the mark.
+func (s *Store) RetireNode(ctx context.Context, name string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `UPDATE nodes SET removed_at = now(), updated_at = now()
+		WHERE name = $1 AND removed_at IS NULL`, name)
+	if err != nil {
+		return fmt.Errorf("retire node %s: %w", name, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("retire node %s: no such node", name)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM node_status WHERE node = $1`, name); err != nil {
+		return fmt.Errorf("retire node %s: %w", name, err)
 	}
 	return tx.Commit(ctx)
 }

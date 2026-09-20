@@ -102,6 +102,27 @@ was decided (an account, the admin token), and `Actor()` is how it appears in th
 log. `RoleMapping` resolves a role from a configurable OIDC claim, including dotted
 paths, for installations that map SceneID groups onto ForgeSync roles.
 
+### `internal/secret`
+
+Seals the one value ForgeSync has to store but must not store in the clear: a node's API
+token, which is site-admin on that Forgejo. AES-256-GCM under a key each controller holds
+on disk and the database never sees, with a fresh nonce per seal carried in front of the
+ciphertext. `LoadKey` takes hex or base64, so `openssl rand -hex 32` works; `GenerateKey`
+writes one at 0600 and refuses to overwrite, because replacing a key silently would leave
+every sealed token unopenable. `Open` returns the same `ErrWrongKey` for a wrong key, a
+truncated value and a tampered one, since the caller can do nothing different about any of
+them.
+
+### `internal/nodes`
+
+Settles which Forgejo nodes an installation has. `Resolve` reads them from the database,
+takes across anything the config file lists that the database hasn't got (which is what
+carries an existing installation over, on the first start, without anybody doing anything),
+and opens each sealed token with the node key. A node whose token cannot be found or opened
+is an error, never a node quietly left out: running with fewer nodes than the installation
+has is how replication stops without anybody noticing. A node still taking its token from a
+file follows what the file says, so correcting an address there keeps working.
+
 ### `internal/store`
 
 Every piece of ForgeSync's own state, in PostgreSQL through pgx. Migrations are embedded
@@ -110,7 +131,7 @@ migration is never edited, a new one is added.
 
 | Area | Entry points | Tables |
 |---|---|---|
-| Nodes and scans | `SyncNodes`, `NodeStates`, `RecordNodeStatus`, `NodeScans`, `RecordNodeScanFailure` | `nodes`, `node_state_transitions`, `inventory_scans` |
+| Nodes and scans | `Nodes`, `SaveNode`, `RetireNode`, `SyncNodes`, `NodeStates`, `RecordNodeStatus`, `NodeScans`, `RecordNodeScanFailure` | `nodes`, `node_state_transitions`, `inventory_scans` |
 | Repositories | `RecordNodeScan`, `RecordRepoObservation`, `Repositories`, `Repository`, `DetectRenames`, `SetPrimary` | `repositories`, `repository_replicas`, `repository_aliases`, `repository_archives` |
 | Users | `Users`, `SetUserHome`, `AssignPrimaries` support | `users`, `user_accounts`, `created_accounts` |
 | Conflicts | `SyncConflicts`, `Conflicts`, `AcknowledgeConflict`, `DismissConflict`, `ReopenConflict` | `conflicts` |

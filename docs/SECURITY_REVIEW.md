@@ -205,3 +205,95 @@ passed, and had stopped looking. It was rewritten to match the shape of the prob
 usernames instead of the files that hold them, and re-tested: the planted Forgejo token is
 reported by the repository's own rule, the planted GitHub token by the default rules, and
 the real tree is still clean.
+
+---
+
+# Gate: the database failover change
+
+Run on 2026-09-20 against the working tree on top of commit `5d203e7`, before committing
+and before the first push to a public remote.
+
+## Classification
+
+| | |
+|---|---|
+| **Scope** | The uncommitted diff, plus the publication-readiness checks over the whole tree and the whole history, because the repository is about to be published |
+| **Change under review** | `store.Ping` asks the server whether it is a standby (`pg_is_in_recovery`) and `Open` refuses one; every database read in the metrics handler shares one short budget; a test-only PostgreSQL-under-Patroni image and compose profile; an end-to-end failover check; documentation |
+| **Exposure** | Authenticated HTTP endpoints (`/metrics`, `/readyz`, `/api/v1/overview`) on an internet-facing controller; the new container and compose services are test-environment only |
+| **Data** | A database connection string; no new handling of tokens, passwords or session material |
+| **Privilege** | Unchanged. Nothing touches authentication, authorisation, sessions, cryptography or secret storage |
+| **Level** | **LEVEL 3, exposed code.** The escalation rules for authentication, authorisation, cryptography and secrets do not fire; the changed code is reached through an exposed API, and Docker and Compose definitions changed, so the container and IaC checks apply. |
+
+## Result
+
+| Check | Tool | Result |
+|---|---|---|
+| Formatting | `gofmt -l` | **PASS**, no files |
+| Static checks | `go vet ./...` | **PASS** |
+| Lint | `golangci-lint run` | **PASS**, 0 issues |
+| Types (UI) | `tsc --noEmit` | **PASS** |
+| Tests | `go test ./...` | **PASS**, 13 packages |
+| Database tests | `go test -p 1 ./internal/store ./internal/leader` | **PASS** |
+| UI tests | `vitest run` | **PASS**, 75 of 75 |
+| Behaviour, end to end | `deploy/test/check-db-failover.sh` | **PASS** against the five live nodes: a killed primary and a planned switchover, nothing lost either time |
+| SAST | `gosec` | **PASS with findings**: the same 16 as the full review, none in the changed code |
+| SAST, second opinion | `semgrep p/golang p/security-audit` | **PASS with findings**: the same 3, none in the changed code |
+| Dependency vulnerabilities | `govulncheck ./...` | **PASS**, none |
+| Secrets, working tree | `gitleaks dir .` | **PASS**, no leaks |
+| Secrets, history | `gitleaks git .` | **PASS**, 69 commits, no leaks |
+| Allowlist verification | planted credential | **PASS**, reported by the repository's own rule |
+| Shell | `shellcheck` at default severity | **PASS**, 0 findings in the new scripts |
+| Dockerfile | `hadolint` | **PASS with findings**: DL3008 accepted, as DL3018 already is |
+| IaC and configuration | `trivy config deploy/test` | **PASS after remediation**: one low fixed, one high reviewed as a false positive |
+| Container image, product | `trivy image forgesync:test` | **PASS**, no vulnerabilities |
+| Container image, test-only | `trivy image forgesync-patroni:test` | **PASS with findings**: inherited from `postgres:18`, see below |
+| DAST | `zap-baseline.py` against the running controller | **PASS**: 0 failures, 65 passes, 2 informational |
+| Race detection | `go test -race` | **NOT RUN**. Reason: still no C compiler on this host. Needs: a build host with a toolchain. Owner: whoever runs the release build. Second consecutive review with this gap, and the controller is concurrent by design. |
+
+## Findings
+
+**The test-only Patroni image carries the vulnerabilities of its base.**
+`forgesync-patroni:test` is built from `postgres:18` (Debian 13) and reports 1 critical and
+80 high in the operating system layer, plus 1 critical and 21 high in `gosu`, a Go binary
+the official PostgreSQL image ships. Two things bound it. It is **test-environment only**:
+`deploy/test` builds it for `check-db-failover.sh`, it is never published, never shipped and
+never runs anywhere but a throwaway compose network. And the same `gosu` findings are
+already present in `postgres:18-alpine`, which the test environment used before this change,
+so the delta is the Debian package layer. The two criticals are a `libxml2` denial of service
+with no fix available upstream, in an image that parses no untrusted XML, and a TLS session
+resumption flaw in `gosu`, which makes no TLS connections and exists only to drop privileges
+at startup. The product image, `forgesync:test`, still reports nothing at all. Accepted as
+test-only; moving it to an Alpine base would need Patroni's PostgreSQL driver built against
+musl, and would buy nothing outside the test environment.
+
+**`trivy` DS-0002, no `USER` in the Patroni Dockerfile.** A false positive, verified rather
+than argued: the entrypoint starts as root only to take ownership of the data volume and
+then `exec gosu postgres patroni`, which is what the official PostgreSQL image does.
+`gosu postgres id` in the built image reports uid 999, and the long-running process is that
+user. A static scanner cannot see the drop. Documented in the Dockerfile itself.
+
+**`trivy` DS-0026, no `HEALTHCHECK`. Fixed and re-tested.** A `HEALTHCHECK` running
+`pg_isready` was added, the image rebuilt, and `trivy config` re-run: 26 of 27 tests pass
+where 25 did, and the finding is gone. `docker inspect` confirms the healthcheck is in the
+built image.
+
+**`hadolint` DL3008, unpinned `apt-get install`.** Accepted for the same reason DL3018 is
+accepted on the product image: pinning Debian package versions makes the build fail when a
+version ages out of the archive, which is a worse failure than the one it prevents. The base
+image and the Patroni version are both pinned, and the result is scanned.
+
+## Publication readiness
+
+Repeated here because this is the last gate before the repository becomes public.
+
+- Secret scanning covered the working tree **and all 69 commits**: no leaks.
+- The allowlist was verified by planting a Forgejo-token-shaped credential in a file the
+  allowlist covers. It was reported. The allowlist matches a string shape, not a path.
+- The credentials committed on purpose (`deploy/test/.env`, the realm JSON) are throwaway
+  test values and the file says so. This change adds one more,
+  `FORGESYNC_DB_REPLICATION_PASSWORD`, in the same file under the same warning.
+- No internal hostname or address is in the tracked tree; the test environment is addressed
+  through `PUBLIC_HOST`.
+- Licence, `NOTICE` and the security contact are unchanged and present.
+- `docs/LIMITATIONS.md` was updated by this change and remains honest about what has not
+  been run.

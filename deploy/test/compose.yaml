@@ -86,8 +86,9 @@ services:
       start_period: 20s
 
   forgesync-db:
-    # ForgeSync's own state database (not Forgejo's). The controller runs on
-    # the Mac and connects to localhost:5432.
+    # ForgeSync's own state database (not Forgejo's): one server, which is
+    # what the environment runs on unless check-db-failover.sh puts the two
+    # under "ha" below in its place.
     image: postgres:${POSTGRES_VERSION}
     environment:
       POSTGRES_USER: forgesync
@@ -102,6 +103,84 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+  # The same state database, arranged so that losing one server isn't
+  # losing the database: two PostgreSQL servers in streaming replication
+  # with Patroni deciding which of them is the primary, and etcd holding
+  # that decision. Started only by check-db-failover.sh (profile "ha");
+  # nothing else in the environment refers to it.
+  #
+  # Nothing fronts them. The controllers are given both addresses and
+  # target_session_attrs=read-write, so each connection goes to whichever
+  # server will accept a write, which is what a promotion changes.
+  etcd:
+    profiles: [ha]
+    image: quay.io/coreos/etcd:${ETCD_VERSION}
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --initial-cluster=etcd=http://etcd:2380
+      - --initial-cluster-state=new
+    volumes:
+      - etcd:/etcd-data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/etcdctl", "endpoint", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  forgesync-db-a: &patroni
+    profiles: [ha]
+    build:
+      context: ./patroni
+      args:
+        POSTGRES_VERSION: ${PATRONI_POSTGRES_VERSION}
+        PATRONI_VERSION: ${PATRONI_VERSION}
+    image: forgesync-patroni:test
+    restart: unless-stopped
+    depends_on:
+      etcd:
+        condition: service_healthy
+    environment: &patroni-env
+      PATRONI_NAME: forgesync-db-a
+      PATRONI_RESTAPI_CONNECT_ADDRESS: forgesync-db-a:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: forgesync-db-a:5432
+      PATRONI_SUPERUSER_USERNAME: forgesync
+      PATRONI_SUPERUSER_PASSWORD: ${FORGESYNC_DB_PASSWORD}
+      PATRONI_REPLICATION_USERNAME: replicator
+      PATRONI_REPLICATION_PASSWORD: ${FORGESYNC_DB_REPLICATION_PASSWORD}
+      FORGESYNC_DB_NAME: forgesync
+    volumes:
+      - forgesync-db-a:/var/lib/postgresql/data
+    ports:
+      # PostgreSQL and Patroni's own REST API, for psql and the check
+      # script. The controllers reach both over the compose network.
+      - "127.0.0.1:5443:5432"
+      - "127.0.0.1:8008:8008"
+    healthcheck: &patroni-health
+      test: ["CMD-SHELL", "pg_isready -U forgesync -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+
+  forgesync-db-b:
+    <<: *patroni
+    environment:
+      <<: *patroni-env
+      PATRONI_NAME: forgesync-db-b
+      PATRONI_RESTAPI_CONNECT_ADDRESS: forgesync-db-b:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: forgesync-db-b:5432
+    volumes:
+      - forgesync-db-b:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5444:5432"
+      - "127.0.0.1:8009:8008"
+    healthcheck: *patroni-health
 
   forgesync:
     # The ForgeSync controller with its admin UI, built from this repository.
@@ -126,6 +205,12 @@ services:
         condition: service_healthy
       forgejo-dk:
         condition: service_healthy
+    environment:
+      # Empty unless check-db-failover.sh sets it, and then it names both
+      # servers of the "ha" pair. It overrides database.url in the config
+      # file, so the two controllers move together without the generated
+      # config being rewritten.
+      FORGESYNC_DATABASE_URL: ${FORGESYNC_DATABASE_URL:-}
     volumes:
       - ./.work/forgesync.docker.yaml:/etc/forgesync/forgesync.yaml:ro
       - ./.tokens:/etc/forgesync/tokens:ro
@@ -165,6 +250,12 @@ services:
         condition: service_healthy
       forgejo-dk:
         condition: service_healthy
+    environment:
+      # Empty unless check-db-failover.sh sets it, and then it names both
+      # servers of the "ha" pair. It overrides database.url in the config
+      # file, so the two controllers move together without the generated
+      # config being rewritten.
+      FORGESYNC_DATABASE_URL: ${FORGESYNC_DATABASE_URL:-}
     volumes:
       - ./.work/forgesync-b.docker.yaml:/etc/forgesync/forgesync.yaml:ro
       - ./.tokens:/etc/forgesync/tokens:ro
@@ -300,6 +391,9 @@ services:
 
 volumes:
   forgesync-db:
+  forgesync-db-a:
+  forgesync-db-b:
+  etcd:
   forgesync-b-git:
   forgesync-git:
   forgejo-se:

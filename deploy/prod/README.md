@@ -275,18 +275,115 @@ what it finds, and "deleted everywhere" can become "here on one node, so copy it
 hand-offs in flight, the conflict history, the archived copies' deadlines, ForgeSync's
 accounts and the audit log.
 
-## 12. The database is the single point of failure
+## 12. How many servers, and losing one
 
-The controllers fail over; PostgreSQL doesn't. ForgeSync behaves well when it's gone: a
-controller that can't renew its lease stops acting before the lease expires, so nothing acts
-on stale information. But nothing is synced while it's down, and ForgeSync doesn't manage this;
-use what your operations already do:
+ForgeSync grows one machine at a time, and each step buys something different. A machine is
+always the same thing: PostgreSQL, the controller, and the git cache. There is no separate
+kind of server to install.
 
-- a managed PostgreSQL with failover (simplest, and someone else's pager);
-- streaming replication with a promotion tool (Patroni, repmgr), the controllers pointed at
-  whatever fronts it;
-- or one server and a nightly dump, if an outage until someone restores it is acceptable:
-  replication stops, nothing breaks, nobody loses work on the nodes.
+### One
+
+PostgreSQL and the controller on it, which is sections 2 to 6 above. Nothing is redundant,
+and that is a perfectly reasonable place to start: nothing is lost when it stops, because the
+work lives on the Forgejo nodes. Replication simply waits.
+
+### Two
+
+A second machine running only the controller, pointed at the first machine's PostgreSQL
+(section 5 says what to change). The two share the lease, so whichever holds it does the work
+and the other stands by and serves the same pages. You gain a controller that survives losing
+the other one, and the ability to upgrade or restart either without an outage.
+
+You do **not** yet gain a database that survives anything: it is still one server, on the
+first machine. Do not put a second PostgreSQL here and replicate between the two. Two servers
+cannot fail over safely: a majority of two is both of them, so nothing can tell "the other is
+dead" from "I cannot reach the other", and a pair that promotes on its own judgement ends up,
+in a network partition, with two primaries and two divergent databases. PostgreSQL will not
+merge them afterwards; you keep one and lose everything decided in the other, which includes
+every manually chosen primary, every dismissed conflict and every merge base.
+
+### Three
+
+Now the database can be made redundant. PostgreSQL on all three, streaming replication
+between them, Patroni deciding which is the primary, and etcd holding that decision with one
+member per machine. Any one machine can be lost, including whichever holds the primary, and
+the rest promote a new one and carry on without anybody being woken up.
+
+Three is the number for the same reason Proxmox wants three nodes in a cluster: a majority of
+three is two, so one can go. It is worth being blunt about the counts, because the intuition
+is wrong:
+
+| Machines | A majority is | Survives losing | Worth it |
+|---|---|---|---|
+| 1 | 1 | nothing | yes, to start |
+| 2 | 2 | nothing, for the database | yes, for the controller |
+| 3 | 2 | any one | this is the one |
+| 4 | 3 | any one | no better than three |
+| 5 | 3 | any two | only across three or more sites |
+
+So the path is one, then three, then five if you ever need it. A fourth machine adds capacity
+to stand by and nothing at all to the quorum.
+
+**Where they are decides whether any of this helps.** Three machines behind one uplink have a
+quorum and no protection from that uplink failing. Worse, two machines at one site and one at
+another means the site with two wins every vote: if that site is the one cut off from the
+Forgejo nodes, it keeps the primary and the lease while the machine that can still reach the
+nodes sits idle with no majority and a read-only database. Three failure domains, or at the
+very least not all three behind the same link.
+
+### Pointing the controllers at it
+
+Name every server and say that only one of them will do:
+
+```
+postgres://forgesync:PASSWORD@db-a.example.org:5432,db-b.example.org:5432,db-c.example.org:5432/forgesync?sslmode=require&target_session_attrs=read-write
+```
+
+`target_session_attrs=read-write` is what makes a promotion enough on its own. Each connection
+is offered to each server in turn and a standby refuses it, so after a promotion the
+controllers find the new primary themselves: no proxy, no restart, no address to change. If
+you would rather put something in front of them instead, name that one address and leave the
+parameter off.
+
+ForgeSync will not work in a standby whatever the connection string says. A standby answers
+every read and accepts no write, so a controller that settled for one would report itself
+healthy while nothing was being synced; instead it asks the server which it is
+(`pg_is_in_recovery`) and refuses to start, and `/readyz` and `forgesync_database_up` say so
+if it happens later.
+
+### What a failover costs
+
+Measured on the test environment, five Forgejo nodes, `controller.lease: 10s`, Patroni
+`ttl: 20`. `deploy/test/check-db-failover.sh` runs the same check against a running
+environment, so these are repeatable rather than reported.
+
+| | |
+|---|---|
+| The primary is killed, and the controllers notice | under 1s (`/readyz` 503, `database_up` 0) |
+| The leader stops acting, with nothing having taken over | 8 to 9s, inside the 10s lease |
+| A standby is promoted and takes writes | 18 to 21s (Patroni's `ttl`) |
+| A controller is leading again | 2 to 3s after that, so around 20 to 24s in all |
+| A planned switchover (`patronictl switchover`) | inside 1s, without leadership dropping at all |
+| Lost in either case | nothing: the same repositories, replicas and conflicts |
+
+For a second or two after that, a write can still be refused with 409. The controller that
+took the lease first hands it to the preferred one, and in between neither is leading. That
+is the hand-over working; ask again.
+
+The pages stayed up throughout both, and the killed server rejoined as a streaming replica
+with nothing done to it by hand. The outage is Patroni's `ttl`, not ForgeSync's: shorten it
+if you want a shorter one, and keep `controller.lease` below it, so a controller has always
+stopped acting before anything else can start.
+
+That gap is the whole point. What fences a leader off is its lease running out, measured on
+its own clock, not either side noticing. There is therefore no moment at which two controllers
+could both be acting, whatever the database is doing.
+
+### If you would rather not
+
+A managed PostgreSQL with failover is simpler still, and is someone else's pager. One machine
+and a nightly dump is also a defensible answer: replication stops until somebody restores it,
+nothing breaks, and nobody loses work on the nodes, because the nodes are where the work is.
 
 ## 13. Upgrades
 

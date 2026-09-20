@@ -54,11 +54,21 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	write(&b, "forgesync_leader", "1 on the controller that is acting, 0 on a standby", "gauge",
 		sample{labels: map[string]string{"role": role, "leader": name}, value: acting})
 
+	// Everything the database is asked for shares one short budget, well
+	// inside the handler's. A scrape is at its most useful when the
+	// database is unreachable -- that is when forgesync_leader and the
+	// node series say who is acting and what they can still see -- and
+	// each of the reads below would otherwise sit through its own
+	// connection attempt to every server in the URL before giving up. A
+	// scrape has to be quick and answer with what it has, never hang.
+	dbCtx, dbCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer dbCancel()
+
 	up := 1.0
-	if err := s.DB.Ping(ctx); err != nil {
+	if err := s.DB.Ping(dbCtx); err != nil {
 		up = 0
 	}
-	write(&b, "forgesync_database_up", "1 when the database answers", "gauge", sample{value: up})
+	write(&b, "forgesync_database_up", "1 when the database answers and takes writes", "gauge", sample{value: up})
 
 	// Nodes: one series per node, so an alert can name the node that went.
 	var healthy, nodes []sample
@@ -83,7 +93,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 
 	// Scans: when each node was last read. A scan that stops is a sync
 	// that stops, and nothing else here would show it.
-	if scans, err := s.DB.NodeScans(ctx); err == nil {
+	if scans, err := s.DB.NodeScans(dbCtx); err == nil {
 		var last, repos []sample
 		for _, sc := range scans {
 			labels := map[string]string{"node": sc.Node}
@@ -98,10 +108,10 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		s.Log.Warn("metrics: reading the scans failed", "error", err)
 	}
 
-	if n, err := s.DB.OpenConflicts(ctx); err == nil {
+	if n, err := s.DB.OpenConflicts(dbCtx); err == nil {
 		write(&b, "forgesync_conflicts_open", "differences waiting for a person", "gauge", sample{value: float64(n)})
 	}
-	if recs, err := s.DB.Repositories(ctx); err == nil {
+	if recs, err := s.DB.Repositories(dbCtx); err == nil {
 		known, withPrimary := 0, 0
 		for _, rec := range recs {
 			if rec.DeletedAt != nil {
@@ -117,7 +127,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 			sample{value: float64(withPrimary)})
 	}
 	if s.Replication != nil {
-		if counts, err := s.DB.ReplicationCounts(ctx); err == nil {
+		if counts, err := s.DB.ReplicationCounts(dbCtx); err == nil {
 			var states []sample
 			for _, state := range sortedKeys(counts) {
 				states = append(states, sample{labels: map[string]string{"state": state}, value: float64(counts[state])})

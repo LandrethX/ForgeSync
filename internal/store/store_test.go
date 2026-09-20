@@ -1432,3 +1432,33 @@ func TestDismissedConflicts(t *testing.T) {
 		t.Errorf("after bringing it back: %d open", n)
 	}
 }
+
+// Ping is what /readyz, /metrics and the overview ask, so it has to mean
+// "this database takes writes", not merely "something answered". Against
+// an ordinary database it passes; against a standby it says so, which is
+// the case check-db-failover.sh makes for real. Set
+// FORGESYNC_TEST_STANDBY_DATABASE_URL to a streaming standby to run that
+// half here as well.
+func TestPingWantsTheServerThatTakesWrites(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if err := s.Ping(ctx); err != nil {
+		t.Fatalf("Ping against the test database: %v", err)
+	}
+	if errors.Is(s.Ping(ctx), ErrStandby) {
+		t.Fatal("the test database was taken for a standby")
+	}
+
+	url := os.Getenv("FORGESYNC_TEST_STANDBY_DATABASE_URL")
+	if url == "" {
+		t.Skip("FORGESYNC_TEST_STANDBY_DATABASE_URL not set: the standby half isn't run here")
+	}
+	standby, err := Open(ctx, url)
+	if err == nil {
+		standby.Close()
+		t.Fatal("Open accepted a standby")
+	}
+	if !errors.Is(err, ErrStandby) {
+		t.Fatalf("Open against a standby: %v, want ErrStandby", err)
+	}
+}

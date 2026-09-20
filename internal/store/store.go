@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -18,24 +19,51 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+// ErrStandby says the server answering is a PostgreSQL standby: it
+// replies to every read and accepts no write. That is not a database
+// ForgeSync can work in, and it is worth telling apart from an
+// unreachable one, because the two are fixed differently.
+var ErrStandby = errors.New("the server is a standby and takes no writes; " +
+	"name every server in database.url and add target_session_attrs=read-write, " +
+	"or point it at whatever fronts them")
+
 // Open connects to PostgreSQL and checks the connection.
 func Open(ctx context.Context, url string) (*Store, error) {
 	pool, err := pgxpool.New(ctx, url)
 	if err != nil {
 		return nil, fmt.Errorf("database: %w", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
+	s := &Store{pool: pool}
+	if err := s.Ping(ctx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("database: %w", err)
+		return nil, err
 	}
-	return &Store{pool: pool}, nil
+	return s, nil
 }
 
 // Close gives the connection pool back.
 func (s *Store) Close() { s.pool.Close() }
 
-// Ping reports whether the database is reachable (used by /readyz).
-func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+// Ping reports whether the database is reachable and is the one taking
+// writes (used by /readyz, /metrics and the overview).
+//
+// Asking whether it answers isn't enough. Where the database is more
+// than one server with a promotion tool over them, a controller can end
+// up talking to a standby: it answers every read, so the pages look
+// right, while the lease can't be renewed and nothing is replicated --
+// and ForgeSync would be reporting itself healthy the whole time.
+// pg_is_in_recovery is the server's own answer to which one it is, so
+// ask it rather than trusting the address.
+func (s *Store) Ping(ctx context.Context) error {
+	var standby bool
+	if err := s.pool.QueryRow(ctx, `SELECT pg_is_in_recovery()`).Scan(&standby); err != nil {
+		return fmt.Errorf("database: %w", err)
+	}
+	if standby {
+		return fmt.Errorf("database: %w", ErrStandby)
+	}
+	return nil
+}
 
 // NodeRecord is a Forgejo node as registered in ForgeSync.
 type NodeRecord struct {

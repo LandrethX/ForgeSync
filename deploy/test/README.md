@@ -75,6 +75,7 @@ network, which is what container-to-container traffic uses either way. Pass the 
 
 ```sh
 ./check-dismissal.sh           # does conflict dismissal work, end to end?
+./check-db-failover.sh         # what happens when the database fails over?
 ./scale.sh make 200            # 200 repositories on SE, to measure a round
 ./scale.sh drop                # and away again
 ```
@@ -86,11 +87,27 @@ when what it says changes, and it clears when the difference goes away. It clean
 itself, picks a repository whose Actions are on, and takes a few minutes because it waits
 for five scan rounds.
 
+`check-db-failover.sh` starts a second arrangement of the state database (compose profile
+`ha`): two PostgreSQL servers in streaming replication with Patroni over them and etcd
+holding the decision. It carries the state across, moves both controllers onto the pair with
+a connection string naming both servers, then takes the primary away twice, once by killing
+it and once as a planned switchover. It checks that the pages stay up, that leadership stops
+inside `controller.lease` while the database is gone, that the two controllers never claim it
+at once, that a promotion is enough on its own with no restart, and that nothing was lost. It
+also points a controller at the standby on purpose, to see it refuse. Afterwards it carries
+the state back, puts the controllers on `forgesync-db` and stops the pair; `--keep` leaves
+the environment on it instead. Give it the same `PUBLIC_HOST` the environment was started
+with, since it recreates the two controllers.
+
+The production shape is three machines rather than two (`deploy/prod/README.md`, section 12);
+two here is enough to watch a promotion, because what is being checked is what the
+controllers do about one.
+
 `scale.sh` is for finding out what a round costs at a size you care about; the numbers from
 203 repositories on five nodes are in `docs/PERFORMANCE.md`. Deleting
 them exercises the archive flow on every other node, which is worth watching once.
 
-Both take `PUBLIC_HOST=<host or IP>` when the environment isn't on the `*.test` names.
+All three take `PUBLIC_HOST=<host or IP>` when the environment isn't on the `*.test` names.
 
 ## Usage
 

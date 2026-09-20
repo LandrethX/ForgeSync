@@ -24,8 +24,17 @@ controller:
   lease: 15s
 
 database:
-  # The one thing to back up. Both controllers use the same database;
+  # The one thing to back up. Every controller uses the same database;
   # that's what pairs them.
+  #
+  # Where the database is more than one server, name them all and add
+  # target_session_attrs=read-write, so each connection goes to whichever
+  # one takes writes and a promotion needs nothing changed here:
+  #
+  #   postgres://forgesync:PW@db-a:5432,db-b:5432,db-c:5432/forgesync?sslmode=require&target_session_attrs=read-write
+  #
+  # See section 12 of README.md, which also says why three servers and
+  # not two.
   url_file: /etc/forgesync/secrets/database.url
 
 http:

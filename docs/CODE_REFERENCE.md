@@ -120,6 +120,13 @@ migration is never edited, a new one is added.
 | Accounts and sessions | `CreateAccount`, `CheckPassword`, `HashPassword`, `VerifyPassword`, `CreateSession`, `Session`, `DeleteSession` | `accounts`, `sessions` |
 | History | `Audit`, `History`, `HistoryEach`, `HistoryActors` | `audit_log` (unioned with `node_state_transitions`) |
 
+`Open` and `Ping` mean "this database takes writes", not merely "something answered".
+Where the database is more than one server, a controller can end up talking to a standby:
+it would answer every read, so the pages would look right, while the lease could not be
+renewed and nothing was replicated. `Ping` asks the server which it is
+(`pg_is_in_recovery`) and returns `ErrStandby`, so `Open` refuses to start and `/readyz`,
+`/metrics` and the overview say so if it happens later.
+
 `HashPassword` is PBKDF2-HMAC-SHA256 with a 16-byte salt and the iteration count stored
 in the string, so the cost can be raised without invalidating what exists.
 `VerifyPassword` compares in constant time, and `CheckPassword` hashes even when the
@@ -263,6 +270,12 @@ plus the embedded UI underneath.
 | Sessions | `session.go`: `Sessions` over the shared database, and the sign-in rate limiter |
 | ForgeSync's own accounts | `accounts.go` |
 | Resources | `repos.go`, `users.go`, `conflicts.go`, `replication.go`, `history.go`, `metrics.go` |
+
+Every database read in `metrics.go` shares one two-second budget, well inside the
+handler's own. A scrape is at its most useful when the database is unreachable, which is
+when `forgesync_leader` and the node series say who is acting and what they can still
+see, and each read would otherwise sit through a connection attempt to every server named
+in the URL. A scrape answers with what it has; it never hangs.
 
 Reads need Viewer. `/history`, its export, `POST /inventory/scan`, the conflict verbs and
 `POST /repositories/{id}/replicate` need Operator. Setting a primary or a home node,

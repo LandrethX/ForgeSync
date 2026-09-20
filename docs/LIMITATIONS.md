@@ -88,16 +88,28 @@ never force-push over history on its own judgement.
 
 ## Not yet: could be done, hasn't been
 
-### PostgreSQL is a single point of failure
-The controllers fail over; the database doesn't. ForgeSync behaves well without it: a
-controller that can't renew its lease stops acting *before* the lease expires, the pages
-stay up, and `/metrics` reports `forgesync_database_up 0`. But nothing is synced while it
-is down.
+### One PostgreSQL server is a single point of failure
+The controllers fail over; one database server does not. ForgeSync behaves well without it: a
+controller that can't renew its lease stops acting *before* the lease expires, the pages stay
+up, and `/metrics` reports `forgesync_database_up 0`. But nothing is synced while it is down.
 
-*What to do about it:* put something under it, a managed PostgreSQL with failover or
-streaming replication with a promotion tool, and point both controllers at whatever fronts
-it. They reconnect by themselves; there is nothing to restart afterwards.
-[deploy/prod/README.md](../deploy/prod/README.md) has the options.
+This is no longer only advice. ForgeSync follows a promotion by itself: name every server in
+`database.url` with `target_session_attrs=read-write` and each connection goes to whichever
+one takes writes, so a promotion needs no proxy, no restart and no address changed. It also
+refuses to work in a standby, which answers every read and accepts no write, rather than
+reporting itself healthy while nothing is being replicated.
+
+That was measured, not reasoned about: `deploy/test/check-db-failover.sh` kills the primary of
+a two-server database under Patroni and watches both controllers through it. The leader stops
+acting 8 to 9 seconds in, inside its 10 second lease and with nothing having taken over; a
+new primary is promoted about 20 seconds in; a controller is leading again 2 to 3 seconds
+after that; and the repositories, replicas and conflicts are the same on the other side. A
+planned switchover is over inside a second, without leadership dropping at all.
+
+*What's left:* ForgeSync doesn't install or manage any of it. Making the database redundant
+takes **three** machines, not two, for the same reason a Proxmox cluster wants three nodes: a
+majority of two is both of them, so a pair cannot promote safely. `deploy/prod/README.md`
+has the counts, the placement, and what a failover costs.
 
 ### Scale beyond 200 repositories
 Measured at 203 repositories on each of five nodes: a push reaches all four replicas in

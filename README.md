@@ -113,8 +113,8 @@ Every script takes `PUBLIC_HOST=<host or IP>` when the environment isn't reachab
 
 ## This release
 
-The first release of ForgeSync was published during **[Mysdata 2026](https://mysdata.org/)**,
-in co-operation with Hagar, TST. The repository is
+The first release of ForgeSync was published during **[Mysdata 2026](https://mysdata.org/)**
+in Karlskrona, in co-operation with Hagar of TST. The repository is
 <https://github.com/LandrethX/ForgeSync>.
 
 ## Licence

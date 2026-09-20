@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"scenegit.org/forgesync/internal/health"
 )
 
@@ -1588,5 +1590,51 @@ func TestRetiringANodeKeepsItsHistory(t *testing.T) {
 	}
 	if err := s.RetireNode(ctx, "nothing-like-this"); err == nil {
 		t.Error("retiring a node that isn't there was accepted")
+	}
+}
+
+// A machine that is switched off does not refuse a connection, it
+// swallows it, so without a timeout pgx waits as long as the operating
+// system does. With more than one server in the URL that is worse than
+// slow: the fallback is the whole point, and a controller that hangs on
+// the first server never reaches the second.
+func TestOpenBoundsHowLongOneServerIsWaitedFor(t *testing.T) {
+	// 203.0.113.0/24 is reserved for documentation and is not routed, so
+	// connecting to it hangs rather than being refused, which is exactly
+	// the case this is about.
+	const unreachable = "postgres://u:p@203.0.113.1:5432/forgesync?sslmode=disable"
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultConnectTimeout+20*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	s, err := Open(ctx, unreachable)
+	if err == nil {
+		s.Close()
+		t.Fatal("connected to an address that cannot answer")
+	}
+	if took := time.Since(start); took > DefaultConnectTimeout+10*time.Second {
+		t.Errorf("gave up after %s, want about %s", took.Round(time.Second), DefaultConnectTimeout)
+	}
+}
+
+// An explicit connect_timeout in the URL is the operator's choice and is
+// not overridden.
+func TestOpenKeepsAnExplicitConnectTimeout(t *testing.T) {
+	cfg, err := pgxpool.ParseConfig("postgres://u:p@203.0.113.1:5432/forgesync?sslmode=disable&connect_timeout=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ConnConfig.ConnectTimeout != 2*time.Second {
+		t.Fatalf("pgx parsed connect_timeout as %s", cfg.ConnConfig.ConnectTimeout)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	start := time.Now()
+	if s, err := Open(ctx, "postgres://u:p@203.0.113.1:5432/forgesync?sslmode=disable&connect_timeout=2"); err == nil {
+		s.Close()
+		t.Fatal("connected to an address that cannot answer")
+	}
+	if took := time.Since(start); took > 8*time.Second {
+		t.Errorf("gave up after %s, so the explicit 2s was not used", took.Round(time.Second))
 	}
 }

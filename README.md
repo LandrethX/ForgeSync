@@ -7,6 +7,11 @@ work on whichever one is nearest and find the same thing there. It is an externa
 plane: it never patches Forgejo, never touches its database, and uses only what Forgejo
 offers anyone: the REST API, webhooks, the Git and LFS protocols.
 
+It was started around [SceneGit](https://scenegit.org/), a European alternative git
+repository for sceners, and the shape of the problem comes from there: several nodes in
+several countries, one identity behind them, and people who should be able to push to
+whichever is nearest without thinking about it.
+
 It is built around one rule: **never lose work, never decide for the owner.** Only
 fast-forwards and creations are pushed, every push is leased against what ForgeSync last
 wrote, and anything two people could genuinely disagree about becomes a conflict with both

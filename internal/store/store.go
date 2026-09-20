@@ -27,9 +27,27 @@ var ErrStandby = errors.New("the server is a standby and takes no writes; " +
 	"name every server in database.url and add target_session_attrs=read-write, " +
 	"or point it at whatever fronts them")
 
+// DefaultConnectTimeout bounds one attempt to reach one server. pgx has
+// no timeout of its own, so without this a machine that is switched off
+// (rather than refusing the port) is waited on for as long as the
+// operating system takes to give up, which is minutes. Where the URL
+// names more than one server that matters twice over: the whole point is
+// to try the next one, and a controller that hangs on the first never
+// gets there. A URL that says connect_timeout keeps what it says.
+const DefaultConnectTimeout = 10 * time.Second
+
 // Open connects to PostgreSQL and checks the connection.
 func Open(ctx context.Context, url string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, url)
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, fmt.Errorf("database: %w", err)
+	}
+	// One setting covers every server in the URL: pgx keeps only the host,
+	// port and TLS of the others, and times each attempt by this.
+	if cfg.ConnConfig.ConnectTimeout == 0 {
+		cfg.ConnConfig.ConnectTimeout = DefaultConnectTimeout
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("database: %w", err)
 	}

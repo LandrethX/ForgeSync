@@ -12,6 +12,7 @@ rather than two.
 | | |
 |---|---|
 | `install.sh` | does sections 1 to 7 of this file in one command |
+| `standby.sh` | a second copy of the database on the second machine, and the promotion |
 | `forgesync.yaml` | an annotated config; copy it and change what's marked |
 | `forgesyncd.service` | the systemd unit, with the usual hardening |
 | `backup.sh` | takes (and can verify) a dump of the database |
@@ -386,9 +387,49 @@ in a network partition, with two primaries and two divergent databases. PostgreS
 merge them afterwards; you keep one and lose everything decided in the other, which includes
 every manually chosen primary, every dismissed conflict and every merge base.
 
+### Two, with a second copy of the database
+
+A second machine gives you a controller that survives losing the first. It can also keep a
+continuously updated copy of the database, which is worth having on its own: losing the first
+machine then loses nothing, instead of losing everything since last night's dump.
+
+```sh
+./standby.sh prepare <address of the second>     # on the first machine
+scp /root/forgesync-standby.txt root@<second>:/root/
+./standby.sh create /root/forgesync-standby.txt  # on the second
+./standby.sh status                              # either, any time
+```
+
+`prepare` makes a replication role and a slot, opens PostgreSQL to the two machines, and
+rewrites `database.url` to name both servers. `create` copies the database across with
+`pg_basebackup` and starts it as a standby. Both then point at whichever server takes writes,
+so a promotion needs nothing changed anywhere.
+
+When the first machine is gone:
+
+```sh
+./standby.sh promote     # on the second
+```
+
+It asks you to confirm, promotes the database, restarts the controller and waits for it to
+be ready. Measured on two machines: **9 seconds** from the command to a controller leading
+again with everything written before the failure still there.
+
+**Promotion is deliberately yours to order, not automatic.** With two machines nothing can
+tell "the other one is dead" from "I cannot reach the other one", and a pair that promotes on
+its own judgement ends up, in a network partition, with two primaries and two histories that
+will not merge. So this arrangement removes the data loss and leaves you the decision, which
+is the trade worth making when a pause costs nothing: while the database is down the pages
+stay up, the Forgejo nodes keep serving, and nothing is lost.
+
+Two things to know afterwards. The old machine must not come back as a primary: rebuild it as
+a standby of the new one, with `prepare` on the promoted machine and `create` on the old one.
+And a standby is not a backup, because it faithfully reproduces a mistake: keep `backup.sh`
+running as well.
+
 ### Three
 
-Now the database can be made redundant. PostgreSQL on all three, streaming replication
+Now the database can be made redundant without anybody being woken up. PostgreSQL on all three, streaming replication
 between them, Patroni deciding which is the primary, and etcd holding that decision with one
 member per machine. Any one machine can be lost, including whichever holds the primary, and
 the rest promote a new one and carry on without anybody being woken up.

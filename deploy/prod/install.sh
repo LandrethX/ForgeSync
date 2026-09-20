@@ -185,7 +185,11 @@ if [ -n "$MAKE_BUNDLE" ]; then
   [ -z "$missing" ] || die "this machine is not installed yet:$missing missing from $SECRETS"
 
   if [ -z "$PUBLIC_URL" ]; then
-    ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
+    # iproute2 is not on every minimal Debian, so fall back to hostname.
+    # pipefail would make this whole assignment fail when iproute2 is
+    # not installed, and errexit would end the script before the fallback.
+    ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}') || true
+    [ -n "$ip" ] || ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
     PUBLIC_URL="http://${ip:-127.0.0.1}:8090"
   fi
   umask 077
@@ -562,7 +566,8 @@ if [ "$PRIORITY" -eq 3 ]; then
   note "that part is section 12 of deploy/prod/README.md and is still by hand"
 fi
 if [ -z "$PUBLIC_URL" ]; then
-  ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
+  ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}') || true
+  [ -n "$ip" ] || ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
   PUBLIC_URL="http://${ip:-127.0.0.1}:8090"
   note "no --url given, so using $PUBLIC_URL"
   note "the Forgejo nodes have to reach that address for webhooks to work"

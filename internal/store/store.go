@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -153,6 +154,27 @@ func (s *Store) Nodes(ctx context.Context) ([]NodeRecord, error) {
 	return out, rows.Err()
 }
 
+// RetiredNames is every node that has been taken out of the installation.
+// Resolve needs them: a node retired in the admin UI that is still listed
+// in a config file would otherwise be taken straight back in, and an
+// explicit retirement has to stick.
+func (s *Store) RetiredNames(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT name FROM nodes WHERE removed_at IS NOT NULL ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // SaveNode writes a node with its credentials, adding it or updating what
 // is there. A nil SealedToken leaves whatever token the row already has,
 // so changing a node's address doesn't mean re-entering its token.
@@ -204,6 +226,21 @@ func (s *Store) RetireNode(ctx context.Context, name string) error {
 		return fmt.Errorf("retire node %s: %w", name, err)
 	}
 	return tx.Commit(ctx)
+}
+
+// RecordUplink notes that a controller lost or regained its own reach.
+// It is one line, not one per node: five nodes going quiet together
+// because this controller's network went is one fact about this
+// controller, and recording it as five node failures puts the wrong thing
+// in the history and leaves the right one unsaid. The actor is the
+// controller, because this is about it and not about the installation.
+func (s *Store) RecordUplink(ctx context.Context, up bool, detail string) error {
+	action := "node.uplink_lost"
+	if up {
+		action = "node.uplink_restored"
+	}
+	host, _ := os.Hostname()
+	return s.Audit(ctx, "controller:"+host, action, host, map[string]any{"detail": detail})
 }
 
 // RecordNodeStatus stores the node's latest status and, when the state

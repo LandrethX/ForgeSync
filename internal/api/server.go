@@ -71,6 +71,7 @@ type DB interface {
 	History(ctx context.Context, f store.EventFilter) ([]store.Event, string, error)
 	HistoryEach(ctx context.Context, f store.EventFilter, max int, fn func(store.Event) error) error
 	HistoryActors(ctx context.Context) ([]string, error)
+	RetireNode(ctx context.Context, name string) error
 	Audit(ctx context.Context, actor, action, target string, details map[string]any) error
 }
 
@@ -138,6 +139,9 @@ type Server struct {
 	Webhooks http.Handler
 	// WebhookStatus reports each node's webhook; nil when webhooks are off.
 	WebhookStatus interface{ Snapshot() []webhook.Status }
+	// NodeAdmin adds and retires nodes. nil when no node key is
+	// configured, because a node added here has its token sealed with it.
+	NodeAdmin NodeAdmin
 
 	limiter *loginLimiter
 }
@@ -225,6 +229,12 @@ func (s *Server) Handler() http.Handler {
 				// belong to neither controller, so these aren't behind
 				// requireLeader either: someone locked out of one
 				// controller can still put it right from the other.
+				// A node lives in the shared database like an account, so
+				// adding one works from whichever controller is in front
+				// of the person doing it.
+				r.Post("/nodes", s.createNode)
+				r.Post("/nodes/check", s.checkNode)
+				r.Delete("/nodes/{name}", s.retireNode)
 				r.Get("/accounts", s.listAccounts)
 				r.Post("/accounts", s.createAccount)
 				r.Put("/accounts/{id}", s.updateAccount)

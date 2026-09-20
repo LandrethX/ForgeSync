@@ -24,6 +24,8 @@ oidc:
     viewer: [forgesync-viewer]
   # Keep admin-token sign-in in the web UI as a break-glass option.
   allow_token_sign_in: true
+node_key_file: .tokens/node-key
+
 database:
   # Test-only credentials (see .env). Real deployments use url_file or
   # FORGESYNC_DATABASE_URL instead of an inline URL.

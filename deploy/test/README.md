@@ -85,6 +85,17 @@ cache, which is what makes the database redundant as well; `deploy/prod/README.m
 12 has the counts and why three rather than two. The test environment does not reproduce
 that: `check-db-failover.sh` covers the database side separately.
 
+## Adding a node from the UI
+
+`setup.sh` writes `.tokens/node-key` and points every controller at it, so the **Nodes** page
+can add one: give it a name, an address and a token for a site admin on that node, press
+**Check** to see what ForgeSync can reach, then **Add the node**. The token is sealed with
+that key before it is stored. A controller picks the change up within `inventory.node_check`
+(15s) by restarting, which here takes a second or two.
+
+Retiring a node sticks even though `setup.sh` still lists all five in the generated config:
+the controller logs that the file names a node that has been retired and leaves it out.
+
 ## The other scripts
 
 ```sh

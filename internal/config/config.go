@@ -206,6 +206,10 @@ type Inventory struct {
 	Interval time.Duration `yaml:"interval"`
 	// BranchConcurrency limits parallel branch lookups per node.
 	BranchConcurrency int `yaml:"branch_concurrency"`
+	// NodeCheck is how often a controller looks to see whether the
+	// installation's nodes are still the ones it was built from. A node
+	// added in the admin UI takes effect within this. Default 15s.
+	NodeCheck time.Duration `yaml:"node_check"`
 }
 
 // RoleNames lists the SceneID role/group values that grant each ForgeSync role.
@@ -312,6 +316,13 @@ type Health struct {
 	// FailureThreshold is how many consecutive failed checks turn a SUSPECT
 	// node UNREACHABLE, so a short network blip doesn't count as an outage.
 	FailureThreshold int `yaml:"failure_threshold"`
+	// UplinkCheck is what to ask when every node has gone quiet at once,
+	// to tell "the nodes are down" from "this controller is cut off".
+	// Addresses are asked over DNS and any one answering is enough, so a
+	// single provider being down or blocked is not mistaken for the
+	// network being gone. An empty list turns the question off and every
+	// node is recorded as unreachable as before.
+	UplinkCheck []string `yaml:"uplink_check"`
 }
 
 // Node is one Forgejo server ForgeSync keeps in sync with the others.
@@ -418,6 +429,17 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Inventory.BranchConcurrency == 0 {
 		c.Inventory.BranchConcurrency = 4
+	}
+	if c.Inventory.NodeCheck == 0 {
+		c.Inventory.NodeCheck = 15 * time.Second
+	}
+	// Three anycast resolvers run by different people, so one being down,
+	// blocked or slow is not read as the network being gone. Only asked
+	// when every node has already stopped answering, so an installation
+	// that is working sends nothing to any of them. Set uplink_check to
+	// [] to turn it off, or to addresses of your own.
+	if c.Health.UplinkCheck == nil {
+		c.Health.UplinkCheck = []string{"1.1.1.1", "9.9.9.9", "8.8.8.8"}
 	}
 	for i := range c.Nodes {
 		if c.Nodes[i].ServiceUser == "" {
@@ -573,6 +595,9 @@ func (c *Config) validate() error {
 	}
 	if c.Inventory.Interval < 10*time.Second {
 		errs = append(errs, errors.New("inventory.interval must be at least 10s"))
+	}
+	if c.Inventory.NodeCheck < 5*time.Second {
+		errs = append(errs, errors.New("inventory.node_check must be at least 5s"))
 	}
 	if c.Replication.Concurrency < 1 || c.Replication.Concurrency > 16 {
 		errs = append(errs, errors.New("replication.concurrency must be 1 to 16"))

@@ -379,3 +379,79 @@ The admin API and UI that let somebody add a node are not here, and neither is p
 node up without a restart. Until they are, `node_key_file` is optional and changes nothing:
 an installation that does not set it keeps its nodes in the config file with their tokens in
 files, which is what every existing installation does and what the end-to-end run confirmed.
+
+---
+
+# Gate: adding nodes, and the uplink check
+
+Run on 2026-09-20 against the working tree on top of commit `89a5ff3`, before committing.
+
+## Classification
+
+| | |
+|---|---|
+| **Scope** | The uncommitted diff |
+| **Change under review** | `nodes.Admin` and three admin endpoints for adding, checking and retiring a node; the add-node wizard in the UI; `nodes.Watch` so a change is picked up; `health` uplink probing and the suppression that goes with it; `store.RetiredNames`; two config settings |
+| **Exposure** | **Internet-facing HTTP API.** Three new write endpoints, one of which takes a site-admin token for another machine and stores it |
+| **Data** | A Forgejo node's API token, which is site-admin on that node |
+| **Privilege** | Administrator. Adding a node decides what ForgeSync will act on |
+| **Level** | **LEVEL 4, critical security code.** Credential handling and an administrative function, reached over the network. |
+
+## Result
+
+| Check | Tool | Result |
+|---|---|---|
+| Formatting | `gofmt -l` | **PASS** |
+| Static checks | `go vet ./...` | **PASS** |
+| Lint | `golangci-lint run` | **PASS**, 0 issues |
+| Types (UI) | `tsc --noEmit` | **PASS** |
+| Tests | `go test ./...` | **PASS**, 17 packages |
+| Database tests | `go test -p 1 ./internal/store ./internal/leader` | **PASS** |
+| UI tests | `vitest run` | **PASS**, 80 of 80 in 14 files (5 new for the wizard) |
+| Authorisation | `internal/api/security_test.go` | **PASS**: the three new endpoints were added to the walk, so each is tried signed out and at every role below Administrator |
+| Behaviour, end to end | five live Forgejo nodes | **PASS**: a real node checked and added with its token sealed, a bad token refused with the reasons and nothing stored, a node retired and followed by the controller in 12s, added back and in use 6s later |
+| SAST | `gosec` | **PASS with findings**: 18, unchanged from the last gate, **none in the new code** |
+| SAST, second opinion | `semgrep p/golang p/security-audit p/secrets` | **PASS**: the same 3 as the baseline, none in the new code |
+| Dependency vulnerabilities | `govulncheck ./...` | **PASS**, none; `go.mod` unchanged |
+| Secrets, working tree | `gitleaks dir .` | **PASS** |
+| Secrets, history | `gitleaks git .` | **PASS** |
+| Shell | `shellcheck -S warning` | **PASS** |
+| DAST | `zap-baseline.py` against the running controller | **PASS**: 0 failures, 65 passes, 2 informational, unchanged |
+| Race detection | `go test -race` | **NOT RUN**. Reason: still no C compiler on this host. Needs: a build host with a toolchain. Owner: whoever runs the release build. **Fourth consecutive review with this gap**, on code that is concurrent by design and has just gained another goroutine |
+
+## How the token is handled
+
+The one new secret path, taken deliberately.
+
+- It arrives over the admin API, which needs Administrator and, from a browser, the CSRF
+  header. It is read from the body and never logged.
+- It is **sealed before it is stored** (`internal/secret`, AES-256-GCM under the node key),
+  so the database holds ciphertext, as for a node added any other way.
+- It is **never returned**. `Check` and `Add` answer with findings, the node's version and
+  who the token turned out to belong to; the token itself appears in no response.
+- The audit entry records that a node was added and by whom, with the address, the site, the
+  service user and the SceneID source id. It does **not** record the token, which a test
+  asserts by looking for it in the audited details.
+- Nothing is stored when a blocking check fails, so a token given to the wrong address is not
+  kept because the request otherwise looked well formed.
+- Without a node key the endpoints refuse and say which setting to add, rather than storing
+  the token in the clear.
+
+## Findings
+
+**None new.** The 18 `gosec` and 3 `semgrep` findings are the baseline's, in code this change
+did not touch.
+
+**A design fault found by testing rather than by reading**, worth recording because it was
+invisible in the code: retiring a node that a controller's config file still listed took it
+straight back in on the next resolve, so the button appeared to do nothing. `Resolve` now
+asks `store.RetiredNames` and leaves those out, and says in the log that the file names a
+node that has been retired. There is a test for it.
+
+## What this deliberately does not do
+
+ForgeSync does not configure the node. The `app.ini` keys it needs (`ALLOWED_HOST_LIST`,
+`LFS_START_SERVER`) cannot be reached through any API and need Forgejo restarted, so the
+wizard says what to do and then checks what it can see. That is the whole shape of it:
+instructions, then verify, and nothing done on the node's behalf with a token somebody may
+not have meant to hand over.

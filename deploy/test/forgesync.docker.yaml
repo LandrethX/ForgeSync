@@ -5,7 +5,7 @@
 #
 # The browser reaches the UI as http://forgesync.test:8090; add that name to
 # /etc/hosts next to the others (see README.md).
-# Any number of controllers can share this database: whichever holds the leadership
+# Any number of controllers can share this database: whichever holds the
 # lease does the work and the other stands by. setup.sh --standby starts a
 # second one (forgesync-b) from this file; see README.md.
 controller:
@@ -26,6 +26,10 @@ http:
   admin_token_file: /etc/forgesync/tokens/admin.token
   # Plain http in the test environment; production keeps the default (true).
   secure_cookies: false
+# Seals node tokens in ForgeSync's database, so a node can be added from
+# the admin UI. Every controller needs the same file.
+node_key_file: /etc/forgesync/tokens/node-key
+
 database:
   # Test-only credentials (see .env).
   url: postgres://forgesync:forgesync-test-pw@forgesync-db:5432/forgesync?sslmode=disable

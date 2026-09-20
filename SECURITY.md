@@ -45,7 +45,9 @@ against them and is not meant to.
   moves on a real request.
 - **Authorisation.** Viewer < Operator < Administrator, checked by `requireRole` on every
   route. `internal/api/security_test.go` walks every write endpoint against nobody signed
-  in, each role below the one it needs, and the role itself.
+  in, each role below the one it needs, and the role itself. Adding or retiring a node is
+  Administrator, and the token given with it is sealed before it is stored and never
+  returned by anything: what is audited is that a node was added and by whom.
 - **CSRF.** A cookie-authenticated write needs the `X-ForgeSync-CSRF` header, which another
   site cannot set without a preflight this server never allows.
 - **Sign-in throttling.** Ten failures from one client address in five minutes, then 429.

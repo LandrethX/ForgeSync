@@ -12,11 +12,13 @@ import (
 
 // A database of nodes, without a database.
 type fake struct {
-	rows  []store.NodeRecord
-	saved []store.NodeRecord
+	rows    []store.NodeRecord
+	saved   []store.NodeRecord
+	retired []string
 }
 
 func (f *fake) Nodes(context.Context) ([]store.NodeRecord, error) { return f.rows, nil }
+func (f *fake) RetiredNames(context.Context) ([]string, error)    { return f.retired, nil }
 func (f *fake) SaveNode(_ context.Context, n store.NodeRecord) error {
 	f.saved = append(f.saved, n)
 	f.rows = append(f.rows, n)
@@ -148,6 +150,24 @@ func TestTheConfigStillCorrectsAnUnsealedNode(t *testing.T) {
 	}
 	if got[0].URL != "http://moved" {
 		t.Errorf("url is %q, want the config's", got[0].URL)
+	}
+}
+
+// Retiring a node has to stick: a config file that still names it must
+// not take it straight back in, or the button in the UI does nothing.
+func TestARetiredNodeIsNotTakenBackInFromTheConfig(t *testing.T) {
+	f := &fake{retired: []string{"us"}}
+	got, err := Resolve(context.Background(), f, nil, configured("se", "us"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "se" {
+		t.Fatalf("resolved %+v, want just se", got)
+	}
+	for _, rec := range f.saved {
+		if rec.Name == "us" {
+			t.Error("the retired node was written back")
+		}
 	}
 }
 

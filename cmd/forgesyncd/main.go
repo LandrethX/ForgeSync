@@ -104,6 +104,10 @@ func run(configPath string) error {
 	if len(installed) == 0 {
 		log.Warn("no nodes: nothing to keep in sync until one is added")
 	}
+	// What this controller wired itself from. When the installation's
+	// nodes stop matching it, it restarts to follow them; see the watcher
+	// below.
+	builtFrom := nodes.Fingerprint(installed)
 
 	var records []store.NodeRecord
 	var infos []api.NodeInfo
@@ -143,6 +147,7 @@ func run(configPath string) error {
 		Interval:         cfg.Health.Interval,
 		Timeout:          cfg.Health.Timeout,
 		FailureThreshold: cfg.Health.FailureThreshold,
+		Uplink:           health.NewResolvers(cfg.Health.UplinkCheck, cfg.Health.Timeout),
 	}, leaderRecorder{db, elector.Leading}, log)
 	// Start from where the nodes were left, so restarting a controller
 	// isn't recorded as every node going from UNKNOWN to HEALTHY. Without
@@ -277,7 +282,7 @@ func run(configPath string) error {
 	monitorDone := make(chan struct{})
 	go func() {
 		var wg sync.WaitGroup
-		wg.Add(5)
+		wg.Add(6)
 		go func() { defer wg.Done(); elector.Run(ctx) }()
 		// Sessions are in the database, so they outlive a failover; the
 		// ones that have run out are cleared away now and then. Either
@@ -298,6 +303,22 @@ func run(configPath string) error {
 		// pages are live too; only the leader writes what it finds (see
 		// leaderRecorder).
 		go func() { defer wg.Done(); monitor.Run(ctx) }()
+		// A node added or retired in the admin UI is a row in the shared
+		// database, and a controller reads that once, at startup, to wire
+		// seven different things. Rather than make all seven follow a
+		// changing set, a controller that notices the nodes are no longer
+		// the ones it was built from stops, and whatever runs it starts it
+		// again a second or two later. That is cheap here by
+		// construction: the work is idempotent, a clean stop hands the
+		// lease over in about one renewal, and another controller keeps
+		// serving in the meantime.
+		go func() {
+			defer wg.Done()
+			nodes.Watch(ctx, db, nodeKey, builtFrom, cfg.Inventory.NodeCheck, log)
+			if ctx.Err() == nil {
+				stop() // the same path as a SIGTERM, so the lease is given up
+			}
+		}()
 		// Everything that changes a node or decides anything runs only
 		// while this controller holds the lease, and stops the moment it
 		// doesn't.
@@ -322,6 +343,16 @@ func run(configPath string) error {
 		log.Warn("no admin token: the CLI and the break-glass sign-in are disabled; " +
 			"set http.admin_token_file")
 	}
+	// Adding a node from the admin UI needs somewhere safe to put its
+	// token, so it is offered only when this controller has the key.
+	var nodeAdmin api.NodeAdmin
+	if nodeKey != nil {
+		nodeAdmin = &nodes.Admin{DB: db, Key: nodeKey}
+	} else {
+		log.Info("no node_key_file: nodes can be listed but not added from the UI, " +
+			"because their tokens would go into the database in the clear")
+	}
+
 	// Only a non-nil engine: a nil *Engine in the interface would look enabled.
 	var replicator api.Replicator
 	if engine != nil {
@@ -358,6 +389,7 @@ func run(configPath string) error {
 			Frontend:            webui.Handler(),
 			Webhooks:            hooks,
 			WebhookStatus:       statusOrNil(hookStatus),
+			NodeAdmin:           nodeAdmin,
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -461,6 +493,13 @@ func (l leaderRecorder) RecordNodeStatus(ctx context.Context, s health.Status, p
 		return nil
 	}
 	return l.rec.RecordNodeStatus(ctx, s, prev)
+}
+
+// RecordUplink is the exception: losing the network is this controller's
+// own condition, not the installation's, and the standby's is worth
+// knowing precisely because the leader's may be fine.
+func (l leaderRecorder) RecordUplink(ctx context.Context, up bool, detail string) error {
+	return l.rec.RecordUplink(ctx, up, detail)
 }
 
 // leaderDispatcher drops what the nodes report unless this controller is

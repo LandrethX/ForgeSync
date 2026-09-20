@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -46,6 +47,7 @@ type fakeDB struct {
 	// fake doesn't hash, so a test can say what it means.
 	accounts  []store.Account
 	passwords map[string]string
+	retired   []string
 }
 
 func (f *fakeDB) Accounts(context.Context) ([]store.Account, error) {
@@ -388,6 +390,16 @@ func (f *fakeDB) HistoryEach(ctx context.Context, flt store.EventFilter, max int
 	return nil
 }
 func (f *fakeDB) HistoryActors(context.Context) ([]string, error) { return []string{"forgesync"}, nil }
+func (f *fakeDB) RetireNode(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if slices.Contains(f.retired, name) {
+		return errors.New("no such node")
+	}
+	f.retired = append(f.retired, name)
+	return nil
+}
+
 func (f *fakeDB) Audit(_ context.Context, actor, action, target string, details map[string]any) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

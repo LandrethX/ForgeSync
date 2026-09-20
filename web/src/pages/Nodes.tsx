@@ -1,12 +1,20 @@
-import { api, type Node, type NodeWebhook, type SourcePair } from "../api";
+import {
+  api,
+  hasRole,
+  type Node,
+  type NodeWebhook,
+  type SourcePair,
+} from "../api";
+import { AddNode } from "./AddNode";
 import { PageHeader } from "../components/Layout";
 import { StatusBadge, StatusIcon } from "../components/StatusBadge";
 import { formatAgo, formatDateTime } from "../format";
-import { useLoad, useNodes, useNow } from "../hooks";
+import { useLoad, useNodes, useNow, useSession } from "../hooks";
 import { Link } from "../router";
 
 export function Nodes() {
   const { nodes } = useNodes();
+  const session = useSession();
   const now = useNow();
   const hooks = useLoad(() => api.webhooks(), []);
   const showHooks = hooks.data?.enabled === true;
@@ -16,11 +24,16 @@ export function Nodes() {
     <>
       <PageHeader title="Nodes" />
       <p className="muted page-intro">
-        Nodes come from the controller's config file. Their health is checked on
-        the configured interval and updates here live.
+        A node is a Forgejo server ForgeSync keeps in step with the others. They
+        live in ForgeSync's own database, so adding one here reaches every
+        controller. Their health is checked on the configured interval and
+        updates here live.
         {showHooks &&
           " Each node reports changes to ForgeSync through a system webhook, so replication starts within seconds; the regular scan is a safety net."}
       </p>
+      {hasRole(session, "administrator") && (
+        <AddNode onAdded={() => window.location.reload()} />
+      )}
       {!nodes ? (
         <p className="muted">Waiting for the first health check…</p>
       ) : (

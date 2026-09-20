@@ -431,6 +431,12 @@ export class ApiError extends Error {
     readonly status: number,
     message: string,
     readonly retryAfterSeconds?: number,
+    /**
+     * What the controller sent back, when a refusal carries more than a
+     * message. A node that fails its checks is answered with the whole
+     * report, and showing that is the point of checking.
+     */
+    readonly body?: unknown,
   ) {
     super(message);
   }
@@ -485,9 +491,36 @@ async function request<T>(
       res.status,
       message,
       Number.isFinite(retry) && retry > 0 ? retry : undefined,
+      data,
     );
   }
   return data as T;
+}
+
+/** A node somebody is asking ForgeSync to take on. */
+export interface NewNode {
+  name: string;
+  url: string;
+  site?: string;
+  service_user?: string;
+  sceneid_source_id?: number;
+  token: string;
+}
+
+/** One thing ForgeSync looked at on a node it was asked about. */
+export interface NodeFinding {
+  check: string;
+  ok: boolean;
+  blocking: boolean;
+  detail: string;
+}
+
+/** What a check of a node found. ok is false when anything blocking failed. */
+export interface NodeReport {
+  findings: NodeFinding[];
+  version?: string;
+  service_user?: string;
+  ok: boolean;
 }
 
 export const api = {
@@ -550,6 +583,13 @@ export const api = {
     request<Session>("POST", "/session", { username, password }),
   accounts: () =>
     request<{ total: number; items: Account[] }>("GET", "/accounts"),
+  checkNode: (n: NewNode) => request<NodeReport>("POST", "/nodes/check", n),
+  addNode: (n: NewNode) => request<NodeReport>("POST", "/nodes", n),
+  retireNode: (name: string) =>
+    request<{ status: string; note: string }>(
+      "DELETE",
+      `/nodes/${encodeURIComponent(name)}`,
+    ),
   addAccount: (a: {
     username: string;
     password: string;

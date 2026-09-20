@@ -59,6 +59,22 @@ groups:
             acting before its lease runs out, so nothing acts on stale
             information.
 
+      - alert: ForgeSyncControllerCutOff
+        # Only asked when every node has already gone quiet, so this
+        # firing means the fault is at the controller's end. Alert on it
+        # rather than on the nodes: five nodes in five countries do not go
+        # together, and this says which end to look at.
+        expr: forgesync_uplink_up == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "ForgeSync controller {{ $labels.instance }} cannot reach the network"
+          description: >-
+            Every node stopped answering at once and nothing else answered
+            either. The nodes are probably fine; this controller's own
+            network is not. Its node alerts are suppressed while this
+            lasts, on purpose.
+
       # --- Are the nodes there? ---------------------------------------
 
       - alert: ForgeSyncNodeUnhealthy

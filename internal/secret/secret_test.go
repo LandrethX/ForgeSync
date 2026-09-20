@@ -25,7 +25,11 @@ func TestSealAndOpenRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(sealed, []byte(want)) && want != "" {
+		// Only worth asserting for a plaintext long enough that finding
+		// it in random-looking bytes would mean something: a single byte
+		// turns up in a 28-byte ciphertext about one time in ten, which
+		// says nothing about the sealing and everything about chance.
+		if len(want) >= 8 && bytes.Contains(sealed, []byte(want)) {
 			t.Fatalf("the sealed value contains the plaintext")
 		}
 		got, err := k.Open(sealed)

@@ -124,3 +124,21 @@ func TestMetricsAnswerWhenTheDatabaseIsGone(t *testing.T) {
 		t.Errorf("forgesync_database_up = %q", got)
 	}
 }
+
+// A controller that cannot reach the network says so, and that is the
+// series to alert on: the node series going to zero at the same moment is
+// a consequence of it.
+func TestUplinkMetric(t *testing.T) {
+	f := newFixture("admin-token")
+	f.srv.Health = cutOffHealth{f.srv.Health}
+	body := f.do(req{path: "/metrics", bearer: "admin-token"}).Body.String()
+	if got := series(body, "forgesync_uplink_up"); got != "0" {
+		t.Errorf("forgesync_uplink_up = %q, want 0", got)
+	}
+}
+
+// A health source that also answers the uplink question, the way the
+// monitor does.
+type cutOffHealth struct{ HealthSource }
+
+func (cutOffHealth) UplinkUp() bool { return false }

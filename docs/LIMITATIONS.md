@@ -111,6 +111,18 @@ takes **three** machines, not two, for the same reason a Proxmox cluster wants t
 majority of two is both of them, so a pair cannot promote safely. `deploy/prod/README.md`
 has the counts, the placement, and what a failover costs.
 
+### Automatic promotion of the database, with only two machines
+A second machine can keep a continuously updated copy of the database (`deploy/prod/standby.sh`),
+so losing the first loses nothing. Promoting it is deliberately a person's decision, because
+with two machines nothing can tell "the other one is dead" from "I cannot reach the other
+one", and a pair that promotes on its own judgement ends up, in a partition, with two
+primaries and two histories that will not merge.
+
+*What to do about it:* three machines, where a majority of two makes the decision safely.
+`deploy/prod/README.md` section 12 has the counts and where the machines should sit.
+Installing that arrangement is not automated: `install.sh` and `standby.sh` cover one machine
+and two, and the three-machine database is still set up by hand.
+
 ### Scale beyond 200 repositories
 Measured at 203 repositories on each of five nodes: a push reaches all four replicas in
 about five seconds (that path replicates one repository, told by a webhook), and a full

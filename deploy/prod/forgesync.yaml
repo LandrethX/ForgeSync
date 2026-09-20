@@ -85,11 +85,27 @@ log:
   format: json
 
 health:
+  # When every node has gone quiet at once, ask something that is not a
+  # Forgejo node whether this controller can reach anything at all. Five
+  # nodes in five countries rarely go together; a controller whose own
+  # network has gone does. Without this, one local fault is recorded as
+  # five node failures and the real cause is never said.
+  #
+  # Any one of them answering is enough, so a single provider being down
+  # or blocked is not read as the network being gone. Asked only when
+  # everything is already quiet, so a working installation sends nothing.
+  # Set it to [] to turn the question off, or to addresses of your own.
+  uplink_check: [1.1.1.1, 9.9.9.9, 8.8.8.8]
   interval: 15s
   timeout: 5s
   failure_threshold: 3
 
 inventory:
+  # How often a controller checks whether the installation's nodes are
+  # still the ones it started from. A node added or retired in the admin
+  # UI takes effect within this: the controller stops, and whatever runs
+  # it starts it again a second later. Default 15s.
+  node_check: 15s
   # The safety net, not the fast path: webhooks report changes within
   # seconds. Keep this comfortably longer than a full round takes (see
   # docs/PERFORMANCE.md has the measurements; a round logs its own

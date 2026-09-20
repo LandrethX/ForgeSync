@@ -179,6 +179,11 @@ if [ ! -s .tokens/admin.token ]; then
   chmod 600 .tokens/admin.token
   ok "generated ForgeSync admin API token -> .tokens/admin.token"
 fi
+if [ ! -s .tokens/node-key ]; then
+  openssl rand -hex 32 > .tokens/node-key
+  chmod 600 .tokens/node-key
+  ok "generated the node key -> .tokens/node-key (seals node tokens in the database)"
+fi
 if [ ! -s .tokens/webhook.secret ]; then
   openssl rand -hex 32 > .tokens/webhook.secret
   chmod 600 .tokens/webhook.secret

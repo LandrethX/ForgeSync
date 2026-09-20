@@ -98,6 +98,14 @@ func (f fakeForgejo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type fakeRecorder struct {
 	mu          sync.Mutex
 	transitions []string
+	uplink      []bool
+}
+
+func (r *fakeRecorder) RecordUplink(_ context.Context, up bool, _ string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.uplink = append(r.uplink, up)
+	return nil
 }
 
 func (r *fakeRecorder) RecordNodeStatus(_ context.Context, s Status, prev State) error {

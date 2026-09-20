@@ -95,6 +95,15 @@ two is both of them, so a pair cannot promote safely. A fourth adds nothing to a
 [deploy/prod/README.md](deploy/prod/README.md) section 12 has the counts, where the machines
 should sit, and what a failover costs.
 
+## Adding a node
+
+Nodes live in ForgeSync's database, so one is added from the admin UI and every controller
+has it: there is no list to edit on each machine. ForgeSync asks the node what it is and
+refuses to store one it could not reach or could not use, so a mistake fails while somebody
+is looking at it. The token is sealed with a key the controllers hold and the database never
+sees. What ForgeSync will not do is set the node up: the parts that matter most are
+`app.ini` keys no API can reach, so the UI says what the node needs and then checks.
+
 ## The scripts
 
 | Script | What it does |

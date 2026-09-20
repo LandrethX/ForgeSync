@@ -33,6 +33,9 @@ var writeEndpoints = []struct {
 	{"PUT", "/api/v1/accounts/acct-x", `{"role":"viewer"}`, auth.Administrator},
 	{"PUT", "/api/v1/accounts/acct-x/password", `{"password":"a-long-enough-one"}`, auth.Administrator},
 	{"DELETE", "/api/v1/accounts/acct-x", ``, auth.Administrator},
+	{"POST", "/api/v1/nodes", `{"name":"se","url":"https://se.example.org","token":"t"}`, auth.Administrator},
+	{"POST", "/api/v1/nodes/check", `{"name":"se","url":"https://se.example.org","token":"t"}`, auth.Administrator},
+	{"DELETE", "/api/v1/nodes/se", ``, auth.Administrator},
 }
 
 // Reads that are not for everyone who can sign in.

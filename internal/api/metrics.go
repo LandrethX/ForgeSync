@@ -70,6 +70,18 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	}
 	write(&b, "forgesync_database_up", "1 when the database answers and takes writes", "gauge", sample{value: up})
 
+	// Whether this controller can reach anything at all. It is only asked
+	// when every node has gone quiet, so 0 means the fault is at this end
+	// and the node series below are a consequence, not the cause.
+	if u, ok := s.Health.(interface{ UplinkUp() bool }); ok {
+		reach := 1.0
+		if !u.UplinkUp() {
+			reach = 0
+		}
+		write(&b, "forgesync_uplink_up", "1 when this controller can reach the network", "gauge",
+			sample{value: reach})
+	}
+
 	// Nodes: one series per node, so an alert can name the node that went.
 	var healthy, nodes []sample
 	var lastSeen, failures []sample

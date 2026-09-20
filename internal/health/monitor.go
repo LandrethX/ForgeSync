@@ -22,6 +22,10 @@ type Checker interface {
 // Recorder persists status changes. prev is the state before this check.
 type Recorder interface {
 	RecordNodeStatus(ctx context.Context, s Status, prev State) error
+	// RecordUplink notes that this controller lost or regained its own
+	// reach, which is a different thing from a node being down and worth
+	// one line rather than one per node.
+	RecordUplink(ctx context.Context, up bool, detail string) error
 }
 
 // Target is one node to watch.
@@ -37,6 +41,10 @@ type Options struct {
 	Interval         time.Duration
 	Timeout          time.Duration
 	FailureThreshold int
+	// Uplink is asked, when every node has gone quiet at once, whether
+	// this controller can reach anything at all. nil turns the question
+	// off and every node is recorded as unreachable as before.
+	Uplink Uplink
 }
 
 // Monitor checks every node on an interval and keeps the latest status in memory.
@@ -49,6 +57,11 @@ type Monitor struct {
 
 	mu     sync.RWMutex
 	status map[string]Status
+	// uplink is what the last probe said and when, so five nodes failing
+	// together ask once rather than five times.
+	uplinkUp    bool
+	uplinkAsked time.Time
+	uplinkKnown bool
 
 	subsMu sync.Mutex
 	subs   map[chan struct{}]struct{}
@@ -126,6 +139,15 @@ func (m *Monitor) CheckOnce(ctx context.Context, t Target) Status {
 	m.mu.Unlock()
 
 	m.notify()
+
+	// Five nodes in five countries do not usually go together. When they
+	// do, and this controller cannot reach anything else either, the
+	// fault is at this end, and recording it as five nodes failing would
+	// put the wrong thing in the history and leave the right one unsaid.
+	if s.State != Healthy && m.opts.Uplink != nil && m.allQuiet() && !m.uplinkIsUp(ctx) {
+		return s
+	}
+
 	if s.State != prev.State {
 		m.log.Info("node state changed", "node", t.Name, "from", prev.State, "to", s.State, "error", s.LastError)
 	}
@@ -135,6 +157,71 @@ func (m *Monitor) CheckOnce(ctx context.Context, t Target) Status {
 		}
 	}
 	return s
+}
+
+// allQuiet reports that no node is currently answering. A node that has
+// not been checked yet does not count as quiet: a controller still
+// starting up has not learned anything to be suspicious about.
+func (m *Monitor) allQuiet() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.status) < len(m.targets) {
+		return false
+	}
+	for _, s := range m.status {
+		if s.State == Healthy {
+			return false
+		}
+	}
+	return len(m.status) > 0
+}
+
+// uplinkIsUp asks whether this controller can reach anything, at most
+// once per interval however many nodes ask, and records the answer when
+// it changes.
+func (m *Monitor) uplinkIsUp(ctx context.Context) bool {
+	m.mu.Lock()
+	fresh := m.uplinkKnown && m.now().Sub(m.uplinkAsked) < m.opts.Interval
+	if fresh {
+		up := m.uplinkUp
+		m.mu.Unlock()
+		return up
+	}
+	m.mu.Unlock()
+
+	up := m.opts.Uplink.Up(ctx)
+
+	m.mu.Lock()
+	was, known := m.uplinkUp, m.uplinkKnown
+	m.uplinkUp, m.uplinkAsked, m.uplinkKnown = up, m.now(), true
+	m.mu.Unlock()
+
+	if !known || was != up {
+		if up {
+			m.log.Info("this controller can reach the network again")
+		} else {
+			m.log.Warn("this controller cannot reach the network: the nodes are not being recorded as down, because the fault is at this end")
+		}
+		if m.rec != nil && ctx.Err() == nil {
+			detail := "no reference answered"
+			if up {
+				detail = "a reference answered again"
+			}
+			if err := m.rec.RecordUplink(ctx, up, detail); err != nil {
+				m.log.Error("recording the uplink failed", "error", err)
+			}
+		}
+	}
+	return up
+}
+
+// UplinkUp reports what the last probe said. It is true when the check is
+// off or has never had reason to run, because then nothing suggests
+// otherwise.
+func (m *Monitor) UplinkUp() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return !m.uplinkKnown || m.uplinkUp
 }
 
 func check(ctx context.Context, t Target) Result {

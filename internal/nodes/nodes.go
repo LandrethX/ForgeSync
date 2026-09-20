@@ -44,6 +44,9 @@ type Node struct {
 type Store interface {
 	Nodes(ctx context.Context) ([]store.NodeRecord, error)
 	SaveNode(ctx context.Context, n store.NodeRecord) error
+	// RetiredNames are the nodes somebody has taken out. They are not
+	// taken back in from a config file that still lists them.
+	RetiredNames(ctx context.Context) ([]string, error)
 }
 
 // ErrNoToken says a node in the database has no token anywhere: not sealed
@@ -97,11 +100,31 @@ func Resolve(ctx context.Context, db Store, key *secret.Key, configured []config
 		out = append(out, n)
 	}
 
+	// A node somebody retired is not taken back in because a config file
+	// still names it: retiring is an explicit act and has to stick. The
+	// file is not silently ignored either, because somebody editing it
+	// and seeing nothing happen is worse than being told.
+	retired, err := db.RetiredNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	gone := map[string]bool{}
+	for _, n := range retired {
+		gone[n] = true
+	}
+
 	// Anything in the config file the database hasn't seen. On a first
 	// start that is every node, which is how an existing installation
 	// moves across without being touched.
 	for _, c := range configured {
 		if known[c.Name] {
+			continue
+		}
+		if gone[c.Name] {
+			if log != nil {
+				log.Warn("the config file names a node that has been retired; leaving it out",
+					"node", c.Name, "hint", "remove it from the file, or add it again in the admin UI")
+			}
 			continue
 		}
 		rec := store.NodeRecord{Name: c.Name, URL: c.URL, Site: c.Site,

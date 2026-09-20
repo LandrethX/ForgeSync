@@ -115,13 +115,43 @@ them.
 
 ### `internal/nodes`
 
-Settles which Forgejo nodes an installation has. `Resolve` reads them from the database,
+Settles which Forgejo nodes an installation has, adds them and notices when they change. `Resolve` reads them from the database,
 takes across anything the config file lists that the database hasn't got (which is what
 carries an existing installation over, on the first start, without anybody doing anything),
 and opens each sealed token with the node key. A node whose token cannot be found or opened
 is an error, never a node quietly left out: running with fewer nodes than the installation
 has is how replication stops without anybody noticing. A node still taking its token from a
-file follows what the file says, so correcting an address there keeps working.
+file follows what the file says, so correcting an address there keeps working, and a node
+somebody retired is not taken back in by a file that still names it.
+
+`Admin` (admin.go) adds and retires them. `Check` asks the node what it is and reports every
+answer rather than stopping at the first, because somebody setting a node up wants the whole
+list; `Add` stores nothing unless every blocking check passed, and seals the token first. It
+believes the node about who the token belongs to over what was typed, because that is who
+ForgeSync will be.
+
+`Watch` (watch.go) notices that the installation's nodes are no longer the ones this
+controller was built from, and returns so it can restart. A controller wires seven things
+from the node set at startup, and rebuilding all seven in place would be a large change to a
+working part; restarting is unusually cheap here, because every loop is idempotent, a clean
+stop hands the lease over in about one renewal, and another controller keeps serving. The
+fingerprint covers only what a controller would wire differently, including a hash of the
+token, so a replaced token is followed and no token is recoverable from it.
+
+### `internal/health`
+
+The node health state machine (`Next`, pure and table-tested) and the monitor loop. A failed
+contact makes a node SUSPECT; only `failure_threshold` consecutive failures make it
+UNREACHABLE.
+
+`uplink.go` answers a different question: when *every* node has gone quiet at once, is the
+fault at this end? Five nodes in five countries rarely go together. The monitor then asks a
+prober (`Resolvers`, a DNS query to several public resolvers over UDP, any one answering is
+enough) and, if nothing answers, records one "this controller has no uplink" rather than one
+failure per node, so the history says the right thing. It is asked at most once per interval
+however many nodes ask, and only when everything is already quiet, so a working installation
+sends nothing to a third party. Not ICMP: the systemd unit runs with an empty capability set
+and ping needs `CAP_NET_RAW`. `forgesync_uplink_up` is the series to alert on.
 
 ### `internal/store`
 
@@ -290,7 +320,7 @@ plus the embedded UI underneath.
 | Authentication | `auth.go`: bearer token or session cookie, the CSRF header, the sign-in endpoints, `clientAddr` |
 | Sessions | `session.go`: `Sessions` over the shared database, and the sign-in rate limiter |
 | ForgeSync's own accounts | `accounts.go` |
-| Resources | `repos.go`, `users.go`, `conflicts.go`, `replication.go`, `history.go`, `metrics.go` |
+| Resources | `repos.go`, `users.go`, `nodes.go`, `conflicts.go`, `replication.go`, `history.go`, `metrics.go` |
 
 Every database read in `metrics.go` shares one two-second budget, well inside the
 handler's own. A scrape is at its most useful when the database is unreachable, which is

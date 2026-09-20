@@ -276,9 +276,59 @@ forgesyncd`.
 
 ## 9. The Forgejo nodes
 
-Each node needs a site-admin account for ForgeSync, called `forgesync`, with an API token, and
-the controllers' hosts in `[webhook] ALLOWED_HOST_LIST` so the webhooks can reach whichever
-is leading. ForgeSync installs one system webhook per node itself and keeps it right.
+Nodes live in ForgeSync's own database, so one is added from the admin UI (**Nodes**, then
+**Add a node**) and every controller has it. There is no list to edit on each machine and no
+service to restart by hand.
+
+### What the node needs first
+
+ForgeSync never changes a node's own configuration, and two of these are `app.ini` keys that
+no API can reach and that need Forgejo restarted. Do them on the node:
+
+```sh
+forgejo admin user create --admin --username forgesync --email forgesync@example.org
+forgejo admin user generate-access-token --username forgesync \
+  --token-name forgesync --scopes all --raw
+forgejo admin auth list            # note the SceneID login source id
+```
+
+```ini
+[webhook]
+ALLOWED_HOST_LIST = your-forgesync-host   ; so the node can report changes back
+[server]
+LFS_START_SERVER  = true                  ; or large files cannot be carried
+```
+
+Then restart Forgejo. ForgeSync installs one system webhook per node itself and keeps it
+right; you only have to let the node reach the controller.
+
+### Adding it
+
+Give the UI the name, the address and that token, and press **Check**. ForgeSync asks the
+node what it is and says what it found: whether it answers, whether the token works, who the
+token belongs to, and whether that account is a site admin. Nothing is stored until every
+blocking check passes, so a node that cannot be used fails while you are looking at it rather
+than on the next replication round.
+
+The token is sealed with the node key (section 4) before it is written, and is never shown
+again. **Check** writes nothing and can be run as often as you like while working through
+what the node still needs.
+
+A controller picks a new node up within `inventory.node_check` (15s by default): it stops,
+and whatever runs it starts it again a second later. That costs nothing here, because every
+loop is idempotent and another controller keeps serving meanwhile. Measured on the test
+environment: a node retired was gone in 12 seconds, and one added was in use 6 seconds later.
+
+### Taking one out
+
+**Retire** on the node's page. Nothing watches, scans or replicates to it afterwards. The row
+stays, because its health history is part of the audit trail and nothing may edit that, and
+because a node taken out and put back should not come back a stranger. Adding it again brings
+it back with what is known about it.
+
+A node that is still listed in a controller's config file is **not** taken back in by that
+file: retiring is an explicit act and sticks, and the controller says in its log that the
+file names a node that has been retired.
 
 ## 10. Watching it
 

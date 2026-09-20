@@ -12,6 +12,7 @@
 #        ./setup.sh --three   # also node DE
 #        ./setup.sh --all     # SE, DK, DE, UK and US
 #        ./setup.sh --all --standby   # ... and a second controller on :8091
+#        ./setup.sh --all --three-controllers  # ... and a third on :8092
 #
 # To reach the environment from other machines (e.g. on a server), run it as
 # PUBLIC_BIND=0.0.0.0 ./setup.sh and add the hostnames on those machines too.
@@ -37,12 +38,19 @@ set -a; . ./.env; set +a
 NODES="se dk"
 PROFILE_ARGS=""
 STANDBY=""
+THIRD=""
 for arg in "$@"; do
   case "$arg" in
     --three) NODES="se dk de"; PROFILE_ARGS="--profile three" ;;
     --all) NODES="se dk de uk us"; PROFILE_ARGS="--profile all" ;;
     --standby) STANDBY=1 ;;
-    *) echo "usage: $0 [--three|--all] [--standby]" >&2; exit 2 ;;
+    # Three is the number that makes a real installation's database
+    # redundant (deploy/prod/README.md, section 12). Here the three share
+    # one database container, so what it shows is the leadership order:
+    # exactly one leads, the next in priority takes over, and the
+    # preferred one takes it back.
+    --three-controllers) STANDBY=1; THIRD=1 ;;
+    *) echo "usage: $0 [--three|--all] [--standby|--three-controllers]" >&2; exit 2 ;;
   esac
 done
 
@@ -55,6 +63,7 @@ sceneid_url() { url_of sceneid.test 8080; }
 forgejo_url() { url_of "forgejo-$1.test" "$(port_of "$1")"; }
 controller_url() { url_of forgesync.test 8090; }
 standby_url() { url_of forgesync-b.test 8091; }
+third_url() { url_of forgesync-c.test 8092; }
 
 compose() { docker compose $PROFILE_ARGS "$@"; }
 port_of() { case "$1" in se) echo 3001;; dk) echo 3002;; de) echo 3003;; uk) echo 3004;; us) echo 3005;; esac; }
@@ -215,6 +224,15 @@ ok "controller running ($FORGESYNC_VERSION)"
 if [ -n "$STANDBY" ]; then
   docker compose $PROFILE_ARGS --profile standby up -d --build --wait forgesync-b
   ok "standby controller running on :8091 (forgesync-b)"
+fi
+if [ -n "$THIRD" ]; then
+  sed -e 's|^  name: forgesync-a$|  name: forgesync-c|' \
+      -e 's|^  priority: 1$|  priority: 3|' \
+      -e "s|$(controller_url | sed 's|http://||')|$(third_url | sed 's|http://||')|g" \
+      -e 's|^  listen: 0\.0\.0\.0:8090$|  listen: 0.0.0.0:8092|' \
+      .work/forgesync.docker.yaml > .work/forgesync-c.docker.yaml
+  docker compose $PROFILE_ARGS --profile third up -d --build --wait forgesync-c
+  ok "third controller running on :8092 (forgesync-c)"
 fi
 
 # ForgeSync's own accounts live in its database, which both controllers

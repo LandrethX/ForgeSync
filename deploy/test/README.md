@@ -71,6 +71,20 @@ the controller was configured with, and the `*.test` aliases keep working inside
 network, which is what container-to-container traffic uses either way. Pass the same
 `PUBLIC_HOST` to every later `docker compose ... up` and to the scripts below.
 
+## More than one controller
+
+`--standby` starts a second controller and `--three-controllers` a third, all sharing the
+one database container, so what they show is the leadership order rather than a redundant
+database. Exactly one leads at a time; `controller.priority` decides which (a is 1, b is 2,
+c is 3). Stop the leader and the next in priority takes it inside one lease; start the
+preferred one again and it takes it back. `/api/v1/overview`, the dashboard and
+`forgesync_leader` all name whoever is acting, from any of them.
+
+A real installation is three **machines**, each with PostgreSQL, a controller and the git
+cache, which is what makes the database redundant as well; `deploy/prod/README.md` section
+12 has the counts and why three rather than two. The test environment does not reproduce
+that: `check-db-failover.sh` covers the database side separately.
+
 ## The other scripts
 
 ```sh
@@ -115,6 +129,10 @@ All three take `PUBLIC_HOST=<host or IP>` when the environment isn't on the `*.t
 ./setup.sh            # start SE + DK, configure them, run smoke tests
 ./setup.sh --three    # same, including DE
 ./setup.sh --all      # SE, DK, DE, UK and US
+
+./setup.sh --all --standby             # and a second controller on :8091
+./setup.sh --all --three-controllers   # and a third on :8092
+
 docker compose logs -f forgejo-se
 docker compose --profile three down -v   # stop everything and delete all data
                                          # (then rm -rf .tokens before the next setup)

@@ -271,6 +271,53 @@ services:
       timeout: 5s
       retries: 30
 
+  forgesync-c:
+    # A third controller. Three is the number that makes a real
+    # installation's database redundant as well (deploy/prod/README.md,
+    # section 12); here the three share one database container, so what
+    # this shows is the leadership order. setup.sh --three-controllers
+    # starts it.
+    profiles: [third]
+    build:
+      context: ../..
+      args:
+        VERSION: ${FORGESYNC_VERSION:-dev}
+        COMMIT: ${FORGESYNC_COMMIT:-unknown}
+    image: forgesync:test
+    # Test only: runs as root so it can read the token files bind-mounted
+    # from .tokens/ (they are 0600 and owned by whoever ran setup.sh).
+    user: "0:0"
+    restart: unless-stopped
+    depends_on:
+      forgesync-db:
+        condition: service_healthy
+      sceneid:
+        condition: service_healthy
+      forgejo-se:
+        condition: service_healthy
+      forgejo-dk:
+        condition: service_healthy
+    environment:
+      # Empty unless check-db-failover.sh sets it, and then it names both
+      # servers of the "ha" pair. It overrides database.url in the config
+      # file, so the two controllers move together without the generated
+      # config being rewritten.
+      FORGESYNC_DATABASE_URL: ${FORGESYNC_DATABASE_URL:-}
+    volumes:
+      - ./.work/forgesync-c.docker.yaml:/etc/forgesync/forgesync.yaml:ro
+      - ./.tokens:/etc/forgesync/tokens:ro
+      - forgesync-c-git:/var/lib/forgesync
+    ports:
+      - "${PUBLIC_BIND:-127.0.0.1}:8092:8092"
+    networks:
+      default:
+        aliases: [forgesync-c.test]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8092/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
   hooksink:
     # Records webhook deliveries for the Phase 0 probes (phase0/).
     image: python:3.13-alpine
@@ -391,6 +438,7 @@ services:
 
 volumes:
   forgesync-db:
+  forgesync-c-git:
   forgesync-db-a:
   forgesync-db-b:
   etcd:

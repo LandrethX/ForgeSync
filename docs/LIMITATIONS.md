@@ -137,17 +137,22 @@ What is still true is that ForgeSync does not watch the database for you. Patron
 on replication lag or on a machine that has been out of the cluster for a week. That belongs
 to whatever watches your PostgreSQL.
 
-### Scale beyond 200 repositories
-Measured at 203 repositories on each of five nodes: a push reaches all four replicas in
-about five seconds (that path replicates one repository, told by a webhook), and a full
-round takes about three minutes. The round grows with repositories times nodes, so at a few
-thousand it would need an interval longer than the default and the per-item passes (issues,
-reactions, attachments, at one API call per item per node) would want looking at. Nobody has
-run it at that size.
+### Scale beyond 1000 repositories
+Measured at 203 and then at 1003 repositories on five nodes (`docs/PERFORMANCE.md`).
+Replication is linear in repositories times nodes and did not degrade, the webhook fast path
+stayed at 11 seconds while a thousand repositories were being replicated, and nothing fell
+over or was lost. What it also showed is where the real limit is: a **settled round takes 17
+minutes** at 1000 repositories even when it writes nothing, because it compares every
+repository against every replica every time, and memory peaks at 300 MB during one.
+
+What still has not been run is a few thousand repositories, and the per-item passes are
+where it would show first: issues, reactions and attachments cost an API call per item per
+node, and the guard on each replica costs one per replica per round. Neither is a repository
+count, so both grow faster than anything above.
 
 *What to do about it:* keep `inventory.interval` comfortably above what a round takes (a
-round logs its own duration; `log.level: debug` logs each part), and lean on the webhooks,
-which is where the speed actually is.
+round logs its own duration; `log.level: debug` logs each part), turn off what your
+installation does not need, and lean on the webhooks, which is where the speed actually is.
 
 ### Not run in production
 Everything here has been exercised against five Forgejo nodes in a test environment,

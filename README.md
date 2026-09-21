@@ -34,27 +34,30 @@ Forgejo that stops being upgradable, or mirrors that only travel one way.
 
 ```mermaid
 flowchart TB
-    subgraph people["People"]
+    subgraph people["People, each on the node nearest them"]
         U1["Someone in SE"]
         U2["Someone in DK"]
+        U3["Someone in DE"]
     end
+
     subgraph nodes["Forgejo nodes, entirely unmodified"]
         N1[("Node SE")]
         N2[("Node DK")]
         N3[("Node DE")]
     end
-    subgraph fs["ForgeSync"]
-        C["Controller<br/>forgesyncd, with the admin UI"]
-        DB[("PostgreSQL<br/>what it remembers")]
-    end
-    U1 -->|"push, issue, release"| N1
+
+    C["ForgeSync controller<br/>forgesyncd, with<br/>the admin UI"]
+    DB[("PostgreSQL<br/>what it remembers")]
+
+    U1 --> N1
     U2 -->|"push, issue, release"| N2
-    N1 -.->|"webhook: this changed"| C
-    N2 -.->|"webhook: this changed"| C
-    C -->|"REST API, Git, LFS"| N1
-    C -->|"REST API, Git, LFS"| N2
-    C -->|"REST API, Git, LFS"| N3
-    C <--> DB
+    U3 --> N3
+
+    N1 <--> C
+    N2 <-->|"webhook in, and<br/>REST API, Git and LFS out"| C
+    N3 <--> C
+
+    C --- DB
 ```
 
 **The Forgejo nodes are stock.** No patch, no plugin, no git hook, and ForgeSync never reads

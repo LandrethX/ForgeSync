@@ -7,15 +7,156 @@ work on whichever one is nearest and find the same thing there. It is an externa
 plane: it never patches Forgejo, never touches its database, and uses only what Forgejo
 offers anyone: the REST API, webhooks, the Git and LFS protocols.
 
-It was started around [SceneGit](https://scenegit.org/), a European alternative git
-repository for sceners, and the shape of the problem comes from there: several nodes in
-several countries, one identity behind them, and people who should be able to push to
-whichever is nearest without thinking about it.
-
 It is built around one rule: **never lose work, never decide for the owner.** Only
 fast-forwards and creations are pushed, every push is leased against what ForgeSync last
 wrote, and anything two people could genuinely disagree about becomes a conflict with both
 sides shown rather than a decision made quietly.
+
+## The problem
+
+Several Forgejo servers, in several countries, each one a complete and ordinary Forgejo
+that people use directly. Someone in Stockholm pushes to the Swedish one; someone in
+Copenhagen opens an issue on the Danish one. Without something in between, those are two
+different repositories that happen to share a name.
+
+ForgeSync was started around [SceneGit](https://scenegit.org/), a European alternative git
+repository for sceners, and that is where the shape of the problem comes from: several
+nodes in several countries, one identity behind them, and people who should be able to push
+to whichever is nearest without thinking about it.
+
+Forgejo has no built-in way to do that, and the usual answers each cost something this
+project was not willing to pay: one server everybody reaches over a long link, or a patched
+Forgejo that stops being upgradable, or mirrors that only travel one way.
+
+## How it works
+
+### The pieces
+
+```mermaid
+flowchart TB
+    subgraph people["People"]
+        U1["Someone in SE"]
+        U2["Someone in DK"]
+    end
+    subgraph nodes["Forgejo nodes, entirely unmodified"]
+        N1[("Node SE")]
+        N2[("Node DK")]
+        N3[("Node DE")]
+    end
+    subgraph fs["ForgeSync"]
+        C["Controller<br/>forgesyncd, with the admin UI"]
+        DB[("PostgreSQL<br/>what it remembers")]
+    end
+    U1 -->|"push, issue, release"| N1
+    U2 -->|"push, issue, release"| N2
+    N1 -.->|"webhook: this changed"| C
+    N2 -.->|"webhook: this changed"| C
+    C -->|"REST API, Git, LFS"| N1
+    C -->|"REST API, Git, LFS"| N2
+    C -->|"REST API, Git, LFS"| N3
+    C <--> DB
+```
+
+**The Forgejo nodes are stock.** No patch, no plugin, no git hook, and ForgeSync never reads
+or writes their databases. It uses only what any client may use: the REST API, webhooks, the
+Git and LFS protocols. Upgrading a node is Forgejo's business, not ForgeSync's.
+
+**The controller** is one process outside them, with the admin UI built into the binary. It
+is the only thing that writes to the nodes.
+
+**PostgreSQL** is what the controller remembers: which repositories exist on which nodes,
+which node is authoritative for each, what ForgeSync last wrote where, and every difference
+it could not settle. It is the one thing to back up.
+
+### Every repository has one primary node
+
+This is the idea the rest follows from. ForgeSync does not try to merge everything from
+everywhere. For each repository, one node is **authoritative**, and the others are copies of
+it.
+
+Which one is worked out automatically: a person's repositories follow the node where their
+account was first created, on the reasoning that this is where they work. Anything else
+falls back to wherever the repository appeared first. An administrator can override it at
+any time, and that choice is never taken away again.
+
+In the ordinary case that is also where you already are: your own repositories take your own
+home node as their primary, so the nearest node and the authoritative one are the same
+server. The other nodes hold a copy you can clone, browse and fork.
+
+What happens if something is pushed to one of those copies depends on a setting you choose.
+`replication.protect_replicas`, which the production configuration turns on, puts a
+ForgeSync-owned protection rule on every replica: Forgejo itself then refuses the push, and
+people work on the primary. Left off, a push to a replica is handled by what it actually is:
+
+- **It only adds commits, or a branch only that node has.** Nothing is in question, so
+  ForgeSync moves it to the primary itself and carries on from there. Nobody is asked.
+- **Both sides have moved.** Now there is a real question, and it belongs to the repository's
+  owner rather than to ForgeSync. See below.
+
+### Two paths: one fast, one thorough
+
+| | The webhook | The scan round |
+|---|---|---|
+| When | The moment something changes | Every `inventory.interval` |
+| Does | Replicates that one repository | Lists and compares everything, everywhere |
+| Costs | Seconds, whatever the repository count | Minutes, growing with repositories times nodes |
+| For | What people feel | Catching what a lost delivery missed |
+
+The webhook is the mechanism and the round is the safety net, not the other way round. At a
+thousand repositories a settled round takes seventeen minutes while a push still reaches
+every node in eleven seconds ([docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
+
+### What happens when you push
+
+1. You push. In the ordinary case that is your nearest node, which is also this
+   repository's primary. Nothing about your workflow changes.
+2. Forgejo tells ForgeSync that repository changed.
+3. If you pushed somewhere other than that repository's primary, ForgeSync first gets the
+   primary caught up, provided that loses nothing: your commits are moved there, or your new
+   branch is created there. If the primary has moved too, it stops and asks instead.
+4. It fetches the commits into a bare cache of its own and pushes them to every other node.
+   Only fast-forwards and new refs, and **every push is leased** against exactly what
+   ForgeSync last wrote there, so a change made on the far side in the meantime makes the
+   push fail instead of overwriting anything.
+5. What belongs with the code follows the same way: issues, comments, releases, labels, LFS
+   objects, packages and the rest, each by the rule that suits it.
+
+### What happens when it cannot decide
+
+It says so, and stops. A difference two people could genuinely disagree about becomes a
+**conflict**, with both sides shown, and nothing is overwritten while it stands.
+
+The one case ForgeSync helps with is the common one. When a branch has diverged, it opens a
+pull request on the primary and leaves it to the repository's owner: merge it and both
+histories are kept, close it without merging and the owner has chosen the primary's version,
+at which point the replicas are reset and their version is kept on a backup branch for a
+month. That is the owner deciding, with ForgeSync doing the work.
+
+### Three things called "primary"
+
+Worth separating before reading anything else here:
+
+| Term | Means |
+|---|---|
+| **Repository primary** | The Forgejo node that is authoritative for one repository |
+| **ForgeSync leader** | Whichever controller currently holds the lease and is doing the work |
+| **Database primary** | The PostgreSQL server that takes writes |
+
+### One controller, or three
+
+A machine is always the same thing: PostgreSQL, a controller and the git cache. Controllers
+share one database and take a lease in it; whichever holds the lease does the work and the
+rest serve the same pages, ready to take over. Which one should be acting is configured
+(`controller.priority`) and can be changed from the page of the controller you're looking
+at. Sessions and ForgeSync's own accounts live in that database too, so a failover doesn't
+sign anyone out.
+
+One machine is a fine place to start. A second gives you a controller that survives losing
+the first, though the database is still on one machine. **Three** is what makes the database
+redundant as well, for the same reason a Proxmox cluster wants three nodes: a majority of
+two is both of them, so a pair cannot promote safely. A fourth adds nothing to a quorum.
+[deploy/prod/README.md](deploy/prod/README.md) section 12 has the counts, where the machines
+should sit, and what a failover costs.
 
 ## What it keeps the same
 
@@ -38,6 +179,7 @@ What it deliberately doesn't, and what Forgejo won't let it, is in
 | Run it for real, natively on Debian | [deploy/prod/README.md](deploy/prod/README.md) |
 | Try it, with five Forgejo nodes in Docker | [deploy/test/README.md](deploy/test/README.md) |
 | Know what it can't do, and why | [docs/LIMITATIONS.md](docs/LIMITATIONS.md) |
+| Know what it costs at 200 and at 1000 repositories | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) |
 | Understand the design | [docs/ForgeSync_Solution_Architecture.md](docs/ForgeSync_Solution_Architecture.md) |
 | Work on the code | [CONTRIBUTING.md](CONTRIBUTING.md): the commands, the test environment, the conventions |
 | Find your way around the source | [docs/CODE_REFERENCE.md](docs/CODE_REFERENCE.md): what each package does, and its entry points |
@@ -79,22 +221,6 @@ those files honest rather than silencing a tool in passing. `gosec` still
 reports five findings by design: the session cookie's `Secure` flag is a setting (it has
 to be, for a reverse proxy terminating TLS), the git CLI is run with arguments ForgeSync
 builds, and the config and token files are read from paths the config gives.
-
-## One controller, or three
-
-A machine is always the same thing: PostgreSQL, a controller and the git cache. Controllers
-share one database and take a lease in it; whichever holds the lease does the work and the
-rest serve the same pages, ready to take over. Which one should be acting is configured
-(`controller.priority`) and can be changed from the page of the controller you're looking
-at. Sessions and ForgeSync's own accounts live in that database too, so a failover doesn't
-sign anyone out.
-
-One machine is a fine place to start. A second gives you a controller that survives losing
-the first, though the database is still on one machine. **Three** is what makes the database
-redundant as well, for the same reason a Proxmox cluster wants three nodes: a majority of
-two is both of them, so a pair cannot promote safely. A fourth adds nothing to a quorum.
-[deploy/prod/README.md](deploy/prod/README.md) section 12 has the counts, where the machines
-should sit, and what a failover costs.
 
 ## Adding a node
 

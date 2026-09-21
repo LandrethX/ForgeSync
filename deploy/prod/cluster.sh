@@ -16,6 +16,7 @@
 #   On the first machine:   ./cluster.sh init <second> <third>
 #   On the others:          ./cluster.sh join /root/forgesync-cluster.txt
 #   Any machine:            ./cluster.sh status
+#   From monitoring:        ./cluster.sh status --quiet   (exits non-zero when wrong)
 #   Planned handover:       ./cluster.sh switchover
 #
 # init takes a verified dump before it touches anything, and refuses to
@@ -496,20 +497,80 @@ join() {
 
 # ---------------------------------------------------------------- status
 
+# status is also the check: it exits non-zero when the cluster is not in
+# a state you would want to be left alone with, so monitoring can call it
+# without ForgeSync pretending to be a database monitor.
+#
+#   */5 * * * * root /usr/local/src/forgesync/deploy/prod/cluster.sh status --quiet
+#
+# What counts as wrong: no leader, a member that is not running, a
+# replica too far behind to be worth promoting, or a member count that
+# cannot survive losing a machine.
 status() {
-  step "The cluster"
+  local quiet=0
+  [ "${1:-}" = "--quiet" ] && quiet=1
   [ -s "$PATRONI_CONF" ] || die "Patroni is not set up here"
-  patronictl -c "$PATRONI_CONF" list
-  printf '\n'
+
+  local json bad=0
+  json=$(patronictl -c "$PATRONI_CONF" list -f json 2>/dev/null) \
+    || { [ "$quiet" -eq 1 ] || die "patronictl would not answer"; printf 'patroni is not answering\n' >&2; return 1; }
+
+  if [ "$quiet" -eq 0 ]; then
+    step "The cluster"
+    patronictl -c "$PATRONI_CONF" list
+    printf '\n'
+  fi
+
+  local leaders running total lagging
+  leaders=$(count_in "$json" '"Role":[[:space:]]*"Leader"')
+  total=$(count_in "$json" '"Member":')
+  running=$(count_in "$json" '"State":[[:space:]]*"running"')
+  lagging=$(printf '%s' "$json" | { grep -o '"Lag in MB":[[:space:]]*[0-9]*' || true; } \
+    | awk -F'[: ]+' -v m="${FORGESYNC_MAX_LAG_MB:-256}" '$NF > m {n++} END {print n + 0}')
+
+  report() { # report <ok?> <message>
+    if [ "$1" -eq 0 ]; then
+      [ "$quiet" -eq 0 ] && ok "$2"
+    else
+      bad=1
+      if [ "$quiet" -eq 1 ]; then printf '%s\n' "$2" >&2; else printf '  \033[31mwrong\033[0m %s\n' "$2"; fi
+    fi
+    return 0
+  }
+
+  if [ "$leaders" = 1 ]; then
+    report 0 "one leader, which is what there should be"
+  else
+    report 1 "$leaders leaders: nothing can be written until there is exactly one"
+  fi
+  if [ "$running" = "$total" ]; then
+    report 0 "all $total members are running"
+  else
+    report 1 "$running of $total members are running"
+  fi
+  if [ "$lagging" -eq 0 ]; then
+    report 0 "no replica is more than ${FORGESYNC_MAX_LAG_MB:-256} MB behind"
+  else
+    report 1 "$lagging replica(s) more than ${FORGESYNC_MAX_LAG_MB:-256} MB behind: promoting one would lose what it has not caught up with"
+  fi
+
   local n
-  n=$(ETCDCTL_API=3 etcdctl member list 2>/dev/null | wc -l)
+  n=$({ ETCDCTL_API=3 etcdctl member list 2>/dev/null || true; } | wc -l | tr -d ' ')
   case "$n" in
-    3|5) ok "$n etcd members: a majority is $(( n / 2 + 1 )), so $(( n - (n / 2 + 1) )) can be lost" ;;
-    1)   warn "1 etcd member: nothing is redundant yet, add the other two" ;;
-    2|4) warn "$n etcd members: an even number, so losing one stops the database. Add one more" ;;
-    *)   warn "could not count the etcd members" ;;
+    3|5) report 0 "$n etcd members: a majority is $(( n / 2 + 1 )), so $(( n - (n / 2 + 1) )) can be lost" ;;
+    1)   report 1 "1 etcd member: nothing is redundant, add the other two" ;;
+    2|4) report 1 "$n etcd members: an even number, so losing one stops the database. Add one more" ;;
+    *)   report 1 "could not count the etcd members" ;;
   esac
+  return "$bad"
 }
+
+# count_in counts matches, and does not let a pattern that matches nothing
+# stop the script. grep exits non-zero when it finds none and this script
+# runs under pipefail, so without the `|| true` the check would abort
+# silently at exactly the moment it had something to report: no leader is
+# no matches.
+count_in() { printf '%s' "$1" | { grep -oE "$2" || true; } | wc -l | tr -d ' '; }
 
 # ------------------------------------------------------------ switchover
 
@@ -526,7 +587,7 @@ switchover() {
 case "${1:-}" in
   init)       shift; init "$@" ;;
   join)       shift; join "$@" ;;
-  status)     shift; status ;;
+  status)     shift; status "$@" ;;
   switchover) shift; switchover ;;
   *) sed -n '2,28p' "$0"; exit 2 ;;
 esac

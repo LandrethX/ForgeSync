@@ -78,17 +78,60 @@ doing by hand or looking at afterwards.
 
 ## 1. The machine
 
-A Debian 13 LXC with 1 vCPU and 1 GB of memory is enough for a few hundred repositories:
-the controller uses about 100 MB while leading, 7 MB while standing by. It needs outbound
-HTTPS to the Forgejo nodes, and the nodes need to reach it back for webhooks.
+An unprivileged Debian 13 LXC. In Proxmox, `Create CT` with:
+
+| Setting | Value | Why |
+|---|---|---|
+| Template | `debian-13-standard` | What the install script checks for and refuses without |
+| Unprivileged | **yes** | Nothing here wants root on the host. Leave the default alone |
+| Nesting, FUSE, keyctl | off | Not needed. PostgreSQL, git and Go all run without them |
+| Cores | 2 | 1 runs it; 2 halves the build |
+| Memory | **2048 MB**, swap 512 | Measured below |
+| Disk | **16 GB** to start | Measured below, and the one to keep an eye on |
+| Network | a fixed address | The Forgejo nodes reach it for webhooks and the other machines name it in `database.url`, so it must not move. A static address or a DHCP reservation |
+| Start at boot | yes | |
+
+Then, inside it:
 
 ```sh
 apt-get update
 apt-get install -y ca-certificates curl git
 ```
 
-Git is needed at runtime: ForgeSync runs the `git` CLI (2.32 or newer) for the replication
-itself.
+Git is needed at runtime, not just to build: ForgeSync runs the `git` CLI (2.32 or newer)
+for the replication itself.
+
+### What it actually uses
+
+Measured, on the five-node test installation and on the install itself.
+
+| | |
+|---|---|
+| The controller, leading | about 100 MB |
+| The controller, standing by | about 7 MB |
+| PostgreSQL with ForgeSync's state | 12 MB of data for 203 repositories, 812 replicas |
+| The Go toolchain (kept, for the next upgrade) | 282 MB |
+| Node (kept, same reason) | about 120 MB |
+| A build: module cache, build cache, node_modules | about 400 MB, given back afterwards unless `--keep-build` |
+| A clean install, start to finish | 48 seconds |
+| The admin UI build, at its peak | 184 MB of memory |
+
+So 2 GB is comfortable rather than tight: the build is the busiest moment and it peaks well
+under half of it.
+
+**Disk is the thing to watch, and it is the git cache that grows.** Under
+`replication.work_dir` a controller keeps a bare mirror of every repository it has replicated,
+so plan for roughly the total size of your repositories, plus their history. It was 51 MB for
+203 small test repositories, which tells you the shape and not the size: work yours out from
+what your Forgejo nodes are using. A standby that has never led has almost nothing there, and
+fills it the first time it takes over.
+
+On a three-machine installation (section 12) each machine also carries PostgreSQL and etcd.
+etcd is tiny. The database is the size above. It is still the git cache that decides.
+
+If the disk does fill, nothing is lost: replication stops with errors, the pages stay up, and
+it resumes when there is room. The cache can be deleted and will be rebuilt, which is slow
+but safe.
 
 ## 2. PostgreSQL
 
@@ -365,6 +408,22 @@ They were checked with `promtool` and then against this installation: all ten lo
 evaluate, and stopping a node made `ForgeSyncNodeUnhealthy` fire with the node's name in it
 and resolve when it came back.
 
+**None of these watch the database itself**, because ForgeSync does not: `forgesync_database_up`
+says a controller cannot reach it, not why. On a three-machine installation (section 12)
+`cluster.sh status --quiet` is the check for that half. It prints nothing and exits 0 while
+the cluster is in a state you would be happy to be left alone with, and otherwise prints
+what is wrong and exits non-zero, so cron or any monitoring that reads an exit code can call
+it:
+
+```sh
+*/5 * * * * root /usr/local/src/forgesync/deploy/prod/cluster.sh status --quiet
+```
+
+What counts as wrong: no leader or more than one, a member that is not running, a replica
+more than `FORGESYNC_MAX_LAG_MB` (256 by default) behind, or an etcd member count that
+cannot survive losing a machine. Without `--quiet` it prints the same checks in full, with
+`patronictl list` above them.
+
 ## 11. Backups
 
 The database is the only thing that can't be rebuilt: what each repository's primary is,
@@ -488,6 +547,7 @@ etcd holding the decision, Patroni making it, all from Debian's own packages.
 scp /root/forgesync-cluster.txt root@<second>:/root/   # and to the third
 ./cluster.sh join /root/forgesync-cluster.txt          # on each of the others
 ./cluster.sh status                                    # any machine, any time
+./cluster.sh status --quiet                            # the same, for monitoring (section 10)
 ./cluster.sh switchover                                # a planned handover
 ```
 

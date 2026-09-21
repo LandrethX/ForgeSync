@@ -15,13 +15,23 @@ PLATFORMS ?= linux/amd64 linux/arm64
 build: web ## Build the web UI, then forgesyncd (with the UI embedded) and forgesync into bin/
 	go build -ldflags '$(LDFLAGS)' -o bin/ ./cmd/...
 
-web: ## Build the admin UI into internal/webui/dist (embedded by go build)
-	cd web && npm ci --no-audit --no-fund && npm run build
+# node_modules is not in the repository, so every target that runs the UI
+# toolchain has to be able to create it. Making it a file target rather
+# than a step inside `web` means `make check` works on a machine that has
+# never built the UI, and that a changed lock file reinstalls: a fresh CI
+# runner is exactly that machine every time, and `make check` used to fail
+# there with `tsc: not found` before anything had installed tsc.
+web/node_modules: web/package-lock.json web/package.json
+	cd web && npm ci --no-audit --no-fund
+	@touch web/node_modules
 
-web-dev: ## Vite dev server on :5173, proxying /api to a controller on :8090 (make run)
+web: web/node_modules ## Build the admin UI into internal/webui/dist (embedded by go build)
+	cd web && npm run build
+
+web-dev: web/node_modules ## Vite dev server on :5173, proxying /api to a controller on :8090 (make run)
 	cd web && npm run dev
 
-web-test: ## Type-check and unit-test the admin UI
+web-test: web/node_modules ## Type-check and unit-test the admin UI
 	cd web && npm run typecheck && npm test
 
 test: ## Unit tests (database tests skip without FORGESYNC_TEST_DATABASE_URL)

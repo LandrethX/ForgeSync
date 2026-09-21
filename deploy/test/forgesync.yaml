@@ -2,6 +2,14 @@
 #   go run ./cmd/forgesyncd -config deploy/test/forgesync.yaml
 # Relative paths are resolved against this file's directory. The tokens are
 # created by setup.sh.
+controller:
+  # No priority is set here, so it is 0, which beats the containers
+  # (forgesync-a is 1, -b is 2, -c is 3). Starting this therefore takes
+  # leadership away from whichever container was acting, which is usually
+  # what you want while working on the code, but is better known than
+  # discovered. Give it a priority above theirs to watch instead.
+  name: dev
+
 log:
   level: debug
   format: text
@@ -10,20 +18,13 @@ http:
   admin_token_file: .tokens/admin.token
   # Plain http on localhost; production keeps the default (true).
   secure_cookies: false
-oidc:
-  # SceneID stand-in (Keycloak). Realm roles arrive in the "roles" claim.
-  issuer: http://sceneid.test:8080/realms/sceneid
-  client_id: forgesync-admin
-  client_secret_file: .tokens/sceneid-admin-client.secret
-  redirect_url: http://127.0.0.1:8090/api/v1/auth/callback
-  post_logout_redirect_url: http://127.0.0.1:8090/
-  roles_claim: roles
-  roles:
-    administrator: [forgesync-admin]
-    operator: [forgesync-operator]
-    viewer: [forgesync-viewer]
-  # Keep admin-token sign-in in the web UI as a break-glass option.
-  allow_token_sign_in: true
+# There is no oidc block, and that is deliberate rather than missing.
+# SceneID is how people sign in to the Forgejo *nodes*; the controller's own
+# admin UI signs in with a ForgeSync account or the admin token, so that
+# losing SceneID cannot lock an administrator out of the thing they would
+# use to find out why. This file used to carry an oidc block for a sign-in
+# that no longer exists, which made the config unloadable, because unknown
+# keys are errors.
 node_key_file: .tokens/node-key
 
 database:
@@ -34,6 +35,11 @@ health:
   interval: 15s
   timeout: 5s
   failure_threshold: 3
+# Every node setup.sh --all starts. A node that is in the database without a
+# sealed token has to be named here or the controller refuses to start, so
+# this list and the environment have to agree: two entries here while five
+# nodes were running is why `make run` used to stop with
+# `node "de": no token for this node`.
 nodes:
   - name: se
     site: SE
@@ -45,6 +51,21 @@ nodes:
     site: DK
     url: http://forgejo-dk.test:3002
     token_file: .tokens/dk.token
+    sceneid_source_id: 1
+  - name: de
+    site: DE
+    url: http://forgejo-de.test:3003
+    token_file: .tokens/de.token
+    sceneid_source_id: 1
+  - name: uk
+    site: UK
+    url: http://forgejo-uk.test:3004
+    token_file: .tokens/uk.token
+    sceneid_source_id: 1
+  - name: us
+    site: US
+    url: http://forgejo-us.test:3005
+    token_file: .tokens/us.token
     sceneid_source_id: 1
 replication:
   # Copies branches and tags from each repository's primary to the other

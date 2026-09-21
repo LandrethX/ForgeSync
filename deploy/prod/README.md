@@ -179,10 +179,11 @@ Three ways, in the order most people will want them.
 machine never sees Go, Node or a compiler:
 
 ```sh
-curl -fsSLO https://github.com/LandrethX/ForgeSync/releases/latest/download/SHA256SUMS
-curl -fsSLO https://github.com/LandrethX/ForgeSync/releases/latest/download/forgesync-<version>-linux-amd64.tar.gz
+V=v0.10.1                                   # the current release
+curl -fsSLO "https://github.com/LandrethX/ForgeSync/releases/download/$V/SHA256SUMS"
+curl -fsSLO "https://github.com/LandrethX/ForgeSync/releases/download/$V/forgesync-$V-linux-amd64.tar.gz"
 sha256sum -c --ignore-missing SHA256SUMS
-tar xzf forgesync-<version>-linux-amd64.tar.gz
+tar xzf "forgesync-$V-linux-amd64.tar.gz"
 install -m 0755 forgesync-*/forgesyncd forgesync-*/forgesync /usr/local/bin/
 ```
 

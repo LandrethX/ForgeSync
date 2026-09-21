@@ -273,18 +273,31 @@ What it deliberately doesn't, and what Forgejo won't let it, is in
 
 ## Installing
 
+Current release: **[v0.10.1](https://github.com/LandrethX/ForgeSync/releases/tag/v0.10.1)**.
 On a fresh Debian 13 machine, which in practice means an unprivileged Proxmox LXC:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/LandrethX/ForgeSync/main/deploy/prod/install.sh
-bash install.sh --first --binary
+curl -fsSLO https://raw.githubusercontent.com/LandrethX/ForgeSync/v0.10.1/deploy/prod/install.sh
+bash install.sh --first --binary --ref v0.10.1
 ```
 
+That is the version pinned, which is what you want on a machine you will have to reason
+about later. To take whatever is newest instead, use `main` in the URL and drop `--ref`;
+`--binary` then asks for the latest release.
+
 `--binary` takes a published build: two binaries with the admin UI already inside them, and
-the files that set the machine up. It checks the download against the release's
-`SHA256SUMS` and compiles nothing, so no Go, Node or compiler is fetched or left behind,
-which is about 400 MB a machine would otherwise keep for the next upgrade. Measured on a
-clean Debian 13 container: **25 seconds**, against 48 for a source build.
+the files that set the machine up. It fetches the one for this machine's architecture,
+**checks it against the release's `SHA256SUMS`** and compiles nothing, so no Go, Node or
+compiler is fetched or left behind, which is about 400 MB a machine would otherwise keep for
+the next upgrade.
+
+Measured by running exactly the two lines above on a clean Debian 13 container with systemd
+as pid 1: **24 seconds** from nothing to a controller answering `/readyz`, leaving 23 MB of
+binaries and no toolchain or source tree. A source build takes 48 seconds and keeps the
+toolchain.
+
+Then two things, which the script prints when it finishes: make the first account with the
+admin token, since there is nobody to make it otherwise, and add your Forgejo nodes.
 
 Leave `--binary` off and the same script clones and builds instead, which is what you want
 while working on ForgeSync or running something that was never tagged.
@@ -366,7 +379,14 @@ Every script takes `PUBLIC_HOST=<host or IP>` when the environment isn't reachab
 
 The first release of ForgeSync was published during **[Mysdata 2026](https://mysdata.org/)**
 in Karlskrona, in co-operation with Hagar of TST, a scene group. The repository is
-<https://github.com/LandrethX/ForgeSync>.
+<https://github.com/LandrethX/ForgeSync>, and
+[the releases are here](https://github.com/LandrethX/ForgeSync/releases).
+
+The current one is **v0.10.1**, and it is not a 1.0 on purpose: everything in it has been
+exercised against five Forgejo nodes, two and three controllers and a database that fails
+over, but only in a test environment. Running somewhere real is the one thing a 1.0 should
+be able to claim, and [docs/LIMITATIONS.md](docs/LIMITATIONS.md) says so in the same
+words.
 
 ## Licence
 

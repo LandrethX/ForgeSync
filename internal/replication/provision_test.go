@@ -762,11 +762,14 @@ func (f *fakeAPI) DeleteRepo(_ context.Context, owner, repo string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	full := owner + "/" + repo
-	if _, ok := f.repos[full]; ok {
-		delete(f.repos, full)
-		os.RemoveAll(filepath.Join(f.git.root, full+".git"))
-		f.calls = append(f.calls, "delete "+full)
+	if _, ok := f.repos[full]; !ok {
+		// As Forgejo answers: deleting something that is not there is a
+		// 404, not a quiet success.
+		return &forgejo.APIError{Method: "DELETE", Path: "/api/v1/repos/" + full, StatusCode: 404, Message: "repository does not exist"}
 	}
+	delete(f.repos, full)
+	os.RemoveAll(filepath.Join(f.git.root, full+".git"))
+	f.calls = append(f.calls, "delete "+full)
 	return nil
 }
 func (f *fakeAPI) AdminCreateOrg(_ context.Context, owner string, opt forgejo.CreateOrgOption) error {

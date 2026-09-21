@@ -836,6 +836,15 @@ sudoes as the repository's owner, who cannot see the private archive organizatio
 gets 404 for everything in it. It now counts only what actually went, stops when a page
 yields nothing, and uses a non-sudoed call for the archives.
 
+**LOW, fixed: an archive deleted by hand blocked forgetting for ever.** `purgeArchives`
+treated any error from deleting an archived copy as a reason to keep waiting, including
+Forgejo's 404 for one that is already gone. An administrator tidying an archive away
+themselves therefore left the repository waiting to be forgotten permanently, and now that
+`Forget` exists, its git cache with it. A missing archive counts as purged. Found by
+deleting 3990 archives by hand while clearing up, which is exactly the case. The test
+harness's `DeleteRepo` was answering a quiet success for a repository that was not there,
+so it now answers 404 as Forgejo does, which is what let the case be tested at all.
+
 **Documented, not a fault: what `protect_replicas` means for a person.** With it on, which
 is what the production configuration sets, a user's push to any node that is not the
 repository's primary is refused by Forgejo. The rejection is Forgejo's own protected-branch

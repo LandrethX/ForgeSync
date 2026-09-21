@@ -77,6 +77,33 @@ func TestDeletedOnPrimary(t *testing.T) {
 		}
 	})
 
+	t.Run("an archive somebody deleted by hand does not block forgetting", func(t *testing.T) {
+		e, st, se, _, seAPI, dkAPI, _, _ := setupResolve(t)
+		e.now = func() time.Time { return now }
+		deleteOnPrimary(t, st, se, seAPI)
+		if err := e.RunRepo(ctx, st.rec); err != nil {
+			t.Fatal(err)
+		}
+		// Somebody tidies the archive away themselves, before the backup
+		// period is over. Asking Forgejo to delete it then answers 404,
+		// which used to count as a failure and left the repository waiting
+		// to be forgotten for ever, with its git cache along with it.
+		delete(dkAPI.repos, "forgesync-archive/alice--demo--20260919-103000")
+
+		now = now.Add(31 * 24 * time.Hour)
+		st.rec.Replicas[1].Present = false
+		if err := e.RunRepo(ctx, st.rec); err != nil {
+			t.Fatal(err)
+		}
+		if !st.deleted {
+			t.Error("the repository was never forgotten")
+		}
+		if st.archives[0].State != "purged" {
+			t.Errorf("archive state = %q, want purged", st.archives[0].State)
+		}
+		now = time.Date(2026, 9, 19, 10, 30, 0, 0, time.UTC)
+	})
+
 	t.Run("gone in git but still in the inventory: wait for the scan", func(t *testing.T) {
 		e, st, se, _, seAPI, dkAPI, _, _ := setupResolve(t)
 		deleteOnPrimary(t, st, se, seAPI)

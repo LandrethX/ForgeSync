@@ -207,7 +207,10 @@ func (e *Engine) purgeArchives(ctx context.Context, rec store.RepositoryRecord, 
 			left++
 			continue
 		}
-		if err := n.API.DeleteRepo(ctx, e.opts.ArchiveOrg, a.ArchivedName); err != nil {
+		// An archive somebody has already deleted by hand is done with,
+		// not a failure. Counting it as one left the repository waiting to
+		// be forgotten for ever, and its git cache with it.
+		if err := n.API.DeleteRepo(ctx, e.opts.ArchiveOrg, a.ArchivedName); err != nil && !forgejo.IsNotFound(err) {
 			e.log.Warn("deleting an archived copy failed", "repository", rec.FullName, "node", a.Node, "error", err)
 			left++
 			continue

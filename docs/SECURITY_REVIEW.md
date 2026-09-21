@@ -455,3 +455,88 @@ ForgeSync does not configure the node. The `app.ini` keys it needs (`ALLOWED_HOS
 wizard says what to do and then checks what it can see. That is the whole shape of it:
 instructions, then verify, and nothing done on the node's behalf with a token somebody may
 not have meant to hand over.
+
+---
+
+# Gate: the three-machine database, and closing the race gap
+
+Run on 2026-09-21 against the working tree on top of commit `8992fea`, before committing.
+
+## Classification
+
+| | |
+|---|---|
+| **Scope** | The uncommitted diff |
+| **Change under review** | `deploy/prod/cluster.sh`, which installs etcd and Patroni and hands a live PostgreSQL to them; a flaky test fixed; `make test-race` added to `make check`; documentation |
+| **Exposure** | Not network-reachable code. A root script on the database machines, and a test change |
+| **Data** | The whole of ForgeSync's state: it adopts the running database. It also writes the database and replication passwords into a Patroni config and a bundle |
+| **Privilege** | Root, and it takes ownership of PostgreSQL away from Debian's own unit |
+| **Level** | **LEVEL 4.** A root script that moves a live database and handles credentials. |
+
+## Result
+
+| Check | Tool | Result |
+|---|---|---|
+| Formatting | `gofmt -l` | **PASS** |
+| Static checks | `go vet ./...` | **PASS** |
+| Tests | `go test ./...` | **PASS** |
+| **Race detection** | `CGO_ENABLED=1 go test -race ./...` | **PASS**, including the database tests. See below: this closes a gap that had been NOT RUN for four reviews |
+| Types and UI | `tsc --noEmit`, `vitest run` | **PASS**, 80 of 80 |
+| Shell | `shellcheck` at default severity | **PASS**, including the new script |
+| Secrets | `gitleaks dir .` | **PASS** |
+| Behaviour, end to end | three Debian 13 machines running systemd | **PASS**, below |
+
+## Race detection, finally run
+
+It had been reported `NOT RUN` in four consecutive gates, for want of a C compiler on this
+host. That was a fixable environment problem rather than a real obstacle: `apt-get install
+gcc`, and it runs. The whole suite passes under `-race`, including the database tests, which
+is worth having on a controller that runs a health monitor per node, a lease, a replication
+engine and now a node watcher.
+
+`make test-race` is part of `make check` so it stays run rather than becoming a thing
+somebody remembers.
+
+It found no race. It did find a **flaky test**: `TestMonitorRunDetectsOutageAndRecovery`
+asserted an exact transition sequence that assumed the first health check finished inside
+10ms, which is not true on a loaded machine and was never true under `-race`. It now asserts
+the shape of the outage and the recovery and tolerates a slow start, which is what the test
+was ever about. Hammered 15 times under `-race` to be sure.
+
+## How the new script handles what it is given
+
+- **A verified dump before anything is touched.** `init` runs `backup.sh --verify`, which
+  restores the dump into a scratch database and counts what came back, and refuses to go on
+  if that fails. Adopting a live database is the most dangerous thing in this repository.
+- The database and replication passwords go into `/etc/patroni/config.yml`, written **0600
+  and owned by postgres**, which is the user Debian's `patroni.service` runs as.
+- The join bundle holds both passwords, is written 0600, and is shut back to 0600 on arrival
+  because `scp` does not preserve the mode. The script says it must be deleted from both
+  machines and that it does not expire.
+- No password is passed on a command line: the role is created by piping the statement into
+  `psql`, so it is not in `/proc` for other users to read.
+- Nothing new listens on the network from ForgeSync's side. etcd does, on 2379 and 2380, and
+  the README says these machines should be able to reach each other and little else.
+
+## Findings
+
+**None in ForgeSync's own code.** `gosec` and `semgrep` were run in the previous gate against
+this tree's Go, which this change does not touch beyond one test file.
+
+**Seven faults in the new script, all found by running it**, none by reading: Debian's
+`patroni.service` has a `ConditionPathExists` on its own config path; the DCS driver is
+`python3-etcd` and without it Patroni exits offering only consul and kubernetes; Patroni
+wants `postgresql.conf` inside the data directory and Debian keeps it in `/etc`; `member add`
+creates a **voting** member, so adding one to a cluster of one makes the majority two and a
+half-finished join wedges the database; a learner cannot answer `endpoint health` because
+that commits a proposal; a member whose data was wiped but which the cluster still remembers
+panics with `tocommit is out of range` unless it is removed and re-added; and `member
+promote` fails on something that is already a voter. Each is fixed and each has a comment
+saying why, because every one of them is the sort of thing that looks like a typo later.
+
+## What this still does not do
+
+ForgeSync does not watch the database. Patroni does, and `forgesync_database_up` says when a
+controller cannot reach it, but nothing here alerts on replication lag or on a machine that
+has been out of the cluster for a week. That belongs to whatever watches your PostgreSQL, and
+`docs/LIMITATIONS.md` says so.

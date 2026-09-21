@@ -111,6 +111,8 @@ sees. What ForgeSync will not do is set the node up: the parts that matter most 
 | `deploy/test/setup.sh` | Brings up the whole test environment: Forgejo nodes, SceneID (Keycloak), the database and one, two or three controllers. Safe to re-run. |
 | `deploy/test/check-dismissal.sh` | Checks conflict dismissal end to end against a running environment: make a conflict ForgeSync can't settle, dismiss it, watch it stay dismissed, come back when it changes, and clear when it goes. |
 | `deploy/test/scale.sh` | `make N` / `drop`: many repositories on one node, for measuring what a round costs. |
+| `deploy/prod/install.sh` | Installs ForgeSync on a Debian 13 machine, and joins another to it. |
+| `deploy/prod/cluster.sh` | The three-machine database, which promotes itself when a machine is lost. |
 | `deploy/prod/backup.sh` | A dump of ForgeSync's database; `--verify` restores it into a scratch database and counts what came back. |
 | `phase0/run-all.sh` | The probes that established what stock Forgejo does and doesn't allow (`phase0/README.md`). |
 

@@ -150,21 +150,37 @@ replication:
   # kept before it goes for good.
   backup_days: 30
 
-nodes:
-  - name: se
-    site: SE
-    url: https://git-se.example.org
-    token_file: /etc/forgesync/secrets/se.token
-    # The id of the SceneID login source on that node (they differ per
-    # node): forgejo admin auth list.
-    sceneid_source_id: 1
-  - name: dk
-    site: DK
-    url: https://git-dk.example.org
-    token_file: /etc/forgesync/secrets/dk.token
-    sceneid_source_id: 1
-  - name: de
-    site: DE
-    url: https://git-de.example.org
-    token_file: /etc/forgesync/secrets/de.token
-    sceneid_source_id: 1
+# Nodes live in ForgeSync's database, so this block is not where you add
+# one: the admin UI is (Nodes, then Add a node), and every controller then
+# has it without this file being edited on each machine. See section 9 of
+# README.md for what the node itself needs first.
+#
+# The block is still read, for two cases. An installation that predates
+# the UI keeps working: the nodes listed here are taken into the database
+# the first time a controller starts, and go on taking their tokens from
+# the files named here. And it will bootstrap an installation that has no
+# node key yet, though setting node_key_file above and using the UI is the
+# easier road.
+#
+# Names are yours to choose. They are short, lowercase and permanent:
+# they appear in the history, in conflicts and in URLs. Anything that
+# tells you which machine you mean will do, whether that is a country, a
+# city or a hostname.
+#
+# A node retired in the UI is not taken back in by this block. Retiring is
+# an explicit act and sticks; the controller says so in its log if this
+# file still names one.
+#
+# nodes:
+#   - name: north
+#     site: North
+#     url: https://git-north.example.org
+#     token_file: /etc/forgesync/secrets/north.token
+#     # The id of the SceneID login source on that node (they differ per
+#     # node): forgejo admin auth list.
+#     sceneid_source_id: 1
+#   - name: south
+#     site: South
+#     url: https://git-south.example.org
+#     token_file: /etc/forgesync/secrets/south.token
+#     sceneid_source_id: 1

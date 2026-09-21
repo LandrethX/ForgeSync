@@ -111,7 +111,7 @@ takes **three** machines, not two, for the same reason a Proxmox cluster wants t
 majority of two is both of them, so a pair cannot promote safely. `deploy/prod/README.md`
 has the counts, the placement, and what a failover costs.
 
-### Automatic promotion of the database, with only two machines
+### Automatic promotion of the database needs three machines, not two
 A second machine can keep a continuously updated copy of the database (`deploy/prod/standby.sh`),
 so losing the first loses nothing. Promoting it is deliberately a person's decision, because
 with two machines nothing can tell "the other one is dead" from "I cannot reach the other
@@ -119,9 +119,16 @@ one", and a pair that promotes on its own judgement ends up, in a partition, wit
 primaries and two histories that will not merge.
 
 *What to do about it:* three machines, where a majority of two makes the decision safely.
-`deploy/prod/README.md` section 12 has the counts and where the machines should sit.
-Installing that arrangement is not automated: `install.sh` and `standby.sh` cover one machine
-and two, and the three-machine database is still set up by hand.
+`deploy/prod/cluster.sh` installs that arrangement (etcd and Patroni, from Debian's own
+packages) and `deploy/prod/README.md` section 12 says where the machines should sit. Measured
+on three: the primary machine stopped outright, another promoted in about half a minute with
+nobody doing anything, the surviving controllers never went down, and the dead machine
+rejoined as a replica five seconds after it came back.
+
+What is still true is that ForgeSync does not watch the database for you. Patroni does, and
+`forgesync_database_up` tells you when a controller cannot reach it, but nothing here alerts
+on replication lag or on a machine that has been out of the cluster for a week. That belongs
+to whatever watches your PostgreSQL.
 
 ### Scale beyond 200 repositories
 Measured at 203 repositories on each of five nodes: a push reaches all four replicas in

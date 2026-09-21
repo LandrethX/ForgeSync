@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -189,14 +191,23 @@ func TestMonitorRunDetectsOutageAndRecovery(t *testing.T) {
 
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	want := []string{"UNKNOWN->HEALTHY", "HEALTHY->SUSPECT", "SUSPECT->UNREACHABLE", "UNREACHABLE->HEALTHY"}
-	if len(rec.transitions) != len(want) {
-		t.Fatalf("transitions = %v, want %v", rec.transitions, want)
+	// What matters is the shape of the outage and the recovery, not what
+	// happened while the monitor was warming up. On a loaded machine the
+	// very first check can miss its timeout, which used to make this fail
+	// with an extra UNKNOWN->SUSPECT at the front: a real reading of a
+	// slow start, and nothing to do with what is being tested.
+	want := []string{"HEALTHY->SUSPECT", "SUSPECT->UNREACHABLE", "UNREACHABLE->HEALTHY"}
+	from := slices.Index(rec.transitions, want[0])
+	if from < 0 {
+		t.Fatalf("transitions = %v, want them to contain %v", rec.transitions, want)
 	}
-	for i := range want {
-		if rec.transitions[i] != want[i] {
-			t.Fatalf("transitions = %v, want %v", rec.transitions, want)
-		}
+	if got := rec.transitions[from:]; !slices.Equal(got, want) {
+		t.Fatalf("transitions after the first healthy = %v, want %v (all: %v)", got, want, rec.transitions)
+	}
+	// Whatever the warm-up looked like, it has to have got to healthy:
+	// the outage is only meaningful from a node that was up.
+	if from == 0 || !strings.HasSuffix(rec.transitions[from-1], "->HEALTHY") {
+		t.Fatalf("the node was never healthy before the outage: %v", rec.transitions)
 	}
 }
 

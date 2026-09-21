@@ -4,7 +4,7 @@ LDFLAGS := -s -w \
 	-X scenegit.org/forgesync/internal/buildinfo.Version=$(VERSION) \
 	-X scenegit.org/forgesync/internal/buildinfo.Commit=$(COMMIT)
 
-.PHONY: build web web-dev web-test test test-db vet fmt check run clean
+.PHONY: build web web-dev web-test test test-race test-db vet fmt check run clean
 
 build: web ## Build the web UI, then forgesyncd (with the UI embedded) and forgesync into bin/
 	go build -ldflags '$(LDFLAGS)' -o bin/ ./cmd/...
@@ -21,6 +21,14 @@ web-test: ## Type-check and unit-test the admin UI
 test: ## Unit tests (database tests skip without FORGESYNC_TEST_DATABASE_URL)
 	go test ./...
 
+# The controller is concurrent by design: a health monitor per node, the
+# lease, the replication engine, the watcher. The race detector needs cgo,
+# so this wants a C compiler (apt-get install gcc) and is slower; it is
+# part of `make check` because a data race that only shows up in
+# production is the kind of bug nobody finds by reading.
+test-race: ## Unit tests with the race detector
+	CGO_ENABLED=1 go test -race ./...
+
 # Uses the test environment's forgesync-db; the tests wipe its public schema.
 test-db: ## Unit tests including the database tests
 	FORGESYNC_TEST_DATABASE_URL='postgres://forgesync:forgesync-test-pw@localhost:5432/forgesync?sslmode=disable' \
@@ -32,7 +40,7 @@ vet:
 fmt:
 	gofmt -w .
 
-check: vet test web-test ## vet, gofmt check, Go and UI tests
+check: vet test test-race web-test ## vet, gofmt check, Go tests with and without the race detector, UI tests
 	@test -z "$$(gofmt -l .)" || { echo "gofmt needed:"; gofmt -l .; exit 1; }
 
 run: ## Run the controller against the local test environment

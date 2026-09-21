@@ -12,7 +12,8 @@ rather than two.
 | | |
 |---|---|
 | `install.sh` | does sections 1 to 7 of this file in one command |
-| `standby.sh` | a second copy of the database on the second machine, and the promotion |
+| `standby.sh` | a second copy of the database on two machines, promoted by a person |
+| `cluster.sh` | the three-machine database, which promotes itself |
 | `forgesync.yaml` | an annotated config; copy it and change what's marked |
 | `forgesyncd.service` | the systemd unit, with the usual hardening |
 | `backup.sh` | takes (and can verify) a dump of the database |
@@ -479,7 +480,39 @@ running as well.
 
 ### Three
 
-Now the database can be made redundant without anybody being woken up. PostgreSQL on all three, streaming replication
+Now the database can be made redundant without anybody being woken up. `cluster.sh` does it:
+etcd holding the decision, Patroni making it, all from Debian's own packages.
+
+```sh
+./cluster.sh init <second> <third>          # on the first machine
+scp /root/forgesync-cluster.txt root@<second>:/root/   # and to the third
+./cluster.sh join /root/forgesync-cluster.txt          # on each of the others
+./cluster.sh status                                    # any machine, any time
+./cluster.sh switchover                                # a planned handover
+```
+
+`init` takes a **verified dump before it touches anything** and refuses to go on if it
+cannot verify it, because handing a live database to another piece of software is the one
+thing here worth being frightened of. It then hands the existing PostgreSQL to Patroni: the
+data is not copied or reloaded, it is the same database, adopted. `join` adds the machine to
+etcd as a **learner** first, so a join that stops halfway cannot wedge the cluster, promotes
+it once it has caught up, and lets Patroni clone the database from the leader.
+
+Measured on three machines: the first machine's database was adopted with everything in it,
+the primary machine was then **stopped outright**, and Patroni promoted another in about
+half a minute with nobody doing anything. The two surviving controllers never went down at
+all, because `database.url` names all three and a standby refuses a connection that wants to
+write, so they simply reconnected to whichever had become the primary. Starting the dead
+machine again brought it back as a replica five seconds later, unattended.
+
+Three things to know. Running these again is safe and is how you finish an interrupted join.
+`pg_ctlcluster` must not be used on a cluster Patroni owns, and Debian's own PostgreSQL unit
+is disabled so the two cannot both start it. And while only two machines have joined, the
+database is **less** resilient than one machine was, not more: a majority of two is both of
+them. `status` says so plainly until the third arrives.
+
+`standby.sh` is the two-machine arrangement and is superseded by this one: Patroni does the
+replication, the promotion and the rejoining. PostgreSQL on all three, streaming replication
 between them, Patroni deciding which is the primary, and etcd holding that decision with one
 member per machine. Any one machine can be lost, including whichever holds the primary, and
 the rest promote a new one and carry on without anybody being woken up.

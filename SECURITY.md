@@ -25,6 +25,14 @@ hosts themselves.
 | Account passwords | PBKDF2-HMAC-SHA256, 600,000 iterations, per-account salt | Sign in at the role the account holds |
 | Session cookies | Only the SHA-256 of the value is stored | Act as that account until it expires |
 
+**No user credential appears in that table, and that is not an oversight.** Everybody who
+uses the nodes signs in with [SceneID](https://id.scene.org/) over OIDC, so a regular user
+has no password on a Forgejo node and none on ForgeSync. What ForgeSync keeps about a person
+is their SceneID subject, their login name, which nodes they have an account on and which
+node is their primary. Every secret above is an administrator's credential for the
+infrastructure, which a control plane must hold to act at all, and not anybody's personal
+one.
+
 No secret is ever written to a log or returned by the API. A token reaches git through an
 `http.extraHeader` set in the environment, never in a command line and never on disk.
 

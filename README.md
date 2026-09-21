@@ -145,6 +145,40 @@ histories are kept, close it without merging and the owner has chosen the primar
 at which point the replicas are reset and their version is kept on a backup branch for a
 month. That is the owner deciding, with ForgeSync doing the work.
 
+### Who signs in, and what is kept
+
+Everybody who uses the nodes signs in with **[SceneID](https://id.scene.org/)**, the
+scene's own single sign-on, over OIDC. The design requires local sign-up to be off on every
+node, leaving only the two local accounts a node cannot run without: its site administrator
+and ForgeSync's service account. So **a regular user has no password on any node**, and none on
+ForgeSync either. There is nothing of theirs to steal from this infrastructure, and nothing
+to reset when they lose it.
+
+That is also what makes the whole thing possible rather than merely tidy. A person's SceneID
+subject is the same string on every node, so ForgeSync can say "this is the same person
+here and there" without matching on names or email addresses, which drift. What it keeps
+about anybody is that subject, the login name, which nodes they have an account on and which
+node is their primary. No password, no token, no email address.
+
+**What ForgeSync does hold**, because it would be dishonest to say "no credentials" and
+leave it there:
+
+| | |
+|---|---|
+| Each node's API token | Sealed with AES-256-GCM before it is stored. The key is a file on the controllers and never goes in the database, so a stolen dump is not a stolen node |
+| ForgeSync's own administrator accounts | PBKDF2-SHA256 with a per-account salt. These sign in to the *controllers*, not to any node, and no node ever learns they exist |
+| Sessions | The SHA-256 of the cookie's value, never the value, so the table cannot be read back into a session |
+| The admin token, webhook secret and database URL | Files on disk, `0600`, never in the config and never logged |
+
+Those are an administrator's credentials for the infrastructure, which any control plane
+must hold to do anything at all. They are not anybody's personal credentials, and no user
+credential passes through ForgeSync at any point.
+
+ForgeSync's own admin UI deliberately does **not** use SceneID. It has its own accounts, for
+one reason: being locked out is exactly the moment when SceneID, or a controller, is the
+thing that has broken. Those accounts live in the shared database, so one made on either
+controller works on both, and there is a break-glass admin token besides.
+
 ### Three things called "primary"
 
 Worth separating before reading anything else here:

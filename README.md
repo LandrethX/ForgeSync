@@ -273,12 +273,12 @@ What it deliberately doesn't, and what Forgejo won't let it, is in
 
 ## Installing
 
-Current release: **[v0.10.1](https://github.com/LandrethX/ForgeSync/releases/tag/v0.10.1)**.
+Current release: **[v0.11.0](https://github.com/LandrethX/ForgeSync/releases/tag/v0.11.0)**.
 On a fresh Debian 13 machine, which in practice means an unprivileged Proxmox LXC:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/LandrethX/ForgeSync/v0.10.1/deploy/prod/install.sh
-bash install.sh --first --binary --ref v0.10.1
+curl -fsSLO https://raw.githubusercontent.com/LandrethX/ForgeSync/v0.11.0/deploy/prod/install.sh
+bash install.sh --first --binary --ref v0.11.0
 ```
 
 That is the version pinned, which is what you want on a machine you will have to reason
@@ -390,7 +390,7 @@ in Karlskrona, in co-operation with Hagar of TST, a scene group. The repository 
 <https://github.com/LandrethX/ForgeSync>, and
 [the releases are here](https://github.com/LandrethX/ForgeSync/releases).
 
-The current one is **v0.10.1**, and it is not a 1.0 on purpose: everything in it has been
+The current one is **v0.11.0**, and it is not a 1.0 on purpose: everything in it has been
 exercised against five Forgejo nodes, two and three controllers and a database that fails
 over, but only in a test environment. Running somewhere real is the one thing a 1.0 should
 be able to claim, and [docs/LIMITATIONS.md](docs/LIMITATIONS.md) says so in the same

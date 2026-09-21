@@ -179,7 +179,7 @@ Three ways, in the order most people will want them.
 machine never sees Go, Node or a compiler:
 
 ```sh
-V=v0.10.1                                   # the current release
+V=v0.11.0                                   # the current release
 curl -fsSLO "https://github.com/LandrethX/ForgeSync/releases/download/$V/SHA256SUMS"
 curl -fsSLO "https://github.com/LandrethX/ForgeSync/releases/download/$V/forgesync-$V-linux-amd64.tar.gz"
 sha256sum -c --ignore-missing SHA256SUMS

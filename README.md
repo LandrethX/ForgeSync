@@ -20,9 +20,16 @@ Copenhagen opens an issue on the Danish one. Without something in between, those
 different repositories that happen to share a name.
 
 ForgeSync was started around [SceneGit](https://scenegit.org/), a European alternative git
-repository for sceners, and that is where the shape of the problem comes from: several
-nodes in several countries, one identity behind them, and people who should be able to push
-to whichever is nearest without thinking about it.
+repository for **sceners**, whose own motto is keeping the scene alive. The scene here is
+the demoscene: the people who have been writing demos, intros, trackers and cross-development
+tools for the Commodore 64, the Amiga and the PC since the 1980s, and are still doing it.
+SceneGit sits alongside the places that scene already keeps its history in, among them
+[Scene.org](https://scene.org/), [Demozoo](https://demozoo.org/),
+[CSDb](https://csdb.dk/) and [Pouet](https://www.pouet.net/).
+
+That is also where the shape of this problem comes from: several nodes in several countries,
+one identity behind them, and people who should be able to push to whichever is nearest
+without thinking about it.
 
 Forgejo has no built-in way to do that, and the usual answers each cost something this
 project was not willing to pay: one server everybody reaches over a long link, or a patched
@@ -297,7 +304,7 @@ Every script takes `PUBLIC_HOST=<host or IP>` when the environment isn't reachab
 ## This release
 
 The first release of ForgeSync was published during **[Mysdata 2026](https://mysdata.org/)**
-in Karlskrona, in co-operation with Hagar of TST. The repository is
+in Karlskrona, in co-operation with Hagar of TST, a scene group. The repository is
 <https://github.com/LandrethX/ForgeSync>.
 
 ## Licence

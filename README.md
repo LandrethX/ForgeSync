@@ -150,17 +150,56 @@ Worth separating before reading anything else here:
 
 ### One controller, or three
 
-A machine is always the same thing: PostgreSQL, a controller and the git cache. Controllers
-share one database and take a lease in it; whichever holds the lease does the work and the
-rest serve the same pages, ready to take over. Which one should be acting is configured
-(`controller.priority`) and can be changed from the page of the controller you're looking
-at. Sessions and ForgeSync's own accounts live in that database too, so a failover doesn't
-sign anyone out.
+The diagram above draws the controller as one box. It can be one machine, two or three, and
+a machine is always the same thing: PostgreSQL, a controller and the git cache. There is no
+second kind of server to install.
 
-One machine is a fine place to start. A second gives you a controller that survives losing
-the first, though the database is still on one machine. **Three** is what makes the database
-redundant as well, for the same reason a Proxmox cluster wants three nodes: a majority of
-two is both of them, so a pair cannot promote safely. A fourth adds nothing to a quorum.
+What does **not** multiply is the database. Controllers share **one** database and take a
+lease in it, and that shared row is the whole basis of "one controller acts at a time": if
+each had a database of its own there would be no witness, and nothing to stop two of them
+working at once. So on three machines there are three PostgreSQL servers but still one
+database, of which exactly one copy takes writes while the others stream from it.
+
+```mermaid
+flowchart TB
+    N["The Forgejo nodes"]
+
+    C2["Controller 2<br/>standby"]
+    C1["Controller 1<br/>holds the lease"]
+    C3["Controller 3<br/>standby"]
+
+    D1[("PostgreSQL 1<br/>takes the writes")]
+    D2[("PostgreSQL 2<br/>a copy")]
+    D3[("PostgreSQL 3<br/>a copy")]
+
+    N <==>|"only the one holding the lease"| C1
+
+    C2 --> D1
+    C1 -->|"all three use whichever<br/>server takes writes"| D1
+    C3 --> D1
+
+    D1 -.->|"streams"| D2
+    D1 -.-> D3
+```
+
+Each controller and PostgreSQL pair above is one machine. `database.url` names all three
+servers with `target_session_attrs=read-write`, so every controller connects to whichever is
+currently taking writes, and a promotion needs nothing changed anywhere. A controller that
+finds itself talking to a copy refuses it rather than carrying on: it would answer every
+read and look healthy while renewing no lease and replicating nothing.
+
+Whichever controller holds the lease does the work and the rest serve the same pages, ready
+to take over. Which one should be acting is configured (`controller.priority`) and can be
+changed from the page of the controller you're looking at. Sessions and ForgeSync's own
+accounts live in that database too, so a failover doesn't sign anyone out.
+
+One machine is a fine place to start. **Two** gives you a controller that survives losing
+the first; the second can also keep a continuously updated copy of the database, which is
+worth having on its own, but promotion stays deliberately manual, because two machines
+cannot tell "the other one is dead" from "I cannot reach the other one". **Three** is what
+lets the database promote itself, for the same reason a Proxmox cluster wants three nodes: a
+majority of two is both of them, so a pair cannot decide safely, while a majority of three
+is two. A fourth adds nothing to a quorum.
 [deploy/prod/README.md](deploy/prod/README.md) section 12 has the counts, where the machines
 should sit, and what a failover costs.
 

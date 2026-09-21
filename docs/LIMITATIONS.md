@@ -73,10 +73,24 @@ and does not name the node you should have used, and it cannot be made to: the m
 belongs to Forgejo, and changing it would mean patching Forgejo. Clone from whichever node
 is nearest, and push to the primary, which the repository's page in the admin UI names.
 
-*If you would rather not have it:* turn `protect_replicas` off, and a push to a replica is
-then handled by what it is. Commits that only move a branch forward, or a branch only that
-node has, are taken over to the primary automatically and nobody is asked. A genuine
-divergence becomes a conflict for the owner.
+*If you would rather not have it:* turn `protect_replicas` off and people can push to any
+node. A push to a replica is then handled by what it is. Commits that only move a branch
+forward, or a branch only that node has, are taken over to the primary automatically and
+nobody is asked. A genuine divergence becomes a conflict for the owner, as a pull request on
+the primary. What you give up is the thing the guard was for: two nodes accepting writes to
+the same branch is how divergence happens in the first place, and the guard is also what
+stops a user force-pushing or deleting a branch on a replica, which ForgeSync will then
+report rather than quietly undo.
+
+*How to change it:* it is `replication.protect_replicas` in the controller's YAML, and there
+is no switch for it in the admin UI or the API. It is deliberately not a runtime setting:
+it decides what users may do, so it belongs with the configuration an administrator reviews
+rather than with something anybody with a session can flip. It applies to the whole
+installation, not to one node or one repository. Set it the same on **every** controller and
+restart each of them, because a controller reads it once at startup and whichever one holds
+the lease is the one acting. `SIGHUP` will not do: that re-reads the TLS certificate only.
+The admin UI shows what the acting controller has on, on a repository's page, so you can see
+which setting is in force without reading a file on a server.
 
 ### Pull mirrors
 A pull mirror already keeps itself up to date from somewhere else, and Forgejo makes it

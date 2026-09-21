@@ -845,6 +845,14 @@ deleting 3990 archives by hand while clearing up, which is exactly the case. The
 harness's `DeleteRepo` was answering a quiet success for a repository that was not there,
 so it now answers 404 as Forgejo does, which is what let the case be tested at all.
 
+**LOW, fixed: a deleted repository rebuilt its cache on every round.** With `Git.Forget` in
+place, clearing the caches of a thousand deleted repositories bought exactly one round's
+worth of disk: the next round made a thousand empty ones again, 108 KB each, because the
+bare cache was created before anything decided whether there was anything to replicate. A
+repository deleted on its primary has nothing to replicate for the whole backup period. The
+cache is now made where it is first needed, after that decision. Measured on the test
+installation: 247 MB, cleared to 1.3 MB, back to 106 MB after one round.
+
 **Documented, not a fault: what `protect_replicas` means for a person.** With it on, which
 is what the production configuration sets, a user's push to any node that is not the
 repository's primary is refused by Forgejo. The rejection is Forgejo's own protected-branch

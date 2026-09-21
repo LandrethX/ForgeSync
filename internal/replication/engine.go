@@ -359,11 +359,6 @@ func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again
 		allReplicas(StateWaiting, "primary "+primary.Name+" isn't healthy")
 		return false, nil
 	}
-	dir, err := e.git.Cache(ctx, rec.ID)
-	if err != nil {
-		allReplicas(StateError, err.Error())
-		return false, err
-	}
 	pRemote := e.remote(primary, rec.FullName)
 	pRefs, err := e.git.LsRemote(ctx, pRemote)
 	if errors.Is(err, ErrRepoNotFound) {
@@ -398,6 +393,17 @@ func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again
 		}
 		e.log.Info("deleted repository created again on its primary", "repository", rec.FullName)
 		e.audit(ctx, "repo.recreated_on_primary", rec.FullName, map[string]any{"repository_id": rec.ID, "primary": primary.Name})
+	}
+	// The bare cache is made only now, because everything above decides
+	// whether there is anything to replicate at all. Making it first meant
+	// a repository deleted on its primary got an empty cache rebuilt on
+	// every round for the whole backup period: a thousand deleted
+	// repositories filled the disk again each round, however often it was
+	// cleared.
+	dir, err2 := e.git.Cache(ctx, rec.ID)
+	if err2 != nil {
+		allReplicas(StateError, err2.Error())
+		return false, err2
 	}
 	if errors.Is(err, ErrRepoNotFound) && e.opts.CreateMissing {
 		// Only a primary that never had it gets here.

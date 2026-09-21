@@ -77,6 +77,30 @@ func TestDeletedOnPrimary(t *testing.T) {
 		}
 	})
 
+	t.Run("no cache is rebuilt while a deleted repository waits out its backup", func(t *testing.T) {
+		e, st, se, _, seAPI, _, _, _ := setupResolve(t)
+		e.now = func() time.Time { return now }
+		deleteOnPrimary(t, st, se, seAPI)
+		if err := e.RunRepo(ctx, st.rec); err != nil {
+			t.Fatal(err)
+		}
+		cache := filepath.Join(e.git.WorkDir, st.rec.ID+".git")
+		if err := os.RemoveAll(cache); err != nil {
+			t.Fatal(err)
+		}
+		// Every round for the next thirty days used to make it again, so
+		// clearing the cache of a thousand deleted repositories bought one
+		// round's worth of disk and no more.
+		for i := 0; i < 3; i++ {
+			if err := e.RunRepo(ctx, st.rec); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := os.Stat(cache); !os.IsNotExist(err) {
+			t.Errorf("the cache came back for a repository with nothing to replicate (%v)", err)
+		}
+	})
+
 	t.Run("an archive somebody deleted by hand does not block forgetting", func(t *testing.T) {
 		e, st, se, _, seAPI, dkAPI, _, _ := setupResolve(t)
 		e.now = func() time.Time { return now }

@@ -314,7 +314,7 @@ func run(configPath string) error {
 		// serving in the meantime.
 		go func() {
 			defer wg.Done()
-			nodes.Watch(ctx, db, nodeKey, builtFrom, cfg.Inventory.NodeCheck, log)
+			nodes.Watch(ctx, db, nodeKey, cfg.Nodes, builtFrom, cfg.Inventory.NodeCheck, log)
 			if ctx.Err() == nil {
 				stop() // the same path as a SIGTERM, so the lease is given up
 			}

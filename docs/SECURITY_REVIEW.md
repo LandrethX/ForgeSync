@@ -635,3 +635,83 @@ left out instead, and publishing the package recreates them: checked on a live n
 Nothing here makes a package type travel that could not before, beyond those three. The
 count of types ForgeSync cannot carry is smaller; the reason for the rest is unchanged, and
 `docs/LIMITATIONS.md` names them.
+
+---
+
+# Gate: two faults the running installation showed
+
+Run on 2026-09-21 against the working tree on top of commit `7c69c83`, before committing.
+
+## Classification
+
+| | |
+|---|---|
+| **Scope** | The uncommitted diff |
+| **Change under review** | Five places in `internal/issues/sync.go` that read a node's snapshot from a record's copies; the rule that the merge base only moves when every copy took part; `internal/nodes.fromRecord`, shared by `Resolve` and the node watcher so the two agree |
+| **How they were found** | Not by reading. By looking at the running test installation before measuring anything on it, and seeing three controllers with uptimes of a few seconds |
+| **Exposure** | Neither is reachable from a request. Both happen in the controller's own loops, on data the Forgejo nodes and the database supply |
+| **Data** | None new. The node fingerprint hashes a token, as it already did |
+| **Privilege** | The controller's own |
+| **Level** | **LEVEL 3.** One is a remotely triggerable crash of the whole process (CWE-476), reached by a node going unreachable, and the other stops a controller doing any work at all. Availability, not confidentiality. |
+
+## Result
+
+| Check | Tool | Result |
+|---|---|---|
+| Formatting | `gofmt -l .` | **PASS** |
+| Static checks | `go vet ./...` | **PASS** |
+| Lint | `golangci-lint run` | **PASS**, 0 issues |
+| Types (UI) | `tsc --noEmit` | **PASS** |
+| Tests, with the database and the race detector | `CGO_ENABLED=1 go test -race -count=1 -p 1 ./...` | **PASS**, 15 packages |
+| UI tests | `vitest run` | **PASS**, 80 of 80 in 14 files |
+| New behaviour | `go test ./internal/issues ./internal/nodes` | **PASS**: a copy on a node that was not read is passed over, for both reasons a node can be missing, and the reaction still reaches it when it comes back; a config-file node is not read as a constant change, while a replaced token still is |
+| Negative case, planted, crash | the skip removed at the reactions site | **FAIL as designed**: `panic: runtime error: invalid memory address or nil pointer dereference [signal SIGSEGV ... addr=0x28]`, the same signature as the live crash |
+| Negative case, planted, restart loop | `fingerprintStored` put back as it was | **FAIL as designed**: the test prints the two fingerprints that could never match |
+| Behaviour, end to end | the live test installation, rebuilt | **PASS**: three controllers, **0 restarts** against 2333 before, 0 panics over two complete rounds, and no "the installation's nodes have changed" at all. The condition that crashed it is still there: five issue copies are recorded on `us`, which is unreachable |
+| SAST | `gosec -quiet -exclude-dir=web ./...` | **PASS with findings**: 18, the same 18 as the baseline |
+| SAST, second opinion | `semgrep p/golang p/security-audit p/secrets` | **PASS**: the same 3 as the baseline |
+| Dependency vulnerabilities | `govulncheck ./...` | **PASS**, none; `go.mod` unchanged |
+| Secrets, working tree and history | `gitleaks dir .`, `gitleaks git .` | **PASS**, no leaks |
+| Shell | `shellcheck -S warning` | **PASS**, nothing changed |
+| Authorisation, DAST | | **NOT APPLICABLE**: no endpoint, route or handler is touched |
+
+Tool versions and commands are as recorded in the previous gate; the same binaries were used.
+
+## Findings
+
+**HIGH, fixed: the controller crashed on any node it could not read.** A record's copies come
+from ForgeSync's database and name every node an issue is on. What a run actually read is a
+different set: a node that is unreachable, or that has issues turned off for that repository,
+is passed over. Five per-member passes walked the copies and read the snapshot of whichever
+node they named, which for such a node was nothing at all, so the process died on a nil
+pointer. Any node going away took the whole controller down with it, every round, and no
+round finished. Reachable by anyone who can stop a Forgejo node, or turn its issues off.
+
+The fix skips a copy whose node was not read, and, separately, **holds the merge base still
+unless every copy took part**. That second half matters as much: a base settled without a
+node means that when the node comes back, whatever it has not got reads as something a person
+deleted, and gets taken off every other node. The test covers exactly that, and it failed
+before the second half was written.
+
+A sixth path was found while fixing the five: issues turned off on the **primary** skipped it
+before the check that a primary must be readable, leaving the run to read the primary's
+snapshot as though it were there. The run now stops, which is the right answer since there is
+nothing to copy from.
+
+**MEDIUM, fixed: a controller restarted every fifteen seconds.** The node watcher restarts a
+controller when the installation's nodes change, and compares a fingerprint to decide. It
+built that fingerprint differently from the code that builds the node set: a node taken from
+the config file keeps its token in a file, `Resolve` read it and the watcher left it empty.
+The two could never agree, so the answer was always "changed". Every installation that keeps
+its nodes in the config file was affected, which is every installation that predates the
+admin UI. Both now go through one function, which is the only durable fix for two pieces of
+code that have to agree.
+
+## What this says about the reviews before it
+
+Both faults were in code that passed a gate. Neither is subtle once seen, and neither was
+going to be found by a scanner or a unit test written by the person who wrote the code: one
+needed a node to go away, the other needed a config-file node and fifteen seconds. What found
+them was looking at the thing running. So every gate from here reports what a running
+installation did for a few minutes, as this one does: uptime, restart count, whether a round
+finished. It is the cheapest check here and the only one that found either of these.

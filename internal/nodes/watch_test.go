@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"scenegit.org/forgesync/internal/config"
 	"scenegit.org/forgesync/internal/store"
 )
 
@@ -57,7 +58,7 @@ func clone(n []Node) []Node { c := make([]Node, len(n)); copy(c, n); return c }
 func TestWatchReturnsOnlyWhenSomethingChanged(t *testing.T) {
 	rows := []store.NodeRecord{{Name: "se", URL: "http://se", ServiceUser: "forgesync", SealedToken: []byte("x")}}
 	db := &fake{rows: rows}
-	was, err := fingerprintStored(rows, opener{})
+	was, err := fingerprintStored(rows, nil, opener{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +67,7 @@ func TestWatchReturnsOnlyWhenSomethingChanged(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 	done := make(chan struct{})
-	go func() { Watch(ctx, db, opener{}, was, 10*time.Millisecond, nil); close(done) }()
+	go func() { Watch(ctx, db, opener{}, nil, was, 10*time.Millisecond, nil); close(done) }()
 	select {
 	case <-done:
 		if ctx.Err() == nil {
@@ -81,7 +82,7 @@ func TestWatchReturnsOnlyWhenSomethingChanged(t *testing.T) {
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel2()
 	done2 := make(chan struct{})
-	go func() { Watch(ctx2, db2, opener{}, was, 10*time.Millisecond, nil); close(done2) }()
+	go func() { Watch(ctx2, db2, opener{}, nil, was, 10*time.Millisecond, nil); close(done2) }()
 	select {
 	case <-done2:
 	case <-time.After(1 * time.Second):
@@ -98,7 +99,7 @@ func TestWatchDoesNotRestartOverAKeyItCannotUse(t *testing.T) {
 	defer cancel()
 	done := make(chan struct{})
 	go func() {
-		Watch(ctx, db, opener{err: errors.New("wrong key")}, "whatever", 10*time.Millisecond, nil)
+		Watch(ctx, db, opener{err: errors.New("wrong key")}, nil, "whatever", 10*time.Millisecond, nil)
 		close(done)
 	}()
 	select {
@@ -115,4 +116,45 @@ func clone2(r []store.NodeRecord) []store.NodeRecord {
 	c := make([]store.NodeRecord, len(r))
 	copy(c, r)
 	return c
+}
+
+// The watcher restarts a controller when the node set changes, so it has
+// to build that set exactly as Resolve does. It did not: a node taken
+// from the config file keeps its token in a file, Resolve read it and the
+// watcher left it empty, so the two fingerprints could never match and
+// every installation that kept its nodes in the config file restarted
+// every fifteen seconds. On the live test installation that came to 2333
+// restarts, and no round ever finished.
+func TestAConfigFileNodeIsNotAConstantChange(t *testing.T) {
+	configured := []config.Node{
+		{Name: "se", URL: "http://se", Site: "SE", ServiceUser: "forgesync", SceneIDSourceID: 1, Token: "se-token"},
+		{Name: "dk", URL: "http://dk", Site: "DK", ServiceUser: "forgesync", SceneIDSourceID: 1, Token: "dk-token"},
+	}
+	db := &fake{}
+	installed, err := Resolve(context.Background(), db, nil, configured, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	was := Fingerprint(installed)
+
+	// What the watcher sees next time it looks has to be the same thing.
+	now, err := fingerprintStored(db.rows, configured, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if now != was {
+		t.Fatalf("the watcher would restart the controller although nothing changed:\n  built from %s\n  sees       %s", was, now)
+	}
+
+	// And it still notices a token being replaced in the file, which is a
+	// change a controller has to be rebuilt to follow.
+	moved := []config.Node{configured[0], configured[1]}
+	moved[1].Token = "new-dk-token"
+	after, err := fingerprintStored(db.rows, moved, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == was {
+		t.Error("a replaced token went unnoticed")
+	}
 }

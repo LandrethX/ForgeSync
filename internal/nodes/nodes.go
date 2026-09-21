@@ -62,6 +62,47 @@ var ErrNoToken = errors.New("no token for this node")
 // token is sealed cannot be used without the key, and that is reported
 // rather than skipped, because quietly running with fewer nodes than the
 // installation has is how replication stops without anybody noticing.
+// fromRecord turns one stored node into the node a controller runs with:
+// a sealed token is opened with the node key, and a node that came from
+// the config file takes its token, and any correction to its details,
+// from there. Resolve and the watcher both go through here, because they
+// have to agree: when they did not, the watcher compared its own idea of
+// the node set against the controller's, found a difference that was
+// only the config file's token being left out, and restarted the
+// controller every time it looked.
+func fromRecord(rec store.NodeRecord, byName map[string]config.Node, key keyOpener) (Node, error) {
+	n := Node{Name: rec.Name, URL: rec.URL, Site: rec.Site,
+		ServiceUser: rec.ServiceUser, SceneIDSourceID: rec.SceneIDSourceID}
+	if len(rec.SealedToken) > 0 {
+		if key == nil {
+			return Node{}, fmt.Errorf("node %q: its token is sealed but node_key_file is not set", rec.Name)
+		}
+		tok, err := key.Open(rec.SealedToken)
+		if err != nil {
+			return Node{}, fmt.Errorf("node %q: %w", rec.Name, err)
+		}
+		n.Token, n.FromDatabase = tok, true
+		return n, nil
+	}
+	c, ok := byName[rec.Name]
+	if !ok || c.Token == "" {
+		return Node{}, fmt.Errorf("node %q: %w; it is in the database without a sealed token and not in the config file", rec.Name, ErrNoToken)
+	}
+	n.Token = c.Token
+	// The config may have moved the node or corrected its details.
+	n.URL, n.Site, n.ServiceUser, n.SceneIDSourceID = c.URL, c.Site, c.ServiceUser, c.SceneIDSourceID
+	return n, nil
+}
+
+// asOpener makes a nil *secret.Key a nil interface, so the check inside
+// fromRecord means what it says rather than holding a nil pointer.
+func asOpener(key *secret.Key) keyOpener {
+	if key == nil {
+		return nil
+	}
+	return key
+}
+
 func Resolve(ctx context.Context, db Store, key *secret.Key, configured []config.Node, log *slog.Logger) ([]Node, error) {
 	stored, err := db.Nodes(ctx)
 	if err != nil {
@@ -76,26 +117,9 @@ func Resolve(ctx context.Context, db Store, key *secret.Key, configured []config
 	var out []Node
 	for _, rec := range stored {
 		known[rec.Name] = true
-		n := Node{Name: rec.Name, URL: rec.URL, Site: rec.Site,
-			ServiceUser: rec.ServiceUser, SceneIDSourceID: rec.SceneIDSourceID}
-		switch {
-		case len(rec.SealedToken) > 0:
-			if key == nil {
-				return nil, fmt.Errorf("node %q: its token is sealed but node_key_file is not set", rec.Name)
-			}
-			tok, err := key.Open(rec.SealedToken)
-			if err != nil {
-				return nil, fmt.Errorf("node %q: %w", rec.Name, err)
-			}
-			n.Token, n.FromDatabase = tok, true
-		default:
-			c, ok := byName[rec.Name]
-			if !ok || c.Token == "" {
-				return nil, fmt.Errorf("node %q: %w; it is in the database without a sealed token and not in the config file", rec.Name, ErrNoToken)
-			}
-			n.Token = c.Token
-			// The config may have moved the node or corrected its details.
-			n.URL, n.Site, n.ServiceUser, n.SceneIDSourceID = c.URL, c.Site, c.ServiceUser, c.SceneIDSourceID
+		n, err := fromRecord(rec, byName, asOpener(key))
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, n)
 	}

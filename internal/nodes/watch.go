@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"scenegit.org/forgesync/internal/config"
 	"scenegit.org/forgesync/internal/store"
 )
 
@@ -59,7 +60,7 @@ type keyOpener interface {
 // or when ctx ends. It never returns an error: a database it cannot read
 // is somebody else's problem to report, and the worst thing this could do
 // is restart a controller because a query failed.
-func Watch(ctx context.Context, db Store, key keyOpener, was string, every time.Duration, log *slog.Logger) {
+func Watch(ctx context.Context, db Store, key keyOpener, configured []config.Node, was string, every time.Duration, log *slog.Logger) {
 	if every <= 0 {
 		every = 30 * time.Second
 	}
@@ -75,7 +76,7 @@ func Watch(ctx context.Context, db Store, key keyOpener, was string, every time.
 		if err != nil {
 			continue // it will be reported by whatever else is failing
 		}
-		now, err := fingerprintStored(stored, key)
+		now, err := fingerprintStored(stored, configured, key)
 		if err != nil {
 			// A node whose token this controller cannot open is a real
 			// problem, but restarting would not fix it and would loop.
@@ -94,20 +95,21 @@ func Watch(ctx context.Context, db Store, key keyOpener, was string, every time.
 	}
 }
 
-func fingerprintStored(stored []store.NodeRecord, key keyOpener) (string, error) {
+// fingerprintStored builds the node set the same way Resolve does, and
+// fingerprints that. Building it any other way is how this restarted a
+// controller every fifteen seconds: a node taken from the config file
+// keeps its token there, and leaving that token out here made the two
+// fingerprints differ for ever.
+func fingerprintStored(stored []store.NodeRecord, configured []config.Node, key keyOpener) (string, error) {
+	byName := map[string]config.Node{}
+	for _, c := range configured {
+		byName[c.Name] = c
+	}
 	ns := make([]Node, 0, len(stored))
 	for _, rec := range stored {
-		n := Node{Name: rec.Name, URL: rec.URL, Site: rec.Site,
-			ServiceUser: rec.ServiceUser, SceneIDSourceID: rec.SceneIDSourceID}
-		if len(rec.SealedToken) > 0 {
-			if key == nil {
-				return "", fmt.Errorf("node %q: its token is sealed and there is no key", rec.Name)
-			}
-			tok, err := key.Open(rec.SealedToken)
-			if err != nil {
-				return "", fmt.Errorf("node %q: %w", rec.Name, err)
-			}
-			n.Token = tok
+		n, err := fromRecord(rec, byName, key)
+		if err != nil {
+			return "", err
 		}
 		ns = append(ns, n)
 	}

@@ -1382,3 +1382,68 @@ func TestANodeWithIssuesOffIsSkippedQuietly(t *testing.T) {
 		t.Fatalf("a repository with issues off on its primary: %v", err)
 	}
 }
+
+// someHealthy is every node healthy except the ones named.
+type someHealthy struct {
+	all  []string
+	down map[string]bool
+}
+
+func (h someHealthy) Snapshot() []health.Status {
+	var out []health.Status
+	for _, n := range h.all {
+		st := health.Status{Node: n, State: health.Healthy}
+		if h.down[n] {
+			st.State = health.Unreachable
+		}
+		out = append(out, st)
+	}
+	return out
+}
+
+// A record's copies come from ForgeSync's database and name every node the
+// issue is on. What was read this run is another thing entirely: a node
+// that is unreachable, or that has issues turned off, is passed over. The
+// per-member passes walked the copies and read the snapshot of each node
+// they named, which for such a node was nothing at all. On the live
+// installation that crashed the controller every round.
+func TestACopyOnANodeThatWasNotReadIsPassedOver(t *testing.T) {
+	names := []string{"se", "dk", "de"}
+	for _, why := range []string{"unreachable", "issues off"} {
+		t.Run(why, func(t *testing.T) {
+			s, _, f, _ := setup(t, names...)
+			s.opts.Reactions, s.opts.Attachments, s.opts.Reviews = true, true, true
+			f["se"].open("alice", "worth a reaction")
+			s.run(t) // every node now has a copy, and the record says so
+
+			// de goes away after the copies were recorded.
+			switch why {
+			case "unreachable":
+				s.health = someHealthy{all: names, down: map[string]bool{"de": true}}
+			case "issues off":
+				f["de"].issuesOff = true
+			}
+			f["se"].react(1, "alice", "+1")
+
+			s.run(t) // this used to panic on de's missing snapshot
+
+			for _, n := range []string{"se", "dk"} {
+				if got := f[n].reactionsOn(1); got != "alice:+1" {
+					t.Errorf("%s: %q, want the reaction to have carried to the nodes that were read", n, got)
+				}
+			}
+			// de is not written to and not read as having lost anything:
+			// when it comes back the reaction reaches it.
+			switch why {
+			case "unreachable":
+				s.health = allHealthy(names)
+			case "issues off":
+				f["de"].issuesOff = false
+			}
+			s.run(t)
+			if got := f["de"].reactionsOn(1); got != "alice:+1" {
+				t.Errorf("de after it came back: %q, want the reaction", got)
+			}
+		})
+	}
+}

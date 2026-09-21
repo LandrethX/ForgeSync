@@ -614,6 +614,12 @@ func (s *Syncer) runOnce(ctx context.Context, id string) error {
 		r.snaps[n] = sn
 		r.nodes = append(r.nodes, n)
 	}
+	if r.snaps[rec.PrimaryNode] == nil {
+		// Issues are turned off on the primary, which is that node's own
+		// decision: there is nothing here to copy from, and the rest of
+		// this run reads the primary's snapshot as though there were.
+		return nil
+	}
 
 	// Labels and milestones first: issues refer to them.
 	items, err := s.store.RepoItems(ctx, id)
@@ -1000,12 +1006,23 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 		if r.s.opts.Reviews {
 			at := map[string]map[string]review{}
 			for n, c := range rec.Copies {
+				if r.snaps[n] == nil {
+					continue // not read this run: it takes no part
+				}
 				at[n] = r.snaps[n].reviews[c.Number]
 				if at[n] == nil {
 					at[n] = map[string]review{} // a copy just opened
 				}
 			}
-			rec.BaseReviews = r.syncReviews(ctx, ref, source, rec.BaseReviews, at, reviewer{
+			// The base only moves when every copy took part. A node that
+			// was not read is not in the set, and letting the base move
+			// without it would mean that when it comes back, whatever it
+			// has not got reads as something a person deleted and is
+			// taken off every other node. The base waits instead, and
+			// what was written this run is written again next time
+			// against the same base, which changes nothing.
+			sawAll := len(at) == len(rec.Copies)
+			next := r.syncReviews(ctx, ref, source, rec.BaseReviews, at, reviewer{
 				submit: func(ctx context.Context, n, as string, v review) error {
 					_, err := r.s.nodes[n].As(as).CreatePullReview(ctx, r.owner, r.name, rec.Copies[n].Number, asNew(v))
 					return err
@@ -1014,18 +1031,25 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 					return r.s.nodes[n].API.DeletePullReview(ctx, r.owner, r.name, rec.Copies[n].Number, v.head.ID)
 				},
 			})
+			if sawAll {
+				rec.BaseReviews = next
+			}
 		}
 	}
 	// Reactions last, so a copy made in this run gets them too.
 	if r.s.opts.Reactions {
 		have := map[string]map[string]bool{}
 		for n, c := range rec.Copies {
+			if r.snaps[n] == nil {
+				continue // not read this run: it takes no part
+			}
 			have[n] = r.snaps[n].reactions[c.ForgejoID]
 			if have[n] == nil {
 				have[n] = map[string]bool{} // a copy just made
 			}
 		}
-		rec.BaseReactions = r.syncReactions(ctx, ref, source, rec.BaseReactions, have,
+		sawAll := len(have) == len(rec.Copies) // see the comment on reviews above
+		next := r.syncReactions(ctx, ref, source, rec.BaseReactions, have,
 			func(ctx context.Context, n, login, content string, add bool) error {
 				api := r.s.nodes[n].As(login)
 				if add {
@@ -1033,16 +1057,23 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 				}
 				return api.RemoveIssueReaction(ctx, r.owner, r.name, rec.Copies[n].Number, content)
 			})
+		if sawAll {
+			rec.BaseReactions = next
+		}
 	}
 	if r.s.opts.Attachments {
 		at := map[string]map[string]forgejo.Attachment{}
 		for n, c := range rec.Copies {
+			if r.snaps[n] == nil {
+				continue // not read this run: it takes no part
+			}
 			at[n] = r.snaps[n].attachments[c.ForgejoID]
 			if at[n] == nil {
 				at[n] = map[string]forgejo.Attachment{} // a copy just made
 			}
 		}
-		rec.BaseAttachments = r.syncAttachments(ctx, ref, rec.Author, rec.BaseAttachments, at, attacher{
+		sawAll := len(at) == len(rec.Copies) // see the comment on reviews above
+		next := r.syncAttachments(ctx, ref, rec.Author, rec.BaseAttachments, at, attacher{
 			upload: func(ctx context.Context, n, author, name string, content []byte) error {
 				_, err := r.s.nodes[n].As(author).UploadIssueAttachment(ctx, r.owner, r.name, rec.Copies[n].Number, name, content)
 				return err
@@ -1051,6 +1082,9 @@ func (r *run) issue(ctx context.Context, rec *store.IssueRecord) (gone bool, err
 				return r.s.nodes[n].API.DeleteIssueAttachment(ctx, r.owner, r.name, rec.Copies[n].Number, a.ID)
 			},
 		})
+		if sawAll {
+			rec.BaseAttachments = next
+		}
 	}
 	_, err = r.s.store.SaveIssue(ctx, *rec)
 	return false, err
@@ -1320,12 +1354,16 @@ func (r *run) comment(ctx context.Context, c *store.CommentRecord, issue *store.
 	if r.s.opts.Reactions {
 		have := map[string]map[string]bool{}
 		for n, id := range c.Copies {
+			if r.snaps[n] == nil {
+				continue // not read this run: it takes no part
+			}
 			have[n] = r.snaps[n].commentReactions[id]
 			if have[n] == nil {
 				have[n] = map[string]bool{} // a copy just made
 			}
 		}
-		c.BaseReactions = r.syncReactions(ctx, ref, source, c.BaseReactions, have,
+		sawAll := len(have) == len(c.Copies) // see the comment on reviews above
+		next := r.syncReactions(ctx, ref, source, c.BaseReactions, have,
 			func(ctx context.Context, n, login, content string, add bool) error {
 				api := r.s.nodes[n].As(login)
 				if add {
@@ -1333,16 +1371,23 @@ func (r *run) comment(ctx context.Context, c *store.CommentRecord, issue *store.
 				}
 				return api.RemoveCommentReaction(ctx, r.owner, r.name, c.Copies[n], content)
 			})
+		if sawAll {
+			c.BaseReactions = next
+		}
 	}
 	if r.s.opts.Attachments {
 		at := map[string]map[string]forgejo.Attachment{}
 		for n, id := range c.Copies {
+			if r.snaps[n] == nil {
+				continue // not read this run: it takes no part
+			}
 			at[n] = r.snaps[n].commentAttachments[id]
 			if at[n] == nil {
 				at[n] = map[string]forgejo.Attachment{} // a copy just made
 			}
 		}
-		c.BaseAttachments = r.syncAttachments(ctx, ref, c.Author, c.BaseAttachments, at, attacher{
+		sawAll := len(at) == len(c.Copies) // see the comment on reviews above
+		next := r.syncAttachments(ctx, ref, c.Author, c.BaseAttachments, at, attacher{
 			upload: func(ctx context.Context, n, author, name string, content []byte) error {
 				_, err := r.s.nodes[n].As(author).UploadCommentAttachment(ctx, r.owner, r.name, c.Copies[n], name, content)
 				return err
@@ -1351,6 +1396,9 @@ func (r *run) comment(ctx context.Context, c *store.CommentRecord, issue *store.
 				return r.s.nodes[n].API.DeleteCommentAttachment(ctx, r.owner, r.name, c.Copies[n], a.ID)
 			},
 		})
+		if sawAll {
+			c.BaseAttachments = next
+		}
 	}
 	_, err := r.s.store.SaveComment(ctx, *c)
 	return err

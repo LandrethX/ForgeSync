@@ -79,8 +79,9 @@ replication:
   # The Git LFS objects the pointer files name, so a replica can be
   # checked out. Needs LFS_START_SERVER on the Forgejo nodes.
   lfs: true
-  # What the registries hold, for the types ForgeSync can publish by
-  # path: generic and maven. Others are reported, never faked.
+  # What the registries hold, for the types ForgeSync can publish whole:
+  # generic, maven, nuget, rubygems and helm. Others are reported, never
+  # faked.
   packages: true
   # ForgeSync's guard on the replicas: people work on the primary, and a
   # guard someone removes is put back (Phase 0 p02).

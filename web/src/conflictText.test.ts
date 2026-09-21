@@ -41,7 +41,7 @@ describe("Package conflicts", () => {
     expect(conflictExplanation(c)).toMatch(
       /^dk and de haven't got this package/,
     );
-    expect(conflictExplanation(c)).toMatch(/generic and maven/);
+    expect(conflictExplanation(c)).toMatch(/generic, maven, nuget, rubygems and helm/);
     expect(conflictFix(c)).toMatch(/npm client/);
   });
 

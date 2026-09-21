@@ -166,7 +166,7 @@ export function conflictExplanation(c: Conflict): string | undefined {
       const where = c.details.missing?.length
         ? nodeList(c.details.missing)
         : (c.details.node ?? "A node");
-      return `${where} ${c.details.missing && c.details.missing.length > 1 ? "haven't" : "hasn't"} got this package, and ForgeSync can't publish ${c.details.package_type ?? "this"} packages: only the types whose files it can fetch and put back by path (generic and maven) travel. The others would need their own client to publish faithfully, so ForgeSync leaves them alone rather than half-copying them.`;
+      return `${where} ${c.details.missing && c.details.missing.length > 1 ? "haven't" : "hasn't"} got this package, and ForgeSync can't publish ${c.details.package_type ?? "this"} packages: only the types it can publish whole (generic, maven, nuget, rubygems and helm) travel. The others would need their own client to publish faithfully, so ForgeSync leaves them alone rather than half-copying them.`;
     }
     case "package_incomplete":
       if (c.details.digests) {

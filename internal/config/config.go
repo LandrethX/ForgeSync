@@ -176,10 +176,10 @@ type Replication struct {
 	// the API so Forgejo makes the repository, which is then replaced by
 	// the primary's history. Off by default.
 	Wiki bool `yaml:"wiki"`
-	// Packages copies what the nodes' registries hold, for the package
-	// types whose files can be fetched and published by path alone
-	// (generic and maven). A package of any other type that isn't on every
-	// node is reported rather than quietly left behind.
+	// Packages copies what the nodes' registries hold, for the types
+	// ForgeSync can publish whole: generic, maven, nuget, rubygems and
+	// helm. A package of any other type that isn't on every node is
+	// reported rather than quietly left behind.
 	// PackageMaxBytes bounds one file; 0 (the default) means no limit.
 	// Off by default.
 	Packages        bool  `yaml:"packages"`

@@ -78,14 +78,61 @@ func parsePackageMember(member string) (packageFile, bool) {
 
 func (f packageFile) version() string { return f.Type + " " + f.Name + " " + f.Version }
 
-// registryPath is where one file of a package lives in a node's registry,
-// for both fetching and publishing. ok is false for a type ForgeSync
-// can't carry by path alone.
+// What ForgeSync can carry is decided by the registry protocol, not by
+// preference. A type travels when its files can be fetched by a path and
+// put back as a body, and when putting one back recreates the package
+// rather than half of it.
 //
-// generic keeps the file under its package name and version. maven names
-// a package "<groupId>:<artifactId>" and lays it out the way a Maven
-// repository is laid out, with the group's dots as directories.
-func registryPath(owner string, f packageFile) (string, bool) {
+// Two shapes qualify. generic and maven fetch and publish at the same
+// path. nuget, rubygems and helm publish to one fixed endpoint and are
+// fetched from somewhere else, which is only a second path to know; and
+// each of them is a **single-file** package, so putting that file back is
+// the whole of it, with no index to rebuild and no partial state to leave
+// behind. That is what makes them safe, not that their upload is simple.
+//
+// Everything else stays out. npm and composer wrap the file in JSON,
+// pypi in a form with its own metadata, debian and rpm need a
+// distribution and component the package API does not report, and
+// container images speak a protocol of their own. Each needs its own
+// client written and tested, and a package copied halfway is worse than
+// one not copied at all.
+
+// plainSegment reports whether a piece of a package's identity can stand
+// in a URL path. A package's name, version and file names are whatever
+// the person who published it chose, and maven's path is laid out from
+// them rather than escaped into one segment, so a piece that could climb
+// out of the path or be read as an escape is refused outright: ForgeSync
+// fetches and publishes nothing for it, and says so, rather than reading
+// or writing somewhere other than the package it meant.
+func plainSegment(s string) bool {
+	return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, "/\\%")
+}
+
+// nodeBuiltFile reports whether a file in a package version was made by
+// the node rather than sent to it. Forgejo extracts a .nuspec from every
+// .nupkg it is given, and builds maven-metadata.xml out of what it holds,
+// so both appear in a node's file listing without anyone having uploaded
+// one. Neither is ForgeSync's to carry: publishing the package the file
+// was made from recreates it there, and publishing it on its own would
+// fight the node's own copy. Left out of the member set, they also can't
+// be read as a node being short of a file.
+func nodeBuiltFile(typ, file string) bool {
+	switch typ {
+	case "maven":
+		return strings.HasPrefix(file, "maven-metadata.xml")
+	case "nuget":
+		return strings.HasSuffix(file, ".nuspec")
+	}
+	return false
+}
+
+// registryFetch is where one file of a package can be read on a node. It
+// is also where a single file is deleted, for the one type that allows
+// it.
+func registryFetch(owner string, f packageFile) (string, bool) {
+	if nodeBuiltFile(f.Type, f.File) || !plainSegment(f.Name) || !plainSegment(f.Version) || !plainSegment(f.File) {
+		return "", false
+	}
 	base := "/api/packages/" + url.PathEscape(owner)
 	switch f.Type {
 	case "generic":
@@ -96,27 +143,57 @@ func registryPath(owner string, f packageFile) (string, bool) {
 		if !ok {
 			return "", false
 		}
-		// maven-metadata.xml is built by the node from what it holds, not
-		// something to copy: publishing one would fight the node's own.
-		if strings.HasPrefix(f.File, "maven-metadata.xml") {
-			return "", false
+		// This path is laid out, not escaped into one segment, so every
+		// piece of it has to stand on its own.
+		for _, part := range append(strings.Split(group, "."), artifact) {
+			if !plainSegment(part) {
+				return "", false
+			}
 		}
 		path := strings.ReplaceAll(group, ".", "/") + "/" + artifact + "/" + f.Version + "/" + f.File
 		return base + "/maven/" + path, true
+	case "nuget":
+		return base + "/nuget/package/" + url.PathEscape(f.Name) + "/" + url.PathEscape(f.Version) +
+			"/" + url.PathEscape(f.File), true
+	case "rubygems":
+		return base + "/rubygems/gems/" + url.PathEscape(f.File), true
+	case "helm":
+		return base + "/helm/" + url.PathEscape(f.File), true
 	}
 	return "", false
+}
+
+// registryPublish is how one file is put back. For generic and maven that
+// is the path it came from; the others take the file at a fixed endpoint
+// and work out for themselves what it is.
+func registryPublish(owner string, f packageFile) (method, path string, ok bool) {
+	if nodeBuiltFile(f.Type, f.File) || !plainSegment(f.Name) || !plainSegment(f.Version) || !plainSegment(f.File) {
+		return "", "", false
+	}
+	base := "/api/packages/" + url.PathEscape(owner)
+	switch f.Type {
+	case "nuget":
+		return http.MethodPut, base + "/nuget/", true
+	case "rubygems":
+		return http.MethodPost, base + "/rubygems/api/v1/gems/", true
+	case "helm":
+		return http.MethodPost, base + "/helm/api/charts", true
+	}
+	p, ok := registryFetch(owner, f)
+	return http.MethodPut, p, ok
 }
 
 // packageTypeCarried reports whether ForgeSync can publish this type at
 // all, which is what decides between the two conflicts.
 func packageTypeCarried(typ string) bool {
-	_, ok := registryPath("x", packageFile{Type: typ, Name: "a:b", Version: "1", File: "f"})
+	_, _, ok := registryPublish("x", packageFile{Type: typ, Name: "a:b", Version: "1", File: "f"})
 	return ok
 }
 
 // canDeleteFile reports whether one file can be removed on its own. The
-// generic registry has an endpoint for it; maven has none, so a single
-// file that should go there waits for the whole version to go.
+// generic registry has an endpoint for it; the others have none, so a
+// single file that should go there waits for the whole version to go.
+// For the single-file types that is the same thing anyway.
 func canDeleteFile(typ string) bool { return typ == "generic" }
 
 // syncPackages brings every owner's packages together. It runs once a
@@ -162,6 +239,9 @@ func (e *Engine) packagesOn(ctx context.Context, n Node, owner string) (map[stri
 				return nil, nil, err
 			}
 			for _, f := range files {
+				if nodeBuiltFile(p.Type, f.Name) {
+					continue
+				}
 				m := packageMember(p, f)
 				members[m], from[m] = true, p
 			}
@@ -500,9 +580,9 @@ func (e *Engine) carryPackageFile(ctx context.Context, owner string, f packageFi
 }
 
 func (e *Engine) fetchPackageFile(ctx context.Context, n Node, owner string, f packageFile, w io.Writer) (int64, error) {
-	path, ok := registryPath(owner, f)
+	path, ok := registryFetch(owner, f)
 	if !ok {
-		return 0, fmt.Errorf("ForgeSync can't fetch %s packages", f.Type)
+		return 0, fmt.Errorf("ForgeSync can't say where %q would be in the %s registry", f.File, f.Type)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(n.URL, "/")+path, nil)
 	if err != nil {
@@ -522,9 +602,16 @@ func (e *Engine) fetchPackageFile(ctx context.Context, n Node, owner string, f p
 
 // packageRequest publishes or removes one file through the registry.
 func (e *Engine) packageRequest(ctx context.Context, n Node, method, owner string, f packageFile, body io.Reader, size int64) error {
-	path, ok := registryPath(owner, f)
+	var path string
+	var ok bool
+	if method == http.MethodDelete {
+		// Deleting one file happens where it lives, not where uploads go.
+		path, ok = registryFetch(owner, f)
+	} else {
+		method, path, ok = registryPublish(owner, f)
+	}
 	if !ok {
-		return fmt.Errorf("ForgeSync can't publish %s packages", f.Type)
+		return fmt.Errorf("ForgeSync can't say where %q would go in the %s registry", f.File, f.Type)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(n.URL, "/")+path, body)
 	if err != nil {

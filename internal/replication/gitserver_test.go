@@ -1,11 +1,16 @@
 package replication
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cgi"
@@ -296,18 +301,28 @@ func pointerFor(content string) string {
 		"\nsize " + strconv.Itoa(len(content)) + "\n"
 }
 
-// serveRegistry answers the package registry endpoints ForgeSync uses:
-// the generic registry, which keeps a file under its package name and
-// version, and maven, which lays a package out as a Maven repository is.
+// serveRegistry answers the package registry endpoints ForgeSync uses.
+// generic and maven fetch and publish at the same path: generic keeps a
+// file under its package name and version, maven lays a package out as a
+// Maven repository is. nuget, rubygems and helm are read by path but
+// uploaded to one endpoint that names nothing, so the node works out what
+// the package is by reading the file, which is what acceptUpload does.
 // Publishing the same name twice is refused, as Forgejo refuses it.
 func (n *gitNode) serveRegistry(w http.ResponseWriter, r *http.Request) {
-	key, file, ok := parseRegistryPath(strings.TrimPrefix(r.URL.Path, "/api/packages/"))
+	path := strings.TrimPrefix(r.URL.Path, "/api/packages/")
+	if owner, rest, cut := strings.Cut(path, "/"); cut {
+		if typ, ok := uploadEndpoint(rest); ok {
+			n.acceptUpload(w, r, owner, typ)
+			return
+		}
+	}
+	n.pkgMu.Lock()
+	defer n.pkgMu.Unlock()
+	key, file, ok := n.parseRegistryPath(path)
 	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	n.pkgMu.Lock()
-	defer n.pkgMu.Unlock()
 	switch r.Method {
 	case http.MethodPut:
 		if _, taken := n.pkgs[key][file]; taken {
@@ -353,7 +368,7 @@ func (n *gitNode) serveRegistry(w http.ResponseWriter, r *http.Request) {
 
 // parseRegistryPath reads "<owner>/<type>/..." the way each registry lays
 // its files out.
-func parseRegistryPath(path string) (pkgKey, string, bool) {
+func (n *gitNode) parseRegistryPath(path string) (pkgKey, string, bool) {
 	parts := strings.Split(path, "/")
 	if len(parts) < 3 {
 		return pkgKey{}, "", false
@@ -374,8 +389,300 @@ func parseRegistryPath(path string) (pkgKey, string, bool) {
 		artifact := rest[len(rest)-3]
 		group := strings.Join(rest[:len(rest)-3], ".")
 		return pkgKey{owner, typ, group + ":" + artifact, version}, file, true
+	case "nuget":
+		// /nuget/package/{id}/{version}/{file}
+		if len(rest) != 4 || rest[0] != "package" {
+			return pkgKey{}, "", false
+		}
+		return pkgKey{owner, typ, rest[1], rest[2]}, rest[3], true
+	case "rubygems":
+		// /rubygems/gems/{file}, which names neither package nor version.
+		if len(rest) != 2 || rest[0] != "gems" {
+			return pkgKey{}, "", false
+		}
+		key, ok := n.findPackageByFile(owner, typ, rest[1])
+		return key, rest[1], ok
+	case "helm":
+		// /helm/{file}, likewise.
+		if len(rest) != 1 {
+			return pkgKey{}, "", false
+		}
+		key, ok := n.findPackageByFile(owner, typ, rest[0])
+		return key, rest[0], ok
 	}
 	return pkgKey{}, "", false
+}
+
+// findPackageByFile works back from a file name to the package it belongs
+// to, which is what the rubygems and helm registries do: their download
+// paths carry the file and nothing else, so the node has to look it up.
+// The caller holds pkgMu.
+func (n *gitNode) findPackageByFile(owner, typ, file string) (pkgKey, bool) {
+	for key, files := range n.pkgs {
+		if key.owner != owner || key.typ != typ {
+			continue
+		}
+		if _, here := files[file]; here {
+			return key, true
+		}
+	}
+	return pkgKey{}, false
+}
+
+// uploadEndpoint names the type whose upload lands at this path. These
+// endpoints say nothing about the package: the node reads the file.
+func uploadEndpoint(rest string) (string, bool) {
+	switch strings.TrimSuffix(rest, "/") {
+	case "nuget":
+		return "nuget", true
+	case "rubygems/api/v1/gems":
+		return "rubygems", true
+	case "helm/api/charts":
+		return "helm", true
+	}
+	return "", false
+}
+
+// acceptUpload takes a package at the endpoint its registry uploads to,
+// reads what it is out of the file itself, and stores it under the name
+// that registry gives it. nuget also keeps the .nuspec it finds inside
+// the .nupkg, as Forgejo does: a file nobody uploaded, which is exactly
+// what ForgeSync has to leave alone.
+func (n *gitNode) acceptUpload(w http.ResponseWriter, r *http.Request, owner, typ string) {
+	if r.Method == http.MethodGet {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if ct := r.Header.Get("Content-Type"); ct != "application/octet-stream" {
+		// Forgejo reads the body as a form otherwise and refuses it.
+		http.Error(w, "request Content-Type isn't multipart/form-data", http.StatusInternalServerError)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	name, version, file, derived, err := describeUpload(typ, body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	key := pkgKey{owner, typ, name, version}
+	n.pkgMu.Lock()
+	defer n.pkgMu.Unlock()
+	if _, taken := n.pkgs[key][file]; taken {
+		http.Error(w, "file already exists", http.StatusConflict)
+		return
+	}
+	if n.pkgs[key] == nil {
+		n.pkgs[key] = map[string][]byte{}
+	}
+	n.pkgs[key][file] = body
+	for dname, dbody := range derived {
+		n.pkgs[key][dname] = dbody
+	}
+	w.WriteHeader(http.StatusCreated)
+}
+
+// describeUpload reads a package's identity out of the file, as each
+// registry does: nuget from the .nuspec inside the .nupkg zip, rubygems
+// from the metadata.gz inside the gem tar, helm from the Chart.yaml
+// inside the chart. All three lowercase the file name they store.
+func describeUpload(typ string, body []byte) (name, version, file string, derived map[string][]byte, err error) {
+	switch typ {
+	case "nuget":
+		zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+		if err != nil {
+			return "", "", "", nil, fmt.Errorf("not a nupkg: %w", err)
+		}
+		for _, f := range zr.File {
+			if !strings.HasSuffix(f.Name, ".nuspec") {
+				continue
+			}
+			rc, err := f.Open()
+			if err != nil {
+				return "", "", "", nil, err
+			}
+			spec, err := io.ReadAll(rc)
+			rc.Close()
+			if err != nil {
+				return "", "", "", nil, err
+			}
+			id := between(string(spec), "<id>", "</id>")
+			ver := between(string(spec), "<version>", "</version>")
+			if id == "" || ver == "" {
+				return "", "", "", nil, fmt.Errorf("the nuspec names no id or version")
+			}
+			low := strings.ToLower(id)
+			return id, ver, low + "." + ver + ".nupkg",
+				map[string][]byte{low + ".nuspec": spec}, nil
+		}
+		return "", "", "", nil, fmt.Errorf("the nupkg holds no nuspec")
+	case "rubygems":
+		meta, err := fileInTar(body, "metadata.gz")
+		if err != nil {
+			return "", "", "", nil, err
+		}
+		meta, err = ungzip(meta)
+		if err != nil {
+			return "", "", "", nil, err
+		}
+		name, version = gemNameVersion(string(meta))
+		if name == "" || version == "" {
+			return "", "", "", nil, fmt.Errorf("the gem's metadata names no name or version")
+		}
+		return name, version, strings.ToLower(name+"-"+version) + ".gem", nil, nil
+	case "helm":
+		plain, err := ungzip(body)
+		if err != nil {
+			return "", "", "", nil, fmt.Errorf("not a chart: %w", err)
+		}
+		chart, err := fileInTar(plain, "Chart.yaml")
+		if err != nil {
+			return "", "", "", nil, err
+		}
+		name, version = yamlField(string(chart), "name"), yamlField(string(chart), "version")
+		if name == "" || version == "" {
+			return "", "", "", nil, fmt.Errorf("the Chart.yaml names no name or version")
+		}
+		return name, version, strings.ToLower(name+"-"+version) + ".tgz", nil, nil
+	}
+	return "", "", "", nil, fmt.Errorf("no upload endpoint for %s", typ)
+}
+
+func between(s, open, close string) string {
+	_, rest, ok := strings.Cut(s, open)
+	if !ok {
+		return ""
+	}
+	out, _, ok := strings.Cut(rest, close)
+	if !ok {
+		return ""
+	}
+	return out
+}
+
+// yamlField reads a top-level "key: value" line, which is as much YAML as
+// a Chart.yaml needs here.
+func yamlField(doc, key string) string {
+	for _, line := range strings.Split(doc, "\n") {
+		if v, ok := strings.CutPrefix(line, key+":"); ok {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+// gemNameVersion reads a gemspec, where the version is nested one level
+// under its own key:
+//
+//	name: demo
+//	version: !ruby/object:Gem::Version
+//	  version: 1.0.0
+func gemNameVersion(doc string) (string, string) {
+	name := yamlField(doc, "name")
+	lines := strings.Split(doc, "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "version:") || i+1 >= len(lines) {
+			continue
+		}
+		if v, ok := strings.CutPrefix(strings.TrimSpace(lines[i+1]), "version:"); ok {
+			return name, strings.TrimSpace(v)
+		}
+	}
+	return name, ""
+}
+
+// fileInTar returns the one entry whose name ends in want.
+func fileInTar(archive []byte, want string) ([]byte, error) {
+	tr := tar.NewReader(bytes.NewReader(archive))
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return nil, fmt.Errorf("the archive holds no %s", want)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if h.Name == want || strings.HasSuffix(h.Name, "/"+want) {
+			return io.ReadAll(tr)
+		}
+	}
+}
+
+func ungzip(b []byte) ([]byte, error) {
+	zr, err := gzip.NewReader(bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+	return io.ReadAll(zr)
+}
+
+// nupkgFor, gemFor and chartFor build the smallest file each registry
+// will accept, so a test can upload one the way a client would.
+func nupkgFor(id, version string) []byte {
+	spec := "<?xml version=\"1.0\"?><package><metadata><id>" + id +
+		"</id><version>" + version + "</version></metadata></package>"
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	f, err := zw.Create(id + ".nuspec")
+	if err != nil {
+		panic(err)
+	}
+	if _, err := f.Write([]byte(spec)); err != nil {
+		panic(err)
+	}
+	if err := zw.Close(); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+
+func gemFor(name, version string) []byte {
+	meta := "--- !ruby/object:Gem::Specification\nname: " + name +
+		"\nversion: !ruby/object:Gem::Version\n  version: " + version + "\nplatform: ruby\n"
+	return tarOf(map[string][]byte{"metadata.gz": gzipOf([]byte(meta))})
+}
+
+func chartFor(name, version string) []byte {
+	chart := "apiVersion: v2\nname: " + name + "\nversion: " + version + "\n"
+	return gzipOf(tarOf(map[string][]byte{name + "/Chart.yaml": []byte(chart)}))
+}
+
+func tarOf(files map[string][]byte) []byte {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(files[name]))}); err != nil {
+			panic(err)
+		}
+		if _, err := tw.Write(files[name]); err != nil {
+			panic(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+
+func gzipOf(b []byte) []byte {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(b); err != nil {
+		panic(err)
+	}
+	if err := zw.Close(); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
 }
 
 // publish puts a file in the registry directly, as a client's upload does.
@@ -387,6 +694,52 @@ func (n *gitNode) publish(owner, typ, name, version, file, content string) {
 		n.pkgs[key] = map[string][]byte{}
 	}
 	n.pkgs[key][file] = []byte(content)
+}
+
+// upload puts a package on the node the way a client does: the node reads
+// the file and decides what it is called, so a test gets whatever Forgejo
+// would have stored, derived files and all.
+func (n *gitNode) upload(owner, typ string, body []byte) {
+	name, version, file, derived, err := describeUpload(typ, body)
+	if err != nil {
+		n.t.Fatalf("upload %s: %v", typ, err)
+	}
+	n.pkgMu.Lock()
+	defer n.pkgMu.Unlock()
+	key := pkgKey{owner, typ, name, version}
+	if n.pkgs[key] == nil {
+		n.pkgs[key] = map[string][]byte{}
+	}
+	n.pkgs[key][file] = body
+	for dname, dbody := range derived {
+		n.pkgs[key][dname] = dbody
+	}
+}
+
+// fileNames is what one package version holds on this node, sorted.
+func (n *gitNode) fileNames(owner, typ, name, version string) []string {
+	n.pkgMu.Lock()
+	defer n.pkgMu.Unlock()
+	var out []string
+	for file := range n.pkgs[pkgKey{owner, typ, name, version}] {
+		out = append(out, file)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// fileBody is one file's content, or nil where the node hasn't got it.
+func (n *gitNode) fileBody(owner, typ, name, version, file string) []byte {
+	n.pkgMu.Lock()
+	defer n.pkgMu.Unlock()
+	return n.pkgs[pkgKey{owner, typ, name, version}][file]
+}
+
+// dropPackage takes a whole version away, as someone deleting it does.
+func (n *gitNode) dropPackage(owner, typ, name, version string) {
+	n.pkgMu.Lock()
+	defer n.pkgMu.Unlock()
+	delete(n.pkgs, pkgKey{owner, typ, name, version})
 }
 
 // packageList is what the node holds, as "<type> <name> <version> <file>=<content>",

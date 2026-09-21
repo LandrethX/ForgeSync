@@ -1,7 +1,9 @@
 package replication
 
 import (
+	"bytes"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 
@@ -177,5 +179,104 @@ func TestTwoFilesOfOneNameAreAConflict(t *testing.T) {
 	}
 	if len(st.found) == 0 || st.found[0].Kind != PackageConflictKind {
 		t.Fatalf("conflicts = %v", kinds)
+	}
+}
+
+// nuget, rubygems and helm are each one file uploaded to a fixed endpoint
+// and read back from somewhere else, so the two paths have to agree for a
+// package to travel at all.
+func TestTheSingleFileRegistriesTravel(t *testing.T) {
+	cases := []struct {
+		typ, name, version, file string
+		body                     []byte
+	}{
+		{"nuget", "ForgeSyncDemo", "1.0.0", "forgesyncdemo.1.0.0.nupkg", nupkgFor("ForgeSyncDemo", "1.0.0")},
+		{"rubygems", "demo", "1.0.0", "demo-1.0.0.gem", gemFor("demo", "1.0.0")},
+		{"helm", "demo", "1.0.0", "demo-1.0.0.tgz", chartFor("demo", "1.0.0")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.typ, func(t *testing.T) {
+			e, st, nodes, recs := packagesSetup(t)
+			nodes["se"].upload("alice", tc.typ, tc.body)
+
+			e.syncPackages(bg(), recs, pkgHealthy)
+
+			for _, n := range []string{"se", "dk", "de"} {
+				got := nodes[n].fileNames("alice", tc.typ, tc.name, tc.version)
+				if !slices.Contains(got, tc.file) {
+					t.Fatalf("%s holds %v, want %s among them", n, got, tc.file)
+				}
+				if !bytes.Equal(nodes[n].fileBody("alice", tc.typ, tc.name, tc.version, tc.file), tc.body) {
+					t.Errorf("%s: the file that arrived is not the one that was published", n)
+				}
+			}
+			if len(st.found) != 0 {
+				t.Errorf("conflicts: %+v", st.found)
+			}
+			// A settled run publishes nothing: what arrived compares equal
+			// to what was sent, derived files and all.
+			before := len(st.audit)
+			e.syncPackages(bg(), recs, pkgHealthy)
+			if len(st.audit) != before {
+				t.Errorf("a settled run wrote: %v", st.audit[before:])
+			}
+		})
+	}
+}
+
+// Forgejo extracts a .nuspec from every .nupkg it is given, so a node that
+// has never been sent one still lists it. ForgeSync has to leave it alone:
+// publishing the .nupkg recreates it, and publishing it on its own would
+// be sending a fragment to the endpoint that takes whole packages.
+func TestTheNuspecForgejoMakesIsNotCarried(t *testing.T) {
+	e, st, nodes, recs := packagesSetup(t)
+	nodes["se"].upload("alice", "nuget", nupkgFor("ForgeSyncDemo", "1.0.0"))
+	if got := nodes["se"].fileNames("alice", "nuget", "ForgeSyncDemo", "1.0.0"); len(got) != 2 {
+		t.Fatalf("the node did not make a nuspec of its own: %v", got)
+	}
+
+	e.syncPackages(bg(), recs, pkgHealthy)
+
+	for _, n := range []string{"dk", "de"} {
+		got := nodes[n].fileNames("alice", "nuget", "ForgeSyncDemo", "1.0.0")
+		want := []string{"forgesyncdemo.1.0.0.nupkg", "forgesyncdemo.nuspec"}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s holds %v, want %v", n, got, want)
+		}
+	}
+	// One publish each, of the package itself; the nuspec is never one.
+	for _, a := range st.audit {
+		if strings.Contains(a, ".nuspec") {
+			t.Errorf("ForgeSync acted on a file the node made for itself: %s", a)
+		}
+	}
+	if len(st.found) != 0 {
+		t.Errorf("conflicts: %+v", st.found)
+	}
+}
+
+// A file only one node has is a package one node has: removing the node
+// that has it removes the version whole, which is the only way for a type
+// whose registry has no endpoint for one file.
+func TestASingleFileVersionGoesWhole(t *testing.T) {
+	e, st, nodes, recs := packagesSetup(t)
+	for _, n := range []string{"se", "dk", "de"} {
+		nodes[n].upload("alice", "helm", chartFor("demo", "1.0.0"))
+	}
+	// Everyone has it, so it settles into the base.
+	e.syncPackages(bg(), recs, pkgHealthy)
+	if got := st.packageBase["alice"]; !strings.Contains(got, "helm|demo|1.0.0|demo-1.0.0.tgz") {
+		t.Fatalf("base = %q", got)
+	}
+	// Deleted on one node, it goes everywhere.
+	nodes["se"].dropPackage("alice", "helm", "demo", "1.0.0")
+	e.syncPackages(bg(), recs, pkgHealthy)
+	for _, n := range []string{"se", "dk", "de"} {
+		if got := nodes[n].fileNames("alice", "helm", "demo", "1.0.0"); len(got) != 0 {
+			t.Errorf("%s still holds %v", n, got)
+		}
+	}
+	if len(st.found) != 0 {
+		t.Errorf("conflicts: %+v", st.found)
 	}
 }

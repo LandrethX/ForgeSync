@@ -23,9 +23,10 @@ Branches and tags, the LFS objects large files are kept in, the wiki, releases a
 files, repository settings and topics, branch protection (plus ForgeSync's own guard on the
 replicas), collaborators, organizations with their teams and members, labels, milestones,
 issues and comments, pull requests and their conversation, reviews, reactions, attachments,
-assignees, Actions variables, generic and maven packages, and forks as forks. A repository
-missing on a node is created, with its SceneID owner; one deleted on its primary is archived
-on the others rather than deleted; a rename keeps the repository's identity.
+assignees, Actions variables, generic, maven, nuget, rubygems and helm packages, and forks
+as forks. A repository missing on a node is created, with its SceneID owner; one deleted on
+its primary is archived on the others rather than deleted; a rename keeps the repository's
+identity.
 
 What it deliberately doesn't, and what Forgejo won't let it, is in
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md), with the reason for each.

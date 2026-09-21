@@ -540,3 +540,98 @@ ForgeSync does not watch the database. Patroni does, and `forgesync_database_up`
 controller cannot reach it, but nothing here alerts on replication lag or on a machine that
 has been out of the cluster for a week. That belongs to whatever watches your PostgreSQL, and
 `docs/LIMITATIONS.md` says so.
+
+---
+
+# Gate: three more package registries
+
+Run on 2026-09-21 against the working tree on top of commit `4c9790e`, before committing.
+
+## Classification
+
+| | |
+|---|---|
+| **Scope** | The uncommitted diff |
+| **Change under review** | `registryFetch` and `registryPublish` in `internal/replication/packages.go`, which carry nuget, rubygems and helm packages as well as generic and maven; `nodeBuiltFile`, which leaves out the files a node makes for itself; `plainSegment`, which refuses a piece of a package's identity that could climb out of a URL path; the test harness, which now speaks each registry's real upload protocol; the documentation that names what travels |
+| **Exposure** | **Outbound HTTP to the Forgejo nodes**, carrying the service account's credentials. No new inbound surface: not one route, handler or request parser is added to the controller |
+| **Data** | Package files, and the node tokens already used for every other registry call |
+| **Privilege** | The service account, which is a site admin on its node |
+| **Level** | **LEVEL 3, exposed code.** A URL path is built out of names chosen by whoever published the package, and the request carries a site-admin credential. |
+
+## Result
+
+| Check | Tool | Result |
+|---|---|---|
+| Formatting | `gofmt -l .` | **PASS** |
+| Static checks | `go vet ./...` | **PASS** |
+| Lint | `golangci-lint run` | **PASS**, 0 issues |
+| Types (UI) | `tsc --noEmit` | **PASS** |
+| Tests | `go test -count=1 -p 1 ./...` | **PASS**, 15 packages |
+| Database tests | same run, `FORGESYNC_TEST_DATABASE_URL` at `forgesync_unit` | **PASS** |
+| Race detection | `CGO_ENABLED=1 go test -race -p 1 ./...` | **PASS**, 15 packages. **The gap of the last four reviews is closed**: this host has a C compiler now and `make check` runs it |
+| UI tests | `vitest run` | **PASS**, 80 of 80 in 14 files |
+| New behaviour | `go test ./internal/replication` | **PASS**: each of the three types travels between three nodes, a settled run writes nothing, a single-file version is deleted whole, and the `.nuspec` is never touched |
+| Negative case, planted | `nodeBuiltFile` made to return false for `.nuspec` | **FAIL as designed**: two `package_incomplete` conflicts, `400 not a nupkg: zip: not a valid zip file`. Exactly the fault the exclusion prevents, which is what says the test bites |
+| Behaviour, end to end | live Forgejo 16 nodes SE and DK | **PASS**: a real `.nupkg`, `.gem` and chart published, fetched and republished by the paths ForgeSync uses, digests equal on both nodes; a version deleted whole |
+| SAST | `gosec -quiet -exclude-dir=web ./...` | **PASS with findings**: 18, **the same 18 as the baseline**, measured by running it again against the stashed tree. None in the new code |
+| SAST, second opinion | `semgrep p/golang p/security-audit p/secrets` | **PASS**: the same 3 as the baseline, none in the new code |
+| Dependency vulnerabilities | `govulncheck ./...` | **PASS**, none; `go.mod` unchanged, no dependency added |
+| Secrets, working tree | `gitleaks dir .` | **PASS**, no leaks |
+| Secrets, history | `gitleaks git .` | **PASS**, 79 commits, no leaks |
+| Shell | `shellcheck -S warning` on every tracked `*.sh` | **PASS** |
+| Authorisation | `internal/api/security_test.go` | **NOT APPLICABLE**: no endpoint is added or changed. The walk still runs and still passes |
+| DAST | `zap-baseline.py` | **NOT APPLICABLE**: the controller's HTTP surface is untouched by this diff. Last run in the previous gate, 0 failures |
+
+### Tool versions and commands
+
+```text
+go            1.27.1    go vet ./... ; go test -count=1 -p 1 ./... ; CGO_ENABLED=1 go test -race -p 1 ./...
+golangci-lint v2.13.2   golangci-lint run
+gosec         v2.29.0   gosec -quiet -exclude-dir=web ./...
+semgrep       1.177.0   semgrep scan --config=p/golang --config=p/security-audit --config=p/secrets
+govulncheck   v1.8.0    govulncheck ./...
+gitleaks      v8.30.1   gitleaks dir . ; gitleaks git .
+shellcheck    0.10.0    shellcheck -S warning $(git ls-files '*.sh')
+```
+
+## What was fixed while reviewing it
+
+**A package's path was laid out from names ForgeSync did not check** (LOW, hardening,
+CWE-22). maven's path is built by hand, not escaped into one segment:
+`org.scene:demo` becomes `org/scene/demo`. Nothing checked what those pieces were, so a
+package whose group, artifact, version or file name held `..` or a slash would have been
+fetched from, or published to, somewhere other than the package it meant. The same held for
+the file name in every other type, because `url.PathEscape` leaves `..` alone: it is a
+legal path segment, just not a legal name.
+
+*Exploitable today?* **No**, and it was checked rather than assumed: Forgejo v16 refuses
+`..` and `x/y` as a generic package name (404) and refuses a maven artifact of that shape
+(400), so no node would report one. That is a validation on the far side of a network call,
+which is the wrong place to depend on. `plainSegment` now refuses an empty piece, `.`, `..`,
+and anything holding `/`, `\` or `%`, in both directions. A package that trips it is
+reported like any other ForgeSync cannot carry, and nothing is read or written for it.
+`TestPathPiecesThatCouldClimbOutAreRefused` covers thirteen shapes and checks that ordinary
+ones still work, including a dotted maven group and a `-SNAPSHOT` version.
+
+## Why these three types and not the others
+
+The rule is not that the upload is simple. It is that **putting one file back recreates the
+whole package**. nuget, rubygems and helm each store exactly one file per version, which was
+read out of the Forgejo v16 source and then confirmed against a running node. So their
+upload endpoint, which names nothing and works out for itself what it was given, is safe to
+send that one file to. npm, pypi, composer, debian, rpm and the container registry each wrap
+the file in something of their own or need metadata the package API never reports; for those
+a `package_unreplicated` conflict naming the type stays the honest answer.
+
+The one subtlety is a file nobody uploaded. Forgejo extracts a `.nuspec` from every `.nupkg`
+and builds `maven-metadata.xml` out of what it holds, so both appear on a node that was
+never sent one. Treating them as members would have made ForgeSync publish a fragment to an
+endpoint that takes whole packages, which is what the planted failure above shows. They are
+left out instead, and publishing the package recreates them: checked on a live node, the
+`.nuspec` on the second node has the same sha256 as the first.
+
+## What this still does not do
+
+Nothing here makes a package type travel that could not before, beyond those three. The
+count of types ForgeSync cannot carry is smaller; the reason for the rest is unchanged, and
+`docs/LIMITATIONS.md` names them.

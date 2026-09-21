@@ -29,12 +29,19 @@ and reports it (`actions_secret_missing`), so the gap is visible before a workfl
 there rather than after. The conflict names the nodes to set it on. If you'd rather not be
 told, it can be dismissed.
 
-### Package types other than generic and maven
-**Each registry is its own protocol.** A package travels only if its files can be fetched
-and put back by path: generic and maven can. Container images speak the OCI distribution
-protocol (manifests, blob upload sessions, tags); npm, nuget, pypi, rubygems and the rest
-each take an upload in their own shape and build an index out of it. Copying those
-faithfully means implementing each client, and a half-copied package is worse than none.
+### Package types other than generic, maven, nuget, rubygems and helm
+**Each registry is its own protocol.** A package travels only if ForgeSync can fetch its
+files and put them back, and end up with the whole package rather than part of one.
+Five types manage it. generic and maven read and write at the same path. nuget, rubygems
+and helm are read by path and uploaded to one endpoint that works out for itself what it
+was given, which is safe because each is a single-file package: putting that file back is
+the whole of it.
+
+The rest are not. Container images speak the OCI distribution protocol (manifests, blob
+upload sessions, tags). npm and composer wrap the file in JSON, pypi in a form carrying
+its own metadata, and debian and rpm need a distribution and component the package API
+never reports. Copying any of them faithfully means implementing that client, and a
+half-copied package is worse than none.
 
 *What ForgeSync does instead:* a package of a type it can't publish, that isn't on every
 node, is reported once (`package_unreplicated`) naming the type and the nodes without it.

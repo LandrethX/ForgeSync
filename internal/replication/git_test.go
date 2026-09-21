@@ -1,6 +1,7 @@
 package replication
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -183,5 +184,47 @@ func TestLsRemoteDoesNotFollowRedirects(t *testing.T) {
 	_, err := testGit(t).LsRemote(bg(), Remote{URL: moved.URL + "/alice/demo.git", User: testUser, Token: testToken})
 	if !errors.Is(err, ErrRepoNotFound) {
 		t.Errorf("err = %v, want ErrRepoNotFound", err)
+	}
+}
+
+// Forget removes the caches a repository leaves behind. Nothing else ever
+// did, so a controller kept the full history of every repository it had
+// replicated and then forgotten, for good.
+func TestForgetRemovesTheCaches(t *testing.T) {
+	g := testGit(t)
+	id := "11111111-1111-1111-1111-111111111111"
+	for _, name := range []string{id, id + "-wiki"} {
+		if _, err := g.Cache(context.Background(), name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Another repository's cache, which must be left alone.
+	other := "22222222-2222-2222-2222-222222222222"
+	if _, err := g.Cache(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := g.Forget(id); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{id + ".git", id + "-wiki.git"} {
+		if _, err := os.Stat(filepath.Join(g.WorkDir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s survived (%v)", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(g.WorkDir, other+".git")); err != nil {
+		t.Errorf("another repository's cache was taken too: %v", err)
+	}
+
+	// Forgetting twice is not an error: tidying must never block the
+	// forgetting it belongs to.
+	if err := g.Forget(id); err != nil {
+		t.Errorf("forgetting an already forgotten repository: %v", err)
+	}
+	// A name that is not an id is refused rather than turned into a path.
+	for _, bad := range []string{"", "..", "a/b", "x.git"} {
+		if err := g.Forget(bad); err == nil {
+			t.Errorf("Forget(%q) was allowed", bad)
+		}
 	}
 }

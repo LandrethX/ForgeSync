@@ -56,6 +56,28 @@ node. Copying either would spread credentials ForgeSync was never given.
 
 ## Won't be done: it would be wrong
 
+### Pushing to a node that is not the repository's primary
+With `replication.protect_replicas` on, which is what `deploy/prod/forgesync.yaml` sets,
+every replica carries a ForgeSync-owned protection rule over all branches. Forgejo then
+refuses a user's push there, and people work on the primary. This is the point of the
+setting rather than a side effect: two nodes accepting writes to the same branch is how
+histories diverge, and a divergence has to be settled by a person.
+
+It rarely shows, because a person's repositories take their own home node as their primary,
+so the nearest node and the authoritative one are usually the same server. It shows when the
+primary is somewhere else: pushing to another person's repository, or after an administrator
+has moved a primary, or from automation pointed at a fixed node.
+
+*What you see:* Forgejo's own protected-branch rejection. It says nothing about ForgeSync
+and does not name the node you should have used, and it cannot be made to: the message
+belongs to Forgejo, and changing it would mean patching Forgejo. Clone from whichever node
+is nearest, and push to the primary, which the repository's page in the admin UI names.
+
+*If you would rather not have it:* turn `protect_replicas` off, and a push to a replica is
+then handled by what it is. Commits that only move a branch forward, or a branch only that
+node has, are taken over to the primary automatically and nobody is asked. A genuine
+divergence becomes a conflict for the owner.
+
 ### Pull mirrors
 A pull mirror already keeps itself up to date from somewhere else, and Forgejo makes it
 read-only, so there is nothing for ForgeSync to push into. Making a second mirror on another

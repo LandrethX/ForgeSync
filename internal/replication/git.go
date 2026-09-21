@@ -78,6 +78,28 @@ func (g *Git) Cache(ctx context.Context, id string) (string, error) {
 	return dir, nil
 }
 
+// Forget removes the caches belonging to a repository id: its own and
+// its wiki's. A cache is only a cache, but nothing else ever removed one,
+// so every repository ForgeSync replicated and then forgot left a full
+// bare mirror on the controller's disk for good. On an installation where
+// repositories come and go that grows without bound, and the git cache is
+// already the largest thing a controller keeps.
+//
+// It is deliberately forgiving: a cache that is not there is not an
+// error, because forgetting must not be blocked by tidying.
+func (g *Git) Forget(id string) error {
+	if !safeName.MatchString(id) || g.WorkDir == "" {
+		return fmt.Errorf("bad cache name %q", id)
+	}
+	var first error
+	for _, name := range []string{id + ".git", id + "-wiki.git"} {
+		if err := os.RemoveAll(filepath.Join(g.WorkDir, name)); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
 // LsRemote lists the branches and tags of a remote repository.
 func (g *Git) LsRemote(ctx context.Context, r Remote) (Refs, error) {
 	out, stderr, err := g.run(ctx, "", &r, "ls-remote", "--heads", "--tags", r.URL)

@@ -86,7 +86,10 @@ server. The other nodes hold a copy you can clone, browse and fork.
 What happens if something is pushed to one of those copies depends on a setting you choose.
 `replication.protect_replicas`, which the production configuration turns on, puts a
 ForgeSync-owned protection rule on every replica: Forgejo itself then refuses the push, and
-people work on the primary. Left off, a push to a replica is handled by what it actually is:
+people work on the primary. Worth knowing before you deploy it, because the rejection is
+Forgejo's own and says nothing about ForgeSync or about which node to use instead
+([docs/LIMITATIONS.md](docs/LIMITATIONS.md) has the detail). Left off, a push to a replica
+is handled by what it actually is:
 
 - **It only adds commits, or a branch only that node has.** Nothing is in question, so
   ForgeSync moves it to the primary itself and carries on from there. Nobody is asked.

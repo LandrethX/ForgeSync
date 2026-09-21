@@ -67,6 +67,14 @@ func TestDeletedOnPrimary(t *testing.T) {
 		if strings.Join(dkAPI.calls, ",") != "delete forgesync-archive/"+want || st.archives[0].State != "purged" || !st.deleted {
 			t.Errorf("after 31 days: calls %v, archive %+v, forgotten %v", dkAPI.calls, st.archives[0], st.deleted)
 		}
+		// And the bare mirror goes with it. It is only a cache, but nothing
+		// used to remove one, so every repository ForgeSync replicated and
+		// then forgot left its whole history on the controller's disk.
+		for _, name := range []string{st.rec.ID + ".git", st.rec.ID + "-wiki.git"} {
+			if _, err := os.Stat(filepath.Join(e.git.WorkDir, name)); !os.IsNotExist(err) {
+				t.Errorf("%s is still there after the repository was forgotten (%v)", name, err)
+			}
+		}
 	})
 
 	t.Run("gone in git but still in the inventory: wait for the scan", func(t *testing.T) {

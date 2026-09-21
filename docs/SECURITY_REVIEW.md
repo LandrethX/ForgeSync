@@ -777,3 +777,69 @@ away can be read. That is the same trade as never force-pushing over divergent h
 A node that answered "this feature is turned off here" is deliberately **not** counted. It
 has nothing to say and never will, and counting it would freeze the record for good on any
 installation with a fork in it.
+
+---
+
+# Gate: two things the tidying-up found
+
+Run on 2026-09-21 against the working tree on top of commit `c3363b9`, before committing.
+
+## Classification
+
+| | |
+|---|---|
+| **Scope** | The uncommitted diff |
+| **Change under review** | `Git.Forget`, and the call to it when ForgeSync forgets a repository; `deploy/test/scale.sh drop`, rewritten to page and to count what actually went; the documentation of what `replication.protect_replicas` means for a person pushing |
+| **How they were found** | By clearing up after the scale run rather than by reading. `drop` reported success having deleted 50 of 1000, and the git cache held 1251 bare mirrors for 3 live repositories |
+| **Exposure** | Neither is reachable from a request. One is a controller-side disk leak, the other is a test-environment script |
+| **Data** | None. Both are about removing things ForgeSync itself created |
+| **Privilege** | The controller's own, and the service account for the script |
+| **Level** | **LEVEL 2.** Availability over a long horizon (the disk leak) and a test script that reported a job it had not done. |
+
+## Result
+
+| Check | Tool | Result |
+|---|---|---|
+| Formatting | `gofmt -l .` | **PASS** |
+| Static checks | `go vet ./...` | **PASS** |
+| Lint | `golangci-lint run` | **PASS**, 0 issues |
+| Types (UI) | `tsc --noEmit` | **PASS** |
+| Tests, with the database and the race detector | `CGO_ENABLED=1 go test -race -count=1 -p 1 ./...` | **PASS**, 15 packages |
+| New behaviour | `go test ./internal/replication` | **PASS**: `Forget` takes a repository's cache and its wiki's, leaves another repository's alone, is not an error twice, and refuses a name that is not an id; the deletion test now asserts the cache is gone once the repository is forgotten |
+| Negative case, planted | the `Forget` call removed | **FAIL as designed**: `11111111-...-111111111111.git is still there after the repository was forgotten` |
+| Behaviour, end to end | five live Forgejo nodes | **PASS**: 1000 repositories deleted on their primary, 3990 archived copies then removed across four nodes in 55s, every node back to the 3 repositories it started with |
+| SAST | `gosec -quiet -exclude-dir=web ./...` | **PASS with findings**: 18, the same 18 as the baseline |
+| SAST, second opinion | `semgrep p/golang p/security-audit p/secrets` | **PASS**: the same 3 as the baseline |
+| Dependency vulnerabilities | `govulncheck ./...` | **PASS**, none |
+| Secrets, working tree and history | `gitleaks dir .`, `gitleaks git .` | **PASS**, no leaks |
+| Shell | `shellcheck -S warning` on every tracked `*.sh` | **PASS**, including the rewritten `scale.sh` |
+| Authorisation, DAST | | **NOT APPLICABLE**: no endpoint, route or handler is touched |
+
+## Findings
+
+**MEDIUM, fixed: a forgotten repository kept its whole history on the controller for ever.**
+When the backup period is over and no copy is left anywhere, ForgeSync forgets a repository:
+the row goes, the archives go. The bare mirror under `replication.work_dir` did not, and
+nothing anywhere removed one. On an installation where repositories come and go that grows
+without bound, and the git cache is already the largest thing a controller keeps, which
+`deploy/prod/README.md` tells people to watch. `Git.Forget` now removes the repository's
+cache and its wiki's when the repository is forgotten. A failure there is logged and no
+more: tidying must not be able to stop the forgetting it belongs to.
+
+**LOW, fixed: `scale.sh drop` said it had cleared a node it had barely touched.** It asked
+for `limit=200` and took one page. Forgejo caps a search response at `MAX_RESPONSE_ITEMS`,
+50 by default, so it deleted 50 of 1000 and printed "cleared". Two further faults came out
+of fixing it, both mine, both worth recording because they are the same mistake in different
+clothes: counting attempts rather than successes made the loop ask for the same page for
+ever when the deletes were refused, and the refusals happened because the helper it used
+sudoes as the repository's owner, who cannot see the private archive organization at all and
+gets 404 for everything in it. It now counts only what actually went, stops when a page
+yields nothing, and uses a non-sudoed call for the archives.
+
+**Documented, not a fault: what `protect_replicas` means for a person.** With it on, which
+is what the production configuration sets, a user's push to any node that is not the
+repository's primary is refused by Forgejo. The rejection is Forgejo's own protected-branch
+message: it does not mention ForgeSync and does not name the node they should have used, and
+it cannot be made to without patching Forgejo, which this project will not do. That is a
+real rough edge, so it is now written down in `docs/LIMITATIONS.md` with what to do instead,
+rather than left for somebody to discover.

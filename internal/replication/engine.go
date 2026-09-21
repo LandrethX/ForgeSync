@@ -343,6 +343,14 @@ func (e *Engine) runOnce(ctx context.Context, rec store.RepositoryRecord) (again
 		if err := e.store.DeleteRepository(ctx, rec.ID); err != nil {
 			return false, err
 		}
+		// The bare mirror is only a cache, but nothing used to remove it,
+		// so a forgotten repository left its whole history on this disk
+		// for good. Tidying must not be able to stop the forgetting, so a
+		// failure here is logged and nothing more.
+		if err := e.git.Forget(rec.ID); err != nil {
+			e.log.Warn("removing the git cache of a forgotten repository failed",
+				"repository", rec.FullName, "error", err)
+		}
 		e.log.Info("deleted repository forgotten", "repository", rec.FullName)
 		e.audit(ctx, "repo.forgotten", rec.FullName, map[string]any{"repository_id": rec.ID})
 		return false, nil

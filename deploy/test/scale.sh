@@ -27,6 +27,17 @@ api() { # api <node> <method> <path> [body]
   curl "${args[@]}" "http://$PUBLIC_HOST:$(port_of "$n")$path"
 }
 
+# admin_api is the same call made as the service account rather than as
+# $OWNER. ForgeSync's archive organization is private and owned by the
+# service account, so a Sudo call as the repository's owner cannot see it
+# and answers 404 for everything in it.
+admin_api() { # admin_api <node> <method> <path>
+  local n=$1 method=$2 path=$3
+  curl -s -o /dev/null -w '%{http_code}' -X "$method" \
+    -H "Authorization: token $(cat ".tokens/$n.token")" \
+    "http://$PUBLIC_HOST:$(port_of "$n")$path"
+}
+
 case "${1:-}" in
   make)
     count=${2:-100}
@@ -45,17 +56,62 @@ case "${1:-}" in
     echo "Done. Ask for a scan and watch: docker compose logs -f forgesync | grep 'scan round'"
     ;;
   drop)
+    # Two passes. First the repositories themselves, on whichever node has
+    # them. Forgejo caps a search response at MAX_RESPONSE_ITEMS (50 by
+    # default) however large a limit is asked for, so this keeps asking
+    # until a page yields nothing. Deleting one page and saying "cleared"
+    # is what it used to do, which left 950 of 1000 behind and reported
+    # success.
+    #
+    # Both passes count what actually went, not what was attempted: a
+    # delete that is refused must end the loop rather than make it ask for
+    # the same page for ever.
+    clear_matching() { # clear_matching <node> <shell pattern> <admin?>
+      local n=$1 pattern=$2 admin=$3 gone=0 page names full code
+      while :; do
+        names=$(curl -s -H "Authorization: token $(cat ".tokens/$n.token")" \
+          "http://$PUBLIC_HOST:$(port_of "$n")/api/v1/repos/search?q=scale-&limit=50&uid=0" \
+          | tr ',' '\n' | { grep '"full_name"' || true; } \
+          | sed 's/.*"full_name":"\([^"]*\)".*/\1/')
+        [ -n "$names" ] || break
+        page=0
+        for full in $names; do
+          # shellcheck disable=SC2254  # the pattern is ours, and is meant to glob
+          case "$full" in
+            $pattern) ;;
+            *) continue ;;
+          esac
+          if [ "$admin" = admin ]; then
+            code=$(admin_api "$n" DELETE "/api/v1/repos/$full")
+          else
+            code=$(api "$n" DELETE "/api/v1/repos/$full")
+          fi
+          case "$code" in
+            20*) gone=$((gone + 1)); page=$((page + 1)) ;;
+            *) printf '  %s: %s refused the delete (%s)\n' "$n" "$full" "$code" >&2 ;;
+          esac
+        done
+        [ "$page" -gt 0 ] || break
+      done
+      printf '%s' "$gone"
+    }
+
     for n in se dk de uk us; do
       [ -f ".tokens/$n.token" ] || continue
-      names=$(curl -s -H "Authorization: token $(cat ".tokens/$n.token")" \
-        "http://$PUBLIC_HOST:$(port_of "$n")/api/v1/repos/search?q=scale-&limit=200&uid=0" \
-        | tr ',' '\n' | grep '"full_name"' | sed 's/.*"full_name":"\([^"]*\)".*/\1/' || true)
-      for full in $names; do
-        case "$full" in
-          */scale-*) api "$n" DELETE "/api/v1/repos/$full" >/dev/null ;;
-        esac
-      done
-      echo "  $n cleared"
+      gone=$(clear_matching "$n" '*/scale-*' owner)
+      printf '  %s cleared, %s deleted\n' "$n" "$gone"
+    done
+
+    # Deleting a repository on its primary archives the copies rather than
+    # deleting them: each is renamed <owner>--<name>--<time> and moved into
+    # replication.archive_org, to be purged after backup_days. That is the
+    # right thing for real work and only clutter after a scale run, so take
+    # the archives of scale- repositories away too. They belong to the
+    # service account, so these deletes are not sudoed.
+    for n in se dk de uk us; do
+      [ -f ".tokens/$n.token" ] || continue
+      gone=$(clear_matching "$n" 'forgesync-archive/*--scale-*' admin)
+      [ "$gone" = 0 ] || printf '  %s archives cleared, %s deleted\n' "$n" "$gone"
     done
     ;;
   *)

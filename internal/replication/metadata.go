@@ -97,8 +97,13 @@ func (e *Engine) syncMetadata(ctx context.Context, rec store.RepositoryRecord, h
 	}
 	at := map[string]forgejo.Repository{}
 	topics := map[string]map[string]bool{}
+	unread := 0 // nodes that have the repository and could not be read (see settle.go)
 	for _, n := range e.order {
-		if !healthy[n] || e.nodes[n].API == nil || !e.hasRepo(rec, n) {
+		if e.nodes[n].API == nil || !e.hasRepo(rec, n) {
+			continue
+		}
+		if !healthy[n] {
+			unread++
 			continue
 		}
 		r, found, err := e.nodes[n].API.GetRepo(ctx, owner, name)
@@ -106,11 +111,13 @@ func (e *Engine) syncMetadata(ctx context.Context, rec store.RepositoryRecord, h
 			if err != nil {
 				e.log.Warn("metadata: reading a repository failed", "repository", rec.FullName, "node", n, "error", err)
 			}
+			unread++
 			continue
 		}
 		list, err := e.nodes[n].API.Topics(ctx, owner, name)
 		if err != nil {
 			e.log.Warn("metadata: reading the topics failed", "repository", rec.FullName, "node", n, "error", err)
+			unread++
 			continue
 		}
 		at[n] = r
@@ -152,7 +159,7 @@ func (e *Engine) syncMetadata(ctx context.Context, rec store.RepositoryRecord, h
 		base[field] = value
 	}
 	e.followPrivate(ctx, rec, owner, name, at)
-	nowTopics := e.mergeTopics(ctx, rec, owner, name, topics)
+	nowTopics := e.mergeTopics(ctx, rec, owner, name, topics, unread)
 
 	if err := e.store.SetRepositoryMetadata(ctx, rec.ID, base, nowTopics); err != nil {
 		e.log.Error("metadata: recording the settings failed", "repository", rec.FullName, "error", err)
@@ -194,7 +201,7 @@ func (e *Engine) followPrivate(ctx context.Context, rec store.RepositoryRecord, 
 // mergeTopics brings the topics together member by member and returns the
 // new base.
 func (e *Engine) mergeTopics(ctx context.Context, rec store.RepositoryRecord, owner, name string,
-	at map[string]map[string]bool) string {
+	at map[string]map[string]bool, unread int) string {
 	base := set.From(rec.BaseTopics)
 	plan := set.Decide(at, base)
 	changed := map[string]bool{}
@@ -230,5 +237,5 @@ func (e *Engine) mergeTopics(ctx context.Context, rec store.RepositoryRecord, ow
 		}
 		e.log.Info("repository topics written", "repository", rec.FullName, "node", n, "topics", strings.Join(list, ","))
 	}
-	return set.Settle(at, base)
+	return settle(unread, rec.BaseTopics, at, base)
 }

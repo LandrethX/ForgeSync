@@ -163,3 +163,17 @@ naming the repository, the nodes and the reason, and stays until it's settled or
 A dismissed conflict is kept with who dismissed it and why, stops being counted, and comes
 back if what it says changes, so the number on the dashboard is one somebody can actually
 bring to zero.
+
+## What happens when a node cannot be reached
+
+Nothing is decided without it. The things that merge as sets -- packages, collaborators,
+branch protection, releases, topics, Actions variables, an organization's teams and members,
+an issue's reactions and attachments -- remember what the nodes last agreed on, and that
+record only moves once every node that has the thing has been read. A node that is down
+therefore holds it still rather than having its silence read as an answer, which is what
+stops a package published while it was away from being deleted everywhere when it comes
+back, and stops access granted meanwhile from being revoked.
+
+The cost is that a real deletion waits too: something deleted while a node is unreachable
+reaches the other nodes once that node can be read again. That is the trade this project
+makes everywhere, and it is the same one as never force-pushing over divergent history.

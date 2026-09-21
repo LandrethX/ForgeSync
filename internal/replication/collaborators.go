@@ -55,14 +55,20 @@ func (e *Engine) syncCollaborators(ctx context.Context, rec store.RepositoryReco
 	}
 	have := map[string]bool{} // which nodes took part
 	at := map[string]map[string]bool{}
+	unread := 0 // nodes that have the repository and could not be read
 	for _, n := range e.order {
 		node := e.nodes[n]
-		if !healthy[n] || !e.hasRepo(rec, n) {
+		if !e.hasRepo(rec, n) {
+			continue
+		}
+		if !healthy[n] {
+			unread++
 			continue
 		}
 		on, err := e.collaboratorsOn(ctx, node, owner, name)
 		if err != nil {
 			e.log.Warn("collaborators: reading them failed", "repository", rec.FullName, "node", n, "error", err)
+			unread++
 			continue
 		}
 		at[n], have[n] = on, true
@@ -112,7 +118,7 @@ func (e *Engine) syncCollaborators(ctx context.Context, rec store.RepositoryReco
 				map[string]any{"repository_id": rec.ID, "node": n, "who": who, "permission": perm})
 		}
 	}
-	if now := set.Settle(at, base); now != rec.BaseCollaborators {
+	if now := settle(unread, rec.BaseCollaborators, at, base); now != rec.BaseCollaborators {
 		if err := e.store.SetRepositoryCollaborators(ctx, rec.ID, now); err != nil {
 			e.log.Error("collaborators: recording them failed", "repository", rec.FullName, "error", err)
 		}

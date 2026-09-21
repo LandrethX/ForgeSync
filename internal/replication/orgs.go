@@ -94,13 +94,19 @@ func (e *Engine) syncOrg(ctx context.Context, name string, recs []store.Reposito
 		return
 	}
 	at := map[string]*orgState{}
+	unread := 0 // nodes that could not be read (see settle.go)
 	for _, n := range e.order {
-		if !healthy[n] || e.nodes[n].API == nil {
+		if e.nodes[n].API == nil {
+			continue
+		}
+		if !healthy[n] {
+			unread++
 			continue
 		}
 		st, found, err := e.readOrg(ctx, e.nodes[n], name)
 		if err != nil {
 			e.log.Warn("organizations: reading one failed", "organization", name, "node", n, "error", err)
+			unread++
 			continue
 		}
 		if found {
@@ -120,7 +126,7 @@ func (e *Engine) syncOrg(ctx context.Context, name string, recs []store.Reposito
 	}
 	e.createMissingOrgs(ctx, name, at)
 	e.mergeOrgFields(ctx, name, recs, at, &rec)
-	e.mergeOrgTeams(ctx, name, at, &rec)
+	e.mergeOrgTeams(ctx, name, at, &rec, unread)
 	if err := e.store.SaveOrg(ctx, rec); err != nil {
 		e.log.Error("organizations: recording one failed", "organization", name, "error", err)
 	}
@@ -249,7 +255,7 @@ func (e *Engine) mergeOrgFields(ctx context.Context, name string, recs []store.R
 // mergeOrgTeams brings the teams and who is in them together, member by
 // member. Owners is never removed: every organization has one, and Forgejo
 // won't let it go.
-func (e *Engine) mergeOrgTeams(ctx context.Context, name string, at map[string]*orgState, rec *store.OrgRecord) {
+func (e *Engine) mergeOrgTeams(ctx context.Context, name string, at map[string]*orgState, rec *store.OrgRecord, unread int) {
 	teams := map[string]map[string]bool{}
 	members := map[string]map[string]bool{}
 	for n, st := range at {
@@ -312,7 +318,7 @@ func (e *Engine) mergeOrgTeams(ctx context.Context, name string, at map[string]*
 			e.audit(ctx, "org.team_removed", name, map[string]any{"node": n, "team": tn})
 		}
 	}
-	rec.BaseTeams = set.Settle(teams, set.From(rec.BaseTeams))
+	rec.BaseTeams = settle(unread, rec.BaseTeams, teams, set.From(rec.BaseTeams))
 
 	// Then who is in them.
 	from := ""
@@ -364,7 +370,7 @@ func (e *Engine) mergeOrgTeams(ctx context.Context, name string, at map[string]*
 			e.audit(ctx, "org.member_added", name, map[string]any{"node": n, "team": tn, "who": login})
 		}
 	}
-	rec.BaseMembers = set.Settle(members, set.From(rec.BaseMembers))
+	rec.BaseMembers = settle(unread, rec.BaseMembers, members, set.From(rec.BaseMembers))
 }
 
 // mergeField is the rule used for every single value ForgeSync merges: one

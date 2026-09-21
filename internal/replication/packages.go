@@ -254,13 +254,19 @@ func (e *Engine) packagesOn(ctx context.Context, n Node, owner string) (map[stri
 
 func (e *Engine) syncOwnerPackages(ctx context.Context, owner string, recs []store.RepositoryRecord, healthy map[string]bool) {
 	at := map[string]map[string]bool{}
+	unread := 0 // nodes that could not be read (see settle.go)
 	for _, n := range e.order {
-		if !healthy[n] || e.nodes[n].API == nil {
+		if e.nodes[n].API == nil {
+			continue
+		}
+		if !healthy[n] {
+			unread++
 			continue
 		}
 		members, _, err := e.packagesOn(ctx, e.nodes[n], owner)
 		if err != nil {
 			e.log.Warn("packages: reading them failed", "owner", owner, "node", n, "error", err)
+			unread++
 			continue
 		}
 		at[n] = members
@@ -300,7 +306,7 @@ func (e *Engine) syncOwnerPackages(ctx context.Context, owner string, recs []sto
 		found = append(found, e.removePackageFiles(ctx, owner, n, without(plan.Remove[n], contested), at)...)
 		found = append(found, e.addPackageFiles(ctx, owner, n, without(plan.Add[n], contested), at)...)
 	}
-	if now := set.Settle(at, base); now != rec.Base {
+	if now := settle(unread, rec.Base, at, base); now != rec.Base {
 		if err := e.store.SetPackageOwner(ctx, owner, now); err != nil {
 			e.log.Error("packages: recording them failed", "owner", owner, "error", err)
 		}

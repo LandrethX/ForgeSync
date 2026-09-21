@@ -205,13 +205,19 @@ func (e *Engine) syncProtection(ctx context.Context, rec store.RepositoryRecord,
 	}
 	at := map[string]map[string]forgejo.BranchProtection{}
 	have := map[string]map[string]bool{}
+	unread := 0 // nodes that have the repository and could not be read (see settle.go)
 	for _, n := range e.order {
-		if !healthy[n] || e.nodes[n].API == nil || !e.hasRepo(rec, n) {
+		if e.nodes[n].API == nil || !e.hasRepo(rec, n) {
+			continue
+		}
+		if !healthy[n] {
+			unread++
 			continue
 		}
 		rules, err := e.nodes[n].API.BranchProtections(ctx, owner, name)
 		if err != nil {
 			e.log.Warn("protection: reading the rules failed", "repository", rec.FullName, "node", n, "error", err)
+			unread++
 			continue
 		}
 		at[n], have[n] = map[string]forgejo.BranchProtection{}, map[string]bool{}
@@ -274,7 +280,7 @@ func (e *Engine) syncProtection(ctx context.Context, rec store.RepositoryRecord,
 				map[string]any{"repository_id": rec.ID, "node": n, "rule": ruleNameOf(m)})
 		}
 	}
-	if now := set.Settle(have, base); now != rec.BaseProtection {
+	if now := settle(unread, rec.BaseProtection, have, base); now != rec.BaseProtection {
 		if err := e.store.SetRepositoryProtection(ctx, rec.ID, now); err != nil {
 			e.log.Error("protection: recording the rules failed", "repository", rec.FullName, "error", err)
 		}

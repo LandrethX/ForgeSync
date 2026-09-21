@@ -715,3 +715,65 @@ needed a node to go away, the other needed a config-file node and fifteen second
 them was looking at the thing running. So every gate from here reports what a running
 installation did for a few minutes, as this one does: uptime, restart count, whether a round
 finished. It is the cheapest check here and the only one that found either of these.
+
+---
+
+# Gate: a base settled without a node is a deletion nobody asked for
+
+Run on 2026-09-21 against the working tree on top of commit `ba58bf7`, before committing.
+
+## Classification
+
+| | |
+|---|---|
+| **Scope** | The uncommitted diff |
+| **Change under review** | `internal/replication/settle.go`, one function and the reason for it, and the seven merges that now go through it: packages, collaborators, branch protection, releases and their files, topics, Actions variables, an organization's teams and members |
+| **How it was found** | By asking, after fixing the same thing in `internal/issues`, whether the rest of ForgeSync merged sets the same way. It did |
+| **Exposure** | Not reachable from a request. It happens in the controller's own loops when a node is unhealthy or its read fails |
+| **Data** | Published package files, people's repository access, branch protection rules, release files, topics, Actions variables, team membership |
+| **Privilege** | The service account, which is a site admin on every node |
+| **Level** | **LEVEL 3.** It destroys data on every node, and the trigger is one node being unreachable, which is ordinary. |
+
+## Result
+
+| Check | Tool | Result |
+|---|---|---|
+| Formatting | `gofmt -l .` | **PASS** |
+| Static checks | `go vet ./...` | **PASS** |
+| Lint | `golangci-lint run` | **PASS**, 0 issues |
+| Types (UI) | `tsc --noEmit` | **PASS** |
+| Tests, with the database and the race detector | `CGO_ENABLED=1 go test -race -count=1 -p 1 ./...` | **PASS**, 15 packages |
+| New behaviour | `go test ./internal/replication` | **PASS**: a package published while a node was down survives that node coming back, and so does access granted meanwhile |
+| Negative case, planted | `settle` made to ignore the count | **FAIL as designed**, and not only on the base: `se hasn't got the second version`, `dk hasn't got the second version`, `de hasn't got the second version`. The file was deleted from all three nodes because one of them was down when it was published |
+| SAST | `gosec -quiet -exclude-dir=web ./...` | **PASS with findings**: 18, the same 18 as the baseline |
+| SAST, second opinion | `semgrep p/golang p/security-audit p/secrets` | **PASS**: the same 3 as the baseline |
+| Dependency vulnerabilities | `govulncheck ./...` | **PASS**, none; `go.mod` unchanged |
+| Secrets, working tree and history | `gitleaks dir .`, `gitleaks git .` | **PASS**, no leaks |
+| Running installation | the five-node test environment | **PASS**: 0 restarts, 0 panics, rounds finishing, while 1000 repositories replicate to four replicas |
+| Authorisation, DAST | | **NOT APPLICABLE**: no endpoint, route or handler is touched |
+
+## Findings
+
+**HIGH, fixed: a node being unreachable could delete data on every other node.** Seven
+merges record what the nodes last agreed on, and that record is what says which way a
+member moved: one that appears where the record hasn't got it was added, one missing where
+the record has it was taken away. The record was being written from whichever nodes the run
+managed to read. A node that was down therefore had its silence read as agreement, and when
+it came back, everything it had not got looked like a deletion and was carried out on every
+other node.
+
+The planted run says what that costs in the most concrete case: a package published on two
+nodes while a third was down was **deleted from all three** on the next run. The other six
+are the same shape, with access, protection rules, release files, topics, variables and team
+membership in place of the file.
+
+All seven now go through one function, which returns the old record unless every node that
+has the thing was read. Holding it still costs nothing: the same comparison is made again
+next run against the same record and writes nothing that was already written. The one thing
+that waits with it is a real deletion, which reaches the other nodes once the node that was
+away can be read. That is the same trade as never force-pushing over divergent history, and
+`docs/LIMITATIONS.md` now says so under a heading of its own.
+
+A node that answered "this feature is turned off here" is deliberately **not** counted. It
+has nothing to say and never will, and counting it would freeze the record for good on any
+installation with a fork in it.

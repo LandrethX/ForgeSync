@@ -280,3 +280,44 @@ func TestASingleFileVersionGoesWhole(t *testing.T) {
 		t.Errorf("conflicts: %+v", st.found)
 	}
 }
+
+// A node that could not be read this run is not in the set, so the base
+// must not settle without it. When it comes back, everything it hasn't
+// got would otherwise read as someone's deletion and be taken off every
+// other node: here, published package files deleted everywhere because
+// one node was down while they were published.
+func TestTheBaseWaitsForANodeThatCouldNotBeRead(t *testing.T) {
+	e, st, nodes, recs := packagesSetup(t)
+	nodes["se"].publish("alice", "generic", "demo-art", "1.0.0", "demo.bin", "the bytes")
+	e.syncPackages(bg(), recs, pkgHealthy)
+	if !strings.Contains(st.packageBase["alice"], "demo.bin") {
+		t.Fatalf("base = %q", st.packageBase["alice"])
+	}
+
+	// de goes away, and something is published while it is gone.
+	away := map[string]bool{"se": true, "dk": true, "de": false}
+	nodes["se"].publish("alice", "generic", "demo-art", "2.0.0", "demo.bin", "newer bytes")
+	e.syncPackages(bg(), recs, away)
+	if got := nodes["dk"].packageList(); !strings.Contains(got, "2.0.0 demo.bin=newer bytes") {
+		t.Errorf("dk didn't get it while de was away: %q", got)
+	}
+	if strings.Contains(st.packageBase["alice"], "2.0.0") {
+		t.Fatalf("the base settled without de: %q", st.packageBase["alice"])
+	}
+
+	// de comes back. It hasn't got the new version, and that is not a
+	// deletion: it is given the file, and nothing is taken away.
+	e.syncPackages(bg(), recs, pkgHealthy)
+	for _, n := range []string{"se", "dk", "de"} {
+		got := nodes[n].packageList()
+		if !strings.Contains(got, "1.0.0 demo.bin=the bytes") {
+			t.Errorf("%s lost the first version: %q", n, got)
+		}
+		if !strings.Contains(got, "2.0.0 demo.bin=newer bytes") {
+			t.Errorf("%s hasn't got the second version: %q", n, got)
+		}
+	}
+	if len(st.found) != 0 {
+		t.Errorf("conflicts: %+v", st.found)
+	}
+}

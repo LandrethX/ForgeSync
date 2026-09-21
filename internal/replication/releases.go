@@ -79,8 +79,13 @@ func (e *Engine) syncReleases(ctx context.Context, rec store.RepositoryRecord, h
 	at := map[string]*nodeReleases{}
 	have := map[string]map[string]bool{}
 	files := map[string]map[string]bool{}
+	unread := 0 // nodes that have the repository and could not be read (see settle.go)
 	for _, n := range e.order {
-		if !healthy[n] || e.nodes[n].API == nil || !e.hasRepo(rec, n) {
+		if e.nodes[n].API == nil || !e.hasRepo(rec, n) {
+			continue
+		}
+		if !healthy[n] {
+			unread++
 			continue
 		}
 		st, err := e.readReleases(ctx, e.nodes[n], owner, name)
@@ -93,6 +98,7 @@ func (e *Engine) syncReleases(ctx context.Context, rec store.RepositoryRecord, h
 		}
 		if err != nil {
 			e.log.Warn("releases: reading them failed", "repository", rec.FullName, "node", n, "error", err)
+			unread++
 			continue
 		}
 		at[n] = st
@@ -111,7 +117,8 @@ func (e *Engine) syncReleases(ctx context.Context, rec store.RepositoryRecord, h
 	e.mergeAssets(ctx, rec, owner, name, at, files)
 
 	if err := e.store.SetRepositoryReleases(ctx, rec.ID,
-		set.Settle(have, set.From(rec.BaseReleases)), set.Settle(files, set.From(rec.BaseReleaseAssets))); err != nil {
+		settle(unread, rec.BaseReleases, have, set.From(rec.BaseReleases)),
+		settle(unread, rec.BaseReleaseAssets, files, set.From(rec.BaseReleaseAssets))); err != nil {
 		e.log.Error("releases: recording them failed", "repository", rec.FullName, "error", err)
 	}
 }

@@ -67,8 +67,13 @@ func (e *Engine) syncActions(ctx context.Context, rec store.RepositoryRecord, he
 	at := map[string]map[string]forgejo.ActionVariable{}
 	have := map[string]map[string]bool{}
 	secrets := map[string]map[string]bool{}
+	unread := 0 // nodes that have the repository and could not be read (see settle.go)
 	for _, n := range e.order {
-		if !healthy[n] || e.nodes[n].API == nil || !e.hasRepo(rec, n) {
+		if e.nodes[n].API == nil || !e.hasRepo(rec, n) {
+			continue
+		}
+		if !healthy[n] {
+			unread++
 			continue
 		}
 		vars, err := e.nodes[n].API.ActionVariables(ctx, owner, name)
@@ -81,6 +86,7 @@ func (e *Engine) syncActions(ctx context.Context, rec store.RepositoryRecord, he
 		}
 		if err != nil {
 			e.log.Warn("actions: reading the variables failed", "repository", rec.FullName, "node", n, "error", err)
+			unread++
 			continue
 		}
 		secs, err := e.nodes[n].API.ActionSecrets(ctx, owner, name)
@@ -89,6 +95,7 @@ func (e *Engine) syncActions(ctx context.Context, rec store.RepositoryRecord, he
 		}
 		if err != nil {
 			e.log.Warn("actions: reading the secrets failed", "repository", rec.FullName, "node", n, "error", err)
+			unread++
 			continue
 		}
 		at[n], have[n], secrets[n] = map[string]forgejo.ActionVariable{}, map[string]bool{}, map[string]bool{}
@@ -102,7 +109,7 @@ func (e *Engine) syncActions(ctx context.Context, rec store.RepositoryRecord, he
 	if len(have) < 2 {
 		return
 	}
-	found := e.mergeVariables(ctx, rec, owner, name, at, have)
+	found := e.mergeVariables(ctx, rec, owner, name, at, have, unread)
 	found = append(found, secretConflicts(e.order, rec, secrets)...)
 	kinds := []string{VariableConflictKind, SecretConflictKind}
 	if _, err := e.store.SyncConflicts(ctx, found, []string{rec.ID}, kinds, e.now()); err != nil {
@@ -113,7 +120,7 @@ func (e *Engine) syncActions(ctx context.Context, rec store.RepositoryRecord, he
 // mergeVariables brings the variables together and reports the names two
 // nodes disagree about.
 func (e *Engine) mergeVariables(ctx context.Context, rec store.RepositoryRecord, owner, name string,
-	at map[string]map[string]forgejo.ActionVariable, have map[string]map[string]bool) []store.FoundConflict {
+	at map[string]map[string]forgejo.ActionVariable, have map[string]map[string]bool, unread int) []store.FoundConflict {
 	base := set.From(rec.BaseActionVariables)
 	plan := set.Decide(have, base)
 	contested := contestedVariables(plan)
@@ -168,7 +175,7 @@ func (e *Engine) mergeVariables(ctx context.Context, rec store.RepositoryRecord,
 			e.log.Info("variable written", "repository", rec.FullName, "node", n, "variable", want.Name)
 		}
 	}
-	if now := set.Settle(have, base); now != rec.BaseActionVariables {
+	if now := settle(unread, rec.BaseActionVariables, have, base); now != rec.BaseActionVariables {
 		if err := e.store.SetRepositoryActionVariables(ctx, rec.ID, now); err != nil {
 			e.log.Error("actions: recording the variables failed", "repository", rec.FullName, "error", err)
 		}

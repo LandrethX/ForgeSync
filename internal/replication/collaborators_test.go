@@ -159,3 +159,40 @@ func TestSomeoneANodeWontTake(t *testing.T) {
 		}
 	}
 }
+
+// The same rule as everywhere else (settle.go): a node that could not be
+// read takes no part, so the base does not move without it. Here the
+// consequence of moving it would be that a person granted access while a
+// node was down loses it on every node once that node comes back.
+func TestAccessGrantedWhileANodeWasDownIsNotTakenBack(t *testing.T) {
+	e, st, apis := collabSetup(t)
+	ctx := context.Background()
+	all := map[string]bool{"se": true, "dk": true, "de": true}
+	rec, _ := st.Repository(ctx, st.rec.ID)
+
+	apis["se"].collabs = map[string]string{"bob": "write"}
+	e.syncCollaborators(ctx, rec, e.nodes["se"], all)
+	rec, _ = st.Repository(ctx, st.rec.ID)
+	if rec.BaseCollaborators != "bob:write" {
+		t.Fatalf("base = %q", rec.BaseCollaborators)
+	}
+
+	// de goes away, and carol is given access while it is gone.
+	apis["se"].collabs["carol"] = "read"
+	e.syncCollaborators(ctx, rec, e.nodes["se"], map[string]bool{"se": true, "dk": true, "de": false})
+	if got := who(apis["dk"]); got != "bob:write,carol:read" {
+		t.Errorf("dk while de was away: %q", got)
+	}
+	rec, _ = st.Repository(ctx, st.rec.ID)
+	if strings.Contains(rec.BaseCollaborators, "carol") {
+		t.Fatalf("the base settled without de: %q", rec.BaseCollaborators)
+	}
+
+	// de comes back without carol, which is not a decision anyone made.
+	e.syncCollaborators(ctx, rec, e.nodes["se"], all)
+	for _, n := range []string{"se", "dk", "de"} {
+		if got := who(apis[n]); got != "bob:write,carol:read" {
+			t.Errorf("%s after de came back: %q, want both", n, got)
+		}
+	}
+}

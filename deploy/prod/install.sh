@@ -123,6 +123,23 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Downloads something and refuses it unless it matches the checksum it is
+# meant to have. Used by both ways in: the release tarball and the Go and
+# Node tarballs. It lived inside the source branch until a --binary run
+# against a real release found it undefined, which the earlier test with a
+# local file could not: a local file is never fetched.
+fetch_verified() { # fetch_verified <url> <sha256url-or-sha> <dest>
+  local url=$1 want=$2 dest=$3 sum
+  curl -fsSL --retry 3 -o "$dest" "$url"
+  case "$want" in
+    http*) sum=$(curl -fsSL --retry 3 "$want" | awk '{print $1}' | head -1) ;;
+    *)     sum=$want ;;
+  esac
+  [ -n "$sum" ] || die "no checksum for $url"
+  echo "$sum  $dest" | sha256sum -c - >/dev/null 2>&1 \
+    || die "$url did not match its published checksum"
+}
+
 step() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32mok\033[0m    %s\n' "$*"; }
 note() { printf '        %s\n' "$*"; }
@@ -391,18 +408,6 @@ ok "building $VERSION ($COMMIT)"
 # is older than go.mod asks for, so it has to come from go.dev.
 GO_VERSION=$(awk '/^go [0-9]/ {print $2; exit}' "$SRC/go.mod")
 [ -n "$GO_VERSION" ] || die "could not read the Go version from $SRC/go.mod"
-
-fetch_verified() { # fetch_verified <url> <sha256url-or-sha> <dest>
-  local url=$1 want=$2 dest=$3 sum
-  curl -fsSL --retry 3 -o "$dest" "$url"
-  case "$want" in
-    http*) sum=$(curl -fsSL --retry 3 "$want" | awk '{print $1}' | head -1) ;;
-    *)     sum=$want ;;
-  esac
-  [ -n "$sum" ] || die "no checksum for $url"
-  echo "$sum  $dest" | sha256sum -c - >/dev/null 2>&1 \
-    || die "$url did not match its published checksum"
-}
 
 step "Go $GO_VERSION"
 if [ -x "$GOROOT/bin/go" ] && "$GOROOT/bin/go" version | grep -q "go$GO_VERSION "; then

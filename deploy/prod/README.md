@@ -110,10 +110,12 @@ Measured, on the five-node test installation and on the install itself.
 | The controller, leading | about 100 MB |
 | The controller, standing by | about 7 MB |
 | PostgreSQL with ForgeSync's state | 12 MB of data for 203 repositories, 812 replicas |
-| The Go toolchain (kept, for the next upgrade) | 282 MB |
-| Node (kept, same reason) | about 120 MB |
-| A build: module cache, build cache, node_modules | about 400 MB, given back afterwards unless `--keep-build` |
-| A clean install, start to finish | 48 seconds |
+| The two binaries | 23 MB, and with `--binary` that is all |
+| The Go toolchain (a source build only, kept for the next upgrade) | 282 MB |
+| Node (a source build only, same reason) | about 120 MB |
+| A source build: module cache, build cache, node_modules | about 400 MB, given back afterwards unless `--keep-build` |
+| A clean install from a release (`--binary`) | **25 seconds**, no toolchain |
+| A clean install that builds from source | 48 seconds |
 | The admin UI build, at its peak | 184 MB of memory |
 
 So 2 GB is comfortable rather than tight: the build is the busiest moment and it peaks well
@@ -171,15 +173,37 @@ an advisory lock, so several controllers starting at once is safe.
 
 ## 3. The binaries
 
-Build them on a machine with Go 1.27 and Node 22 (the admin UI is embedded in the
-controller binary), then copy the two files over:
+Three ways, in the order most people will want them.
+
+**From a release, which is what `install.sh --binary` does.** Nothing is compiled, so this
+machine never sees Go, Node or a compiler:
+
+```sh
+curl -fsSLO https://github.com/LandrethX/ForgeSync/releases/latest/download/SHA256SUMS
+curl -fsSLO https://github.com/LandrethX/ForgeSync/releases/latest/download/forgesync-<version>-linux-amd64.tar.gz
+sha256sum -c --ignore-missing SHA256SUMS
+tar xzf forgesync-<version>-linux-amd64.tar.gz
+install -m 0755 forgesync-*/forgesyncd forgesync-*/forgesync /usr/local/bin/
+```
+
+Each tarball also carries this directory, so the systemd unit, the annotated config,
+`backup.sh` and `cluster.sh` come with it.
+
+**Built here**, which is what you want while working on ForgeSync or running an untagged
+commit. Needs Go 1.27 and Node 22, about 3 GB of room while it works, and it keeps roughly
+400 MB of toolchain afterwards:
 
 ```sh
 make build                       # bin/forgesyncd and bin/forgesync
 install -m 0755 bin/forgesyncd bin/forgesync /usr/local/bin/
 ```
 
-`/usr/local/bin/forgesyncd -version` should print the version and the commit.
+**Built elsewhere and copied**, if this machine should stay clean but there is no release:
+`make release` on a build host produces the same tarballs, for `linux/amd64` and
+`linux/arm64`, with a `SHA256SUMS` beside them.
+
+`/usr/local/bin/forgesyncd -version` should print the version and the commit, whichever way
+you got here.
 
 ## 4. The user, the directories and the secrets
 

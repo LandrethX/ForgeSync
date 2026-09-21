@@ -271,6 +271,26 @@ What it deliberately doesn't, and what Forgejo won't let it, is in
 | Find your way around the source | [docs/CODE_REFERENCE.md](docs/CODE_REFERENCE.md): what each package does, and its entry points |
 | Know how it is secured | [SECURITY.md](SECURITY.md), and [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) for the last review |
 
+## Installing
+
+On a fresh Debian 13 machine, which in practice means an unprivileged Proxmox LXC:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/LandrethX/ForgeSync/main/deploy/prod/install.sh
+bash install.sh --first --binary
+```
+
+`--binary` takes a published build: two binaries with the admin UI already inside them, and
+the files that set the machine up. It checks the download against the release's
+`SHA256SUMS` and compiles nothing, so no Go, Node or compiler is fetched or left behind,
+which is about 400 MB a machine would otherwise keep for the next upgrade. Measured on a
+clean Debian 13 container: **25 seconds**, against 48 for a source build.
+
+Leave `--binary` off and the same script clones and builds instead, which is what you want
+while working on ForgeSync or running something that was never tagged.
+[deploy/prod/README.md](deploy/prod/README.md) has the rest: the second and third machine,
+TLS, backups and what to alert on.
+
 ## Building
 
 Go 1.27 and Node 22 (for the admin UI, which is embedded in the controller binary):
@@ -283,6 +303,13 @@ make test-db      # also the tests that need PostgreSQL
 
 `bin/forgesyncd` is the controller and its admin UI; `bin/forgesync` is the command-line
 client for the same API.
+
+`make release` builds what a release carries: one tarball per platform, each with both
+binaries, `deploy/prod`, the licence and `docs/LIMITATIONS.md`, and a `SHA256SUMS` beside
+them. Tagging `v*` runs the same target in `.github/workflows/release.yml` and attaches the
+result to the tag. That workflow uses only first-party actions and the `gh` CLI already on
+the runner: a release workflow is the one place where somebody else's code would be signing
+off on binaries people install as root.
 
 ### Before a release
 

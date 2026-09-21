@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Installs ForgeSync on a fresh Debian 13 machine, which in practice means
 # an unprivileged Proxmox LXC. It does the whole of deploy/prod/README.md
-# sections 1 to 7: packages, a Go and Node toolchain, the source, the
-# build, PostgreSQL, the user and directories, the secrets, the config,
-# the systemd unit, and a check that the thing actually answers.
+# sections 1 to 7: packages, the binaries, PostgreSQL, the user and
+# directories, the secrets, the config, the systemd unit, and a check that
+# the thing actually answers. The binaries are either a published build
+# (--binary, nothing is compiled) or a clone and a build here, which needs
+# a Go and Node toolchain.
 #
 #   curl -fsSL https://raw.githubusercontent.com/LandrethX/ForgeSync/main/deploy/prod/install.sh | bash
 #
@@ -40,6 +42,14 @@
 #                                         lower wins. Default: 1 on the
 #                                         first machine, and on a joining
 #                                         one the next number free.
+#   --binary [url|file]                   install a published build instead
+#                                         of compiling one. No Go, no Node
+#                                         and no compiler are fetched, which
+#                                         is about 400 MB this machine would
+#                                         otherwise keep. With no argument it
+#                                         takes the release matching --ref,
+#                                         or the newest one, and checks it
+#                                         against the release's SHA256SUMS.
 #   --ref main                            the branch or tag to build.
 #   --no-postgres                         the database is somewhere else;
 #                                         put its URL in
@@ -77,6 +87,9 @@ PUBLIC_URL=""
 CONTROLLER_NAME=""
 WITH_POSTGRES=1
 KEEP_BUILD=0
+FROM_BINARY=0      # --binary: take a published build instead of compiling one
+BINARY_FROM=""     # a url or a local tarball, when not the published release
+PROD=""            # the directory holding forgesyncd.service and friends
 ROLE=""            # first | join, asked for when not given
 BUNDLE=""          # a join bundle to read on a joining machine
 MAKE_BUNDLE=""     # a path to write one to, on the first machine
@@ -98,6 +111,12 @@ while [ $# -gt 0 ]; do
     --name)        CONTROLLER_NAME=${2:?--name needs a value}; shift 2 ;;
     --ref)         FORGESYNC_REF=${2:?--ref needs a value}; shift 2 ;;
     --no-postgres) WITH_POSTGRES=0; shift ;;
+    --binary)      FROM_BINARY=1
+                   # the source is optional: a url or a file, else the release
+                   case "${2:-}" in
+                     ""|-*) shift ;;
+                     *)     BINARY_FROM=$2; shift 2 ;;
+                   esac ;;
     --keep-build)  KEEP_BUILD=1; shift ;;
     -h|--help)     sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
@@ -159,11 +178,17 @@ if [ "$WITH_POSTGRES" -eq 1 ] || [ -z "$ROLE" ]; then
 fi
 
 free_mb=$(df -Pm / | awk 'NR==2 {print $4}')
-[ "$free_mb" -ge 3000 ] || die "only ${free_mb} MB free on /; the build needs about 3 GB, and a 16 GB disk is the usual size"
+# The build is what wants room: a toolchain, a module cache and
+# node_modules. --binary needs none of that, only somewhere to unpack.
+if [ "$FROM_BINARY" -eq 1 ]; then
+  [ "$free_mb" -ge 500 ] || die "only ${free_mb} MB free on /; unpacking a release wants about 500 MB"
+else
+  [ "$free_mb" -ge 3000 ] || die "only ${free_mb} MB free on /; the build needs about 3 GB, and a 16 GB disk is the usual size"
+fi
 ok "${free_mb} MB free on /"
 
 mem_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
-if [ "$mem_mb" -lt 1800 ]; then
+if [ "$mem_mb" -lt 1800 ] && [ "$FROM_BINARY" -eq 0 ]; then
   warn "${mem_mb} MB of memory; the build wants about 1 GB free and the usual size is 2 GB"
 else
   ok "${mem_mb} MB of memory"
@@ -288,9 +313,61 @@ fi
 [ -z "$missing" ] || die "apt said it installed everything, but these are still missing:$missing"
 ok "git $(git --version | awk '{print $3}') (replication runs the git CLI, so it is a runtime dependency)"
 
-# ------------------------------------------------------------- source
+# ------------------------------------------------------------ the binaries
 
-step "Source"
+# Two ways in. --binary takes a published build: two binaries with the
+# admin UI already inside them, and the files that set the machine up. It
+# needs no Go, no Node and no compiler, which is about 400 MB of toolchain
+# this machine would otherwise fetch, use once and keep. Without it, the
+# source is cloned and built here, which is what you want when you are
+# working on ForgeSync or running something that was never released.
+
+if [ "$FROM_BINARY" -eq 1 ]; then
+  step "Release"
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+  case "$BINARY_FROM" in
+    "")
+      # The published release. A ref that looks like a tag picks that
+      # release; anything else takes the newest one.
+      case "$FORGESYNC_REF" in
+        v[0-9]*) rel="download/$FORGESYNC_REF" ;;
+        *)       rel="latest/download" ;;
+      esac
+      base=${FORGESYNC_REPO%.git}
+      base=${base%/}
+      curl -fsSL --retry 3 -o "$tmp/SHA256SUMS" "$base/releases/$rel/SHA256SUMS" \
+        || die "no SHA256SUMS at $base/releases/$rel (is there a release yet?)"
+      name=$(awk -v a="linux-$ARCH.tar.gz" '$2 ~ a {print $2}' "$tmp/SHA256SUMS" | sed 's|^\./||' | head -1)
+      [ -n "$name" ] || die "that release has no build for linux/$ARCH"
+      want=$(awk -v n="$name" '$2 ~ n {print $1}' "$tmp/SHA256SUMS" | head -1)
+      fetch_verified "$base/releases/$rel/$name" "$want" "$tmp/forgesync.tar.gz"
+      ok "fetched and verified $name"
+      ;;
+    http*)
+      curl -fsSL --retry 3 -o "$tmp/forgesync.tar.gz" "$BINARY_FROM" || die "could not fetch $BINARY_FROM"
+      warn "no checksum to check against: --binary <url> trusts what it is given"
+      ;;
+    *)
+      [ -f "$BINARY_FROM" ] || die "no such file: $BINARY_FROM"
+      cp "$BINARY_FROM" "$tmp/forgesync.tar.gz"
+      ok "using $BINARY_FROM"
+      ;;
+  esac
+
+  tar -C "$tmp" -xzf "$tmp/forgesync.tar.gz"
+  payload=$(find "$tmp" -maxdepth 1 -type d -name 'forgesync-*' | head -1)
+  [ -n "$payload" ] || die "that archive does not look like a ForgeSync release"
+  for f in forgesyncd forgesync deploy-prod/forgesyncd.service; do
+    [ -e "$payload/$f" ] || die "the archive is missing $f"
+  done
+  install -m 0755 "$payload/forgesyncd" "$payload/forgesync" /usr/local/bin/
+  PROD="$payload/deploy-prod"
+  ok "$(/usr/local/bin/forgesyncd -version 2>&1 | head -1)"
+  note "no toolchain was installed; --binary skips the build entirely"
+else
+
+  step "Source"
 if [ -d "$SRC/.git" ]; then
   git -C "$SRC" remote set-url origin "$FORGESYNC_REPO"
   git -C "$SRC" fetch --quiet --tags origin
@@ -371,6 +448,9 @@ ok "admin UI"
 install -m 0755 /tmp/forgesync-build/forgesyncd /tmp/forgesync-build/forgesync /usr/local/bin/
 rm -rf /tmp/forgesync-build
 ok "$(/usr/local/bin/forgesyncd -version 2>&1 | head -1)"
+
+  PROD="$SRC/deploy/prod"
+fi
 
 # ------------------------------------------------------- user and layout
 
@@ -624,7 +704,7 @@ fi
 # ------------------------------------------------------------- service
 
 step "Service"
-install -m 0644 "$SRC/deploy/prod/forgesyncd.service" /etc/systemd/system/forgesyncd.service
+install -m 0644 "$PROD/forgesyncd.service" /etc/systemd/system/forgesyncd.service
 systemctl daemon-reload
 systemctl enable --quiet forgesyncd
 systemctl restart forgesyncd
@@ -648,7 +728,8 @@ ok "$(curl -fsS -m 3 http://127.0.0.1:8090/healthz)"
 
 # ------------------------------------------------------------- tidy up
 
-if [ "$KEEP_BUILD" -eq 0 ]; then
+# Nothing to reclaim after --binary: it never built anything.
+if [ "$KEEP_BUILD" -eq 0 ] && [ "$FROM_BINARY" -eq 0 ]; then
   step "Reclaiming the build space"
   before=$(df -Pm / | awk 'NR==2 {print $4}')
   go clean -cache -modcache >/dev/null 2>&1 || true

@@ -4,7 +4,13 @@ LDFLAGS := -s -w \
 	-X scenegit.org/forgesync/internal/buildinfo.Version=$(VERSION) \
 	-X scenegit.org/forgesync/internal/buildinfo.Commit=$(COMMIT)
 
-.PHONY: build web web-dev web-test test test-race test-db vet fmt check run clean
+DIST    ?= dist
+# What a machine installing ForgeSync needs and nothing else: the two
+# binaries with the admin UI already inside them, and the files that set
+# the thing up. No toolchain, no source, no build.
+PLATFORMS ?= linux/amd64 linux/arm64
+
+.PHONY: build web web-dev web-test test test-race test-db vet fmt check run clean release
 
 build: web ## Build the web UI, then forgesyncd (with the UI embedded) and forgesync into bin/
 	go build -ldflags '$(LDFLAGS)' -o bin/ ./cmd/...
@@ -46,5 +52,33 @@ check: vet test test-race web-test ## vet, gofmt check, Go tests with and withou
 run: ## Run the controller against the local test environment
 	go run ./cmd/forgesyncd -config deploy/test/forgesync.yaml
 
+# release builds what a GitHub release carries. The admin UI is built once
+# and embedded into every binary, because it is the same bytes whatever the
+# processor is. Run `make release VERSION=v1.2.3` to stamp a version; it
+# otherwise takes whatever `git describe` says, as the other targets do.
+#
+# The point of this is the install: deploy/prod/install.sh --binary takes
+# one of these tarballs and needs no Go, no Node and no build, which is
+# about 400 MB of toolchain a machine would otherwise fetch and keep.
+release: web
+	rm -rf '$(DIST)'
+	mkdir -p '$(DIST)'
+	@for p in $(PLATFORMS); do \
+		os=$${p%/*}; arch=$${p#*/}; \
+		echo "  building $$os/$$arch"; \
+		stage='$(DIST)'/forgesync-$(VERSION)-$$os-$$arch; \
+		mkdir -p "$$stage"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
+			go build -trimpath -ldflags '$(LDFLAGS)' -o "$$stage"/ ./cmd/... || exit 1; \
+		cp -r deploy/prod "$$stage"/deploy-prod; \
+		cp LICENSE NOTICE README.md SECURITY.md "$$stage"/; \
+		mkdir -p "$$stage"/docs; \
+		cp docs/LIMITATIONS.md "$$stage"/docs/; \
+		tar -C '$(DIST)' -czf "$$stage".tar.gz "$$(basename "$$stage")" || exit 1; \
+		rm -rf "$$stage"; \
+	done
+	@cd '$(DIST)' && sha256sum ./*.tar.gz > SHA256SUMS
+	@echo; ls -l '$(DIST)'; echo; cat '$(DIST)'/SHA256SUMS
+
 clean:
-	rm -rf bin/
+	rm -rf bin/ '$(DIST)'

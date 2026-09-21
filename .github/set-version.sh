@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Writes a release version into the places the documentation names it.
 #
-#   .github/set-version.sh v0.11.0
+#   .github/set-version.sh v1.2.3        # an example; give the real version
 #
 # Run it before tagging, so the tag carries instructions that point at
 # itself. The release workflow also runs it after a tag, which catches the

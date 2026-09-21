@@ -317,12 +317,13 @@ make test-db      # also the tests that need PostgreSQL
 `bin/forgesyncd` is the controller and its admin UI; `bin/forgesync` is the command-line
 client for the same API.
 
-`make version V=v0.11.0` writes a release version into the places the documentation names
-it, before you tag. The release workflow runs the same script after a tag as well, so the
-version cannot silently drift, but doing it first is better: only then does the tag itself
-carry instructions that point at the tag. The script insists every place it knows about
-matches exactly once, so documentation that moves breaks the script rather than quietly
-going unbumped.
+`make version V=v1.2.3` writes a release version into the places the documentation names it,
+before you tag. `v1.2.3` there is an example rather than the next version, which is a
+distinction worth drawing after a plausible-looking one was read as an announcement. The
+release workflow runs the same script after a tag as well, so the version cannot silently
+drift, but doing it first is better: only then does the tag itself carry instructions that
+point at the tag. The script insists every place it knows about matches exactly once, so
+documentation that moves breaks the script rather than quietly going unbumped.
 
 `make release` builds what a release carries: one tarball per platform, each with both
 binaries, `deploy/prod`, the licence and `docs/LIMITATIONS.md`, and a `SHA256SUMS` beside

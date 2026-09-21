@@ -66,13 +66,16 @@ run: ## Run the controller against the local test environment
 # it, so the install instructions point at the release they ship with.
 # Run it before tagging:
 #
-#   make version V=v0.11.0 && git commit -am 'Say v0.11.0 ...' && git tag -a v0.11.0
+#   make version V=v1.2.3 && git commit -am 'Say v1.2.3 ...' && git tag -a v1.2.3
+#
+# v1.2.3 is an example, not the next version: picking the plausible next
+# one made a reader take the usage line for an announcement.
 #
 # The release workflow runs the same script after a tag, which catches the
 # time you forget. Doing it first is better, because then the tag itself
 # carries instructions that point at the tag.
 version:
-	@test -n "$(V)" || { echo "usage: make version V=v0.11.0"; exit 2; }
+	@test -n "$(V)" || { echo "usage: make version V=v1.2.3   (an example; give the real one)"; exit 2; }
 	@.github/set-version.sh '$(V)'
 
 # release builds what a GitHub release carries. The admin UI is built once

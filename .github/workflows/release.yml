@@ -1,0 +1,87 @@
+# Builds the release a tag names, and attaches it to that tag on GitHub.
+#
+# What it produces is what deploy/prod/install.sh --binary consumes: one
+# tarball per platform holding the two binaries with the admin UI already
+# inside them, plus the files that set a machine up, and a SHA256SUMS the
+# installer checks the download against.
+#
+# Everything here is either a first-party GitHub action or the gh CLI that
+# is already on the runner. No third-party action is used, deliberately: a
+# release workflow is the one place where somebody else's code would be
+# signing off on the binaries people install as root.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to stamp, for a dry run without a tag'
+        required: false
+        default: 'dev'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # make release stamps the version from git describe when one is
+          # not given, and that needs the tags.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # The same gate every change goes through, so a tag cannot ship
+      # something that would not have been committed.
+      - name: Check
+        run: make check
+
+      - name: Build the release
+        run: make release VERSION=${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}
+
+      - name: Show what was built
+        run: ls -l dist && cat dist/SHA256SUMS
+
+      - name: Publish
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # The heredoc is quoted, so the shell expands nothing inside it:
+        # the markdown below has backticks, which would otherwise be command
+        # substitution. The tag comes from a GitHub expression instead,
+        # which is substituted before the shell ever sees the script.
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes-file - \
+            dist/*.tar.gz dist/SHA256SUMS <<'NOTES'
+          Install on a fresh Debian 13 machine, with no toolchain:
+
+          ```sh
+          curl -fsSLO https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/deploy/prod/install.sh
+          bash install.sh --first --binary
+          ```
+
+          `--binary` fetches the build for this machine's architecture, checks it
+          against the `SHA256SUMS` below, and installs it. Nothing is compiled, so
+          no Go, Node or compiler is fetched or left behind: about 400 MB a source
+          install would keep.
+
+          Building from source instead is the same script without `--binary`.
+          `deploy/prod/README.md` has the rest, including joining a second and
+          third machine.
+          NOTES

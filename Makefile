@@ -10,7 +10,7 @@ DIST    ?= dist
 # the thing up. No toolchain, no source, no build.
 PLATFORMS ?= linux/amd64 linux/arm64
 
-.PHONY: build web web-dev web-test test test-race test-db vet fmt check run clean release
+.PHONY: build web web-dev web-test test test-race test-db vet fmt check run clean release version
 
 build: web ## Build the web UI, then forgesyncd (with the UI embedded) and forgesync into bin/
 	go build -ldflags '$(LDFLAGS)' -o bin/ ./cmd/...
@@ -61,6 +61,19 @@ check: vet test test-race web-test ## vet, gofmt check, Go tests with and withou
 
 run: ## Run the controller against the local test environment
 	go run ./cmd/forgesyncd -config deploy/test/forgesync.yaml
+
+# version writes a release version into the places the documentation names
+# it, so the install instructions point at the release they ship with.
+# Run it before tagging:
+#
+#   make version V=v0.11.0 && git commit -am 'Say v0.11.0 ...' && git tag -a v0.11.0
+#
+# The release workflow runs the same script after a tag, which catches the
+# time you forget. Doing it first is better, because then the tag itself
+# carries instructions that point at the tag.
+version:
+	@test -n "$(V)" || { echo "usage: make version V=v0.11.0"; exit 2; }
+	@.github/set-version.sh '$(V)'
 
 # release builds what a GitHub release carries. The admin UI is built once
 # and embedded into every binary, because it is the same bytes whatever the

@@ -85,3 +85,30 @@ jobs:
           `deploy/prod/README.md` has the rest, including joining a second and
           third machine.
           NOTES
+
+      # After publishing, not before: a bump on main with no release behind
+      # it is worse than a release whose main is a minute stale. The tag
+      # itself still names the version before this one unless set-version.sh
+      # was run before tagging, which is why `make version` exists.
+      - name: Keep the documented version in step with the tag
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --quiet origin main
+          git checkout --quiet -B main origin/main
+          .github/set-version.sh "${{ github.ref_name }}"
+          if git diff --quiet; then
+            echo "the documentation already named ${{ github.ref_name }}; nothing to do" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git commit --quiet -am "Say ${{ github.ref_name }} where the documentation names the release"
+          git push --quiet origin main
+          {
+            echo "Updated the documented version to ${{ github.ref_name }} on main."
+            echo
+            echo 'The tag itself still names the release before it. Run'
+            echo '`make version V=<tag>` before tagging to avoid that.'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -8,7 +8,7 @@ on 2026-09-20 against commit `335b066` plus the changes this review produced.
 
 ## Classification
 
-| | |
+| Aspect | Detail |
 |---|---|
 | **Technology** | Go 1.27 (chi, pgx, cobra), React 19 + TypeScript + Vite, PostgreSQL 18, Alpine-based container, Docker Compose test environment |
 | **Scope** | Whole codebase, not a diff: a first review before publication, so the system is classified by its highest exposure rather than by the most recent change |
@@ -216,7 +216,7 @@ and before the first push to a public remote.
 
 ## Classification
 
-| | |
+| Aspect | Detail |
 |---|---|
 | **Scope** | The uncommitted diff, plus the publication-readiness checks over the whole tree and the whole history, because the repository is about to be published |
 | **Change under review** | `store.Ping` asks the server whether it is a standby (`pg_is_in_recovery`) and `Open` refuses one; every database read in the metrics handler shares one short budget; a test-only PostgreSQL-under-Patroni image and compose profile; an end-to-end failover check; documentation |
@@ -307,7 +307,7 @@ Run on 2026-09-20 against the working tree on top of commit `878c720`, before co
 
 ## Classification
 
-| | |
+| Aspect | Detail |
 |---|---|
 | **Scope** | The uncommitted diff |
 | **Change under review** | `internal/secret` (AES-256-GCM sealing of node tokens), `internal/nodes` (which nodes an installation has), migration 0033, `store.Nodes/SaveNode/RetireNode`, the `node_key_file` config option, and the startup path that uses them |
@@ -388,7 +388,7 @@ Run on 2026-09-20 against the working tree on top of commit `89a5ff3`, before co
 
 ## Classification
 
-| | |
+| Aspect | Detail |
 |---|---|
 | **Scope** | The uncommitted diff |
 | **Change under review** | `nodes.Admin` and three admin endpoints for adding, checking and retiring a node; the add-node wizard in the UI; `nodes.Watch` so a change is picked up; `health` uplink probing and the suppression that goes with it; `store.RetiredNames`; two config settings |
@@ -464,7 +464,7 @@ Run on 2026-09-21 against the working tree on top of commit `8992fea`, before co
 
 ## Classification
 
-| | |
+| Aspect | Detail |
 |---|---|
 | **Scope** | The uncommitted diff |
 | **Change under review** | `deploy/prod/cluster.sh`, which installs etcd and Patroni and hands a live PostgreSQL to them; a flaky test fixed; `make test-race` added to `make check`; documentation |
@@ -549,7 +549,7 @@ Run on 2026-09-21 against the working tree on top of commit `4c9790e`, before co
 
 ## Classification
 
-| | |
+| Aspect | Detail |
 |---|---|
 | **Scope** | The uncommitted diff |
 | **Change under review** | `registryFetch` and `registryPublish` in `internal/replication/packages.go`, which carry nuget, rubygems and helm packages as well as generic and maven; `nodeBuiltFile`, which leaves out the files a node makes for itself; `plainSegment`, which refuses a piece of a package's identity that could climb out of a URL path; the test harness, which now speaks each registry's real upload protocol; the documentation that names what travels |
@@ -644,7 +644,7 @@ Run on 2026-09-21 against the working tree on top of commit `7c69c83`, before co
 
 ## Classification
 
-| | |
+| Aspect | Detail |
 |---|---|
 | **Scope** | The uncommitted diff |
 | **Change under review** | Five places in `internal/issues/sync.go` that read a node's snapshot from a record's copies; the rule that the merge base only moves when every copy took part; `internal/nodes.fromRecord`, shared by `Resolve` and the node watcher so the two agree |
@@ -724,7 +724,7 @@ Run on 2026-09-21 against the working tree on top of commit `ba58bf7`, before co
 
 ## Classification
 
-| | |
+| Aspect | Detail |
 |---|---|
 | **Scope** | The uncommitted diff |
 | **Change under review** | `internal/replication/settle.go`, one function and the reason for it, and the seven merges that now go through it: packages, collaborators, branch protection, releases and their files, topics, Actions variables, an organization's teams and members |
@@ -786,7 +786,7 @@ Run on 2026-09-21 against the working tree on top of commit `c3363b9`, before co
 
 ## Classification
 
-| | |
+| Aspect | Detail |
 |---|---|
 | **Scope** | The uncommitted diff |
 | **Change under review** | `Git.Forget`, and the call to it when ForgeSync forgets a repository; `deploy/test/scale.sh drop`, rewritten to page and to count what actually went; the documentation of what `replication.protect_replicas` means for a person pushing |

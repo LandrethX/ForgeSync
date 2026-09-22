@@ -5,7 +5,7 @@ with 203 repositories on every node, one commit each. `deploy/test/scale.sh make
 creates them and `scale.sh drop` takes them away again, so the measurement can be
 repeated.
 
-| | |
+| What | Measured |
 |---|---|
 | A push to one repository reaching all four replicas (webhook fast path) | **5s** |
 | Scanning one node's 203 repositories | 3-4s (the five nodes are scanned in parallel) |
@@ -41,7 +41,7 @@ Measured on 2026-09-21 on the same server, with `scale.sh make 1000` on SE and t
 four nodes empty, so this is also the worst case: every repository had to be created and
 filled on four replicas at once.
 
-| | |
+| What | Measured |
 |---|---|
 | Creating 1000 repositories through the API | about 4 min |
 | Scanning one node's 1003 repositories, once every node has them | **19s** (3-4s for 203) |

@@ -9,7 +9,7 @@ look after. One controller does the work; the rest serve the same pages and take
 it stops. Section 12 says how many machines to run and why the answer is one or three
 rather than two.
 
-| | |
+| File | What it is |
 |---|---|
 | `install.sh` | does sections 1 to 7 of this file in one command |
 | `standby.sh` | a second copy of the database on two machines, promoted by a person |
@@ -188,7 +188,7 @@ for the replication itself.
 
 Measured, on the five-node test installation and on the install itself.
 
-| | |
+| What | Measured |
 |---|---|
 | The controller, leading | about 100 MB |
 | The controller, standing by | about 7 MB |
@@ -897,7 +897,7 @@ Measured on the test environment, five Forgejo nodes, `controller.lease: 10s`, P
 `ttl: 20`. `deploy/test/check-db-failover.sh` runs the same check against a running
 environment, so these are repeatable rather than reported.
 
-| | |
+| What happens | How long it takes |
 |---|---|
 | The primary is killed, and the controllers notice | under 1s (`/readyz` 503, `database_up` 0) |
 | The leader stops acting, with nothing having taken over | 8 to 9s, inside the 10s lease |

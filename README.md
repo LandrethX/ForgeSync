@@ -163,7 +163,7 @@ node is their primary. No password, no token, no email address.
 **What ForgeSync does hold**, because it would be dishonest to say "no credentials" and
 leave it there:
 
-| | |
+| Secret | How it is held |
 |---|---|
 | Each node's API token | Sealed with AES-256-GCM before it is stored. The key is a file on the controllers and never goes in the database, so a stolen dump is not a stolen node |
 | ForgeSync's own administrator accounts | PBKDF2-SHA256 with a per-account salt. These sign in to the *controllers*, not to any node, and no node ever learns they exist |

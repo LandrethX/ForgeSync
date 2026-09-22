@@ -78,8 +78,10 @@ is the safety net that catches what a lost delivery missed.
 
 **Memory is 300 MB at the peak of a round**, against 100 MB at 203 repositories. It is the
 round's working set rather than anything kept, and it goes back down; a standby still sits
-at 6 MB. A 2 GB container is still comfortable, but this is the number that would decide a
-smaller one. The database is small either way: what ForgeSync keeps per repository is a row,
+at 6 MB. This is the number that decides how small a container can be. A `--binary` install
+with no nodes yet sits at **52 MiB of 512 on a real Proxmox LXC**, so 512 MB is generous for
+a first machine; it is a thousand repositories that argues for a gigabyte, not the install.
+`deploy/prod/README.md` section 1 has both. The database is small either way: what ForgeSync keeps per repository is a row,
 its replicas and its refs.
 
 The one thing to watch is **disk**, and it is the git cache: 197 MB for 1000 tiny

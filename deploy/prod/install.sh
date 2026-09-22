@@ -204,9 +204,20 @@ else
 fi
 ok "${free_mb} MB free on /"
 
+# Two different machines. A source build is the busiest this host ever
+# gets and wants 2 GB; a --binary install compiles nothing, and the whole
+# thing measured 157 MB idle on a 512 MB machine. What argues for more
+# later is repositories rather than the install: a round over a thousand
+# of them peaks at 300 MB. Section 1 of deploy/prod/README.md has both.
 mem_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
-if [ "$mem_mb" -lt 1800 ] && [ "$FROM_BINARY" -eq 0 ]; then
-  warn "${mem_mb} MB of memory; the build wants about 1 GB free and the usual size is 2 GB"
+if [ "$FROM_BINARY" -eq 1 ]; then
+  if [ "$mem_mb" -lt 400 ]; then
+    warn "${mem_mb} MB of memory; PostgreSQL and the controller measured 157 MB together, so this is tight"
+  else
+    ok "${mem_mb} MB of memory (a --binary install needs little; 512 MB is generous)"
+  fi
+elif [ "$mem_mb" -lt 1800 ]; then
+  warn "${mem_mb} MB of memory; the build wants about 1 GB free and the usual size is 2 GB. --binary skips the build and needs far less"
 else
   ok "${mem_mb} MB of memory"
 fi

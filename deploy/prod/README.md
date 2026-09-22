@@ -67,19 +67,14 @@ PostgreSQL on the first machine has to accept the connection: `listen_addresses`
 second machine gives you a controller that survives losing the first; the database is still
 one server until there are three (section 12).
 
-Reading a script before running it as root is a reasonable habit, and this one is written to
-be read:
+**Running it again is how you upgrade**, either way in, and nothing already there is
+overwritten: secrets are made only when missing, the config only when missing, and the
+database role and database only when they do not exist.
 
-```sh
-curl -fsSLO https://raw.githubusercontent.com/LandrethX/ForgeSync/main/deploy/prod/install.sh
-less install.sh && bash install.sh
-```
-
-It builds from source on the machine, which costs less than it sounds on the usual 2 GB and
-16 GB container: about 48 seconds and 400 MB of build space, which it gives back at the end
-unless you pass `--keep-build`. Running it again is how you upgrade, and nothing already
-there is overwritten: secrets are made only when missing, the config only when missing, and
-the database role and database only when they do not exist.
+Left off, `--binary` becomes a build on this machine, which takes about 48 seconds and 400
+MB of build space and gives the space back at the end unless you pass `--keep-build`. That
+is the path that wants 2 GB of memory; a `--binary` install does not, and section 1 has the
+measurements for both.
 
 The rest of this file is what it does, in order, and is the reference when something needs
 doing by hand or looking at afterwards.
@@ -168,9 +163,9 @@ An unprivileged Debian 13 LXC. In Proxmox, `Create CT` with:
 | Template | `debian-13-standard` | What the install script checks for and refuses without |
 | Unprivileged | **yes** | Nothing here wants root on the host. Leave the default alone |
 | Nesting, FUSE, keyctl | off | Not needed. PostgreSQL, git and Go all run without them |
-| Cores | 2 | 1 runs it; 2 halves the build |
-| Memory | **2048 MB**, swap 512 | Measured below |
-| Disk | **16 GB** to start | Measured below, and the one to keep an eye on |
+| Cores | 2 | 1 runs it. A source build is the only thing that wants the second |
+| Memory | **512 MB** with `--binary`, **2048 MB** to build from source. Swap 512 either way | Two different machines; see below |
+| Disk | **16 GB** to start | A fresh `--binary` install is 1.35 GB of it. The git cache is what grows; a source build also wants 3 GB while it works |
 | Network | a fixed address | The Forgejo nodes reach it for webhooks and the other machines name it in `database.url`, so it must not move. A static address or a DHCP reservation |
 | Start at boot | yes | |
 
@@ -188,21 +183,59 @@ for the replication itself.
 
 Measured, on the five-node test installation and on the install itself.
 
+### Memory: how 512 MB and 2 GB are both right
+
+They are answers to different questions, and the table above gives both because the old
+single number was only ever justified by the build.
+
+**If you install with `--binary`, nothing is compiled and 512 MB is generous.** Measured on a
+real 512 MB Proxmox LXC, installed and running, idle with no nodes added yet:
+
 | What | Measured |
 |---|---|
-| The controller, leading | about 100 MB |
-| The controller, standing by | about 7 MB |
-| PostgreSQL with ForgeSync's state | 12 MB of data for 203 repositories, 812 replicas |
+| Memory, as Proxmox's own gauge reports it | **52 MiB of 512, about 10%** |
+| Memory used, as `top` inside it reports | 57 MB, with 455 MB available |
+| Swap used, of 512 MB | none |
+| Disk | **1.35 GiB**, on a 31 GB volume |
+| `forgesyncd` itself | 16 MB resident |
+| PostgreSQL, all its processes together | about 30 MB resident, most of it shared between them |
+
+Proxmox and `top` agree because both leave out page cache; cgroup accounting counts the
+cache too and so reports around 157 MB for the same machine. The cache is reclaimable, so
+the number worth watching is the 455 MB still available.
+
+**If you build from source, 2 GB.** The build is the busiest this machine ever gets: the
+admin UI build alone peaks at 184 MB and the Go compiler wants its own, on top of everything
+above, and it needs about 3 GB of disk while it works. This is the only reason the number
+was ever 2 GB.
+
+**What makes it grow is repositories, not the install.** The controller's own memory is its
+working set during a round, and a round compares every repository against every replica:
+
+| What | Measured |
+|---|---|
+| Idle, no nodes | 16 MB |
+| Leading, 203 repositories on five nodes | about 100 MB |
+| Leading, at the peak of a round over 1000 repositories | **300 MB** |
+| Standing by, whatever the size | 6 to 7 MB |
+
+So 512 MB is right for a first machine and a modest installation, with room to spare. Around
+a thousand repositories it becomes the controller's 300 MB plus PostgreSQL's share, which is
+close enough to 512 that a gigabyte is the comfortable answer. A standby that never leads
+stays at the bottom of that range whatever you give it, so on three machines only the one
+holding the lease needs the headroom.
+
+### What else it uses
+
+| What | Measured |
+|---|---|
+| PostgreSQL with ForgeSync's state | 12 MB of data for 203 repositories, 812 replicas; 16 MB at 1000 |
 | The two binaries | 23 MB, and with `--binary` that is all |
 | The Go toolchain (a source build only, kept for the next upgrade) | 282 MB |
 | Node (a source build only, same reason) | about 120 MB |
 | A source build: module cache, build cache, node_modules | about 400 MB, given back afterwards unless `--keep-build` |
 | A clean install from a release (`--binary`) | **25 seconds**, no toolchain |
 | A clean install that builds from source | 48 seconds |
-| The admin UI build, at its peak | 184 MB of memory |
-
-So 2 GB is comfortable rather than tight: the build is the busiest moment and it peaks well
-under half of it.
 
 **Disk is the thing to watch, and it is the git cache that grows.** Under
 `replication.work_dir` a controller keeps a bare mirror of every repository it has replicated,

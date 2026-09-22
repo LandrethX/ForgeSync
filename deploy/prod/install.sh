@@ -754,23 +754,42 @@ $(printf '\033[32mForgeSync is running.\033[0m')
   Secrets      $SECRETS
   Logs         journalctl -u forgesyncd -f
 
-Two things to do next.
+First, make an account to sign in with. There is nobody to make the first
+one, so it is made with the admin token. The password must be at least 12
+characters; a shorter one comes back 400. This form asks for it rather
+than putting it in your shell history:
 
-1. Make an account to sign in with. There is nobody to make the first one,
-   so it is made with the admin token:
-
+   read -rsp 'New ForgeSync password (12 or more characters): ' FS_PW; echo
    curl -fsS -X POST $PUBLIC_URL/api/v1/accounts \\
      -H "Authorization: Bearer \$(cat $SECRETS/admin.token)" \\
-     -H 'Content-Type: application/json' \\
-     -d '{"username":"you","password":"a long one","role":"administrator"}'
+     -H 'Content-Type: application/json' --data-binary @- <<JSON
+   {"username":"you","password":"\$FS_PW","role":"administrator"}
+   JSON
+   unset FS_PW
 
-   The token is read from the file rather than printed here, so it does not
-   end up in a terminal scrollback or a log of this install.
+The token is read from the file rather than printed here, so it does not
+end up in a terminal scrollback or a log of this install.
 
-2. Add your Forgejo nodes. Each needs a site-admin account called
-   forgesync on that node and an API token for it. Section 9 of
-   deploy/prod/README.md has what to set on the node itself, including
-   putting this machine in [webhook] ALLOWED_HOST_LIST.
+Then the rest. This machine is running on plain HTTP with no nodes, which
+is where every install starts and is not where any should stay.
 
-Put TLS in front of this before anyone signs in over a network: section 8.
+  POST-INSTALL CHECKLIST          (section numbers: deploy/prod/README.md)
+
+  [ ] /readyz returns ready                      curl $PUBLIC_URL/readyz
+  [ ] First administrator created                above, and section 7
+  [ ] controller.url is the production name      $ETC/forgesync.yaml
+  [ ] webhooks.url is the production name        the same file
+  [ ] TLS, or a reverse proxy in front           section 8
+  [ ] secure_cookies: true                       section 8. It is false now,
+                                                 because today there is no TLS
+  [ ] trusted_proxies lists the proxies only     section 8
+  [ ] node-key backed up away from the dump      section 4
+  [ ] Signed in to the UI                        section 7
+  [ ] Forgejo can reach this machine, and back   section 9
+  [ ] First Forgejo node prepared                section 9
+  [ ] First Forgejo node added in the UI         section 9
+  [ ] A scan round finished, node healthy        the dashboard
+  [ ] Database backup scheduled                  section 11
+
+Changing the config needs: systemctl restart forgesyncd
 DONE

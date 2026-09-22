@@ -20,13 +20,23 @@ rather than two.
 
 ## The short way
 
+Take the installer from the release you are installing, not from `main`, so the script and
+the build it installs are the pair that were tested together. Read it before running it as
+root; it is written to be read:
+
 ```sh
-curl -fsSL https://raw.githubusercontent.com/LandrethX/ForgeSync/main/deploy/prod/install.sh | bash
+VERSION=v0.11.0
+curl -fsSLO "https://raw.githubusercontent.com/LandrethX/ForgeSync/$VERSION/deploy/prod/install.sh"
+less install.sh
+bash install.sh --first --binary --ref "$VERSION"
 ```
 
-It asks whether this is the first ForgeSync machine. If it is not, it asks where the first
-one is and joins this one to it. `--first` and `--join <address>` answer in advance, which
-is what you want when it runs from a pipe with nothing to type into.
+`--binary` installs the published build and compiles nothing, so no Go, Node or compiler is
+fetched or left behind. Leave it off to clone and build here instead.
+
+Piping it straight into `bash` works too, and then there is nothing to type into, so answer
+in advance: it otherwise asks whether this is the first ForgeSync machine, and if it is not,
+where the first one is. `--first` and `--join <address>` are those two answers.
 
 ### Adding a second or third machine
 
@@ -75,6 +85,79 @@ The rest of this file is what it does, in order, and is the reference when somet
 doing by hand or looking at afterwards.
 
 ---
+
+## After install.sh finishes
+
+The installer leaves a controller running and answering on plain HTTP, with no accounts and
+no nodes. It has done sections 1 to 6. What is left is the part only you can decide: who
+signs in, what address people reach it at, and what stands in front of it.
+
+Ten steps, in this order, because each one depends on the one before.
+
+**1. Check it is actually up.** `/readyz` means the database is reachable and takes writes,
+which is more than `/healthz` claims:
+
+```sh
+curl -fsS http://localhost:8090/readyz          # {"status":"ready"}
+```
+
+**2. Make the first administrator.** There is nobody to make it through the UI, so the admin
+token does it. **The password must be at least 12 characters**, and a shorter one comes back
+`400`. Section 7 has a form that keeps it out of your shell history.
+
+**3. Decide the address people will use**, and put it in `controller.url`. The installer
+wrote whatever `--url` said, which on a first install is usually an IP and a port. This is
+the address the other controller's UI sends people to and the one the dashboard shows. It is
+**not** the address this process listens on: see the table in section 8.
+
+**4. Put TLS in front of it**, or on it. Section 8 has both, including a worked reverse
+proxy example.
+
+**5. Set `secure_cookies: true`.** The installer writes `false`, deliberately, because on
+the day it runs there is no TLS and a Secure cookie would simply never arrive. Once there is
+TLS, this stops the session cookie travelling in the clear. It is the one setting whose
+default is safe and whose installed value is not.
+
+**6. Set `trusted_proxies`** if anything is in front of it. Without this every request looks
+as though it came from the proxy, which breaks the audit trail and the sign-in limiter in a
+way that is explained in section 8, because the consequence is worse than it sounds.
+
+**7. Point `webhooks.url` at the same public address** as step 3, and restart:
+
+```sh
+systemctl restart forgesyncd
+curl -fsS https://forgesync.example.org/readyz
+```
+
+**8. Back up the node key somewhere other than the database dump.** Section 4 says why: a
+backup without it is a database full of node tokens nobody can open.
+
+**9. Prepare the first Forgejo node.** It needs a site-admin account for ForgeSync, a token
+for it, and two `app.ini` keys that no API can reach. Section 9, and the admin UI prints the
+same checklist when you add one.
+
+**10. Add the node in the UI**, and watch a round. Section 9 again.
+
+### Post-install checklist
+
+```text
+[ ] /readyz returns ready
+[ ] First administrator created (12 characters or more)
+[ ] controller.url is the production address
+[ ] webhooks.url is the production address
+[ ] TLS or a reverse proxy in front
+[ ] secure_cookies: true
+[ ] trusted_proxies lists the proxies, and only the proxies
+[ ] node-key backed up away from the database dump
+[ ] Signed in to the UI with the account from step 2
+[ ] Forgejo can reach this machine, and this machine can reach Forgejo
+[ ] First Forgejo node prepared (service account, token, app.ini)
+[ ] First Forgejo node added in the UI
+[ ] A scan round finished and the node shows healthy
+[ ] Database backup scheduled (section 11)
+```
+
+The installer prints this too, so it is in front of you at the moment it matters.
 
 ## 1. The machine
 
@@ -284,7 +367,30 @@ connections, and does nothing harmful when there is no certificate to re-read.
 
 ForgeSync has accounts of its own, in the shared database, so they work on either
 controller. The first is made with the admin token, there being nobody to make it
-otherwise:
+otherwise.
+
+**The password must be at least 12 characters.** That is the only rule: length is what makes
+a password hard to guess, and rules about punctuation mostly make them hard to remember. A
+shorter one comes back `400` with
+`{"message":"the password must be at least 12 characters"}`, which is worth knowing before
+you wonder what else you got wrong.
+
+This form asks for the password rather than taking it from the command line, so it reaches
+neither your shell history nor the process list:
+
+```sh
+read -rsp 'New ForgeSync password (12 characters or more): ' FS_PW; echo
+curl -fsS -X POST http://localhost:8090/api/v1/accounts \
+  -H "Authorization: Bearer $(cat /etc/forgesync/secrets/admin.token)" \
+  -H 'Content-Type: application/json' \
+  --data-binary @- <<JSON
+{"username":"you","password":"$FS_PW","role":"administrator"}
+JSON
+unset FS_PW
+```
+
+A password with a `"` or a `\` in it would need escaping for JSON; a passphrase of ordinary
+words avoids the question. The one-line form is fine where history does not matter:
 
 ```sh
 curl -X POST -H "Authorization: Bearer $(cat /etc/forgesync/secrets/admin.token)" \
@@ -296,6 +402,24 @@ curl -X POST -H "Authorization: Bearer $(cat /etc/forgesync/secrets/admin.token)
 After that it's username and password in the UI. SceneID signs people in to the *nodes*; it
 has nothing to do with the controllers.
 
+### Checking the account from the command line
+
+The UI is the point, but it is worth proving the account works before opening a browser.
+Signing in is a write, so it needs the CSRF header that cookie-authenticated writes need;
+without it you get `403 missing X-ForgeSync-CSRF header`, which looks like a rejected
+password and is not one. The value is not checked, only its presence:
+
+```sh
+curl -fsS -X POST http://localhost:8090/api/v1/session \
+  -H 'Content-Type: application/json' -H 'X-ForgeSync-CSRF: 1' \
+  -c /tmp/fs-cookie -d '{"username":"you","password":"a long passphrase"}'
+curl -fsS -b /tmp/fs-cookie http://localhost:8090/api/v1/overview
+rm -f /tmp/fs-cookie
+```
+
+`200` and an overview naming this controller means the account is good. A wrong password is
+`401`, which is the answer that means what it says.
+
 The command-line client uses the same admin token:
 
 ```sh
@@ -306,7 +430,119 @@ forgesync repo list --state differs
 forgesync conflict list
 ```
 
-## 8. TLS
+## 8. TLS, and what is in front of it
+
+### Five settings people confuse
+
+Four of these name an address and they mean different things. Getting them mixed up is the
+commonest way an installation half works.
+
+| Setting | What it means |
+|---|---|
+| `controller.url` | The **public** address of *this* controller. Advertised, never listened on: it is what the other controller's UI links to and what the dashboard shows |
+| `http.listen` | The **local** address and port `forgesyncd` binds. Behind a proxy this stays plain HTTP on `0.0.0.0:8090` and does **not** become 443 |
+| `webhooks.url` | The **public** callback the Forgejo nodes post to. Normally `controller.url` plus `/api/v1/hooks/forgejo` |
+| `http.trusted_proxies` | The proxies whose `X-Forwarded-For` is believed. Only the proxies, never a range users sit in |
+| `http.secure_cookies` | Whether the session cookie is marked Secure, so browsers send it over HTTPS only. Defaults to true; the installer writes false because on install day there is no TLS |
+
+The trap is `http.listen`. Terminating TLS at a proxy does not change where the controller
+listens: the proxy takes 443 and speaks plain HTTP to 8090 behind it. Only `controller.url`
+and `webhooks.url` become `https://`.
+
+### Behind a reverse proxy
+
+This is what most installations look like. The proxy holds the certificate, ForgeSync does
+not:
+
+```text
+        browser / Forgejo node
+                 │  HTTPS :443
+                 ▼
+         reverse proxy  (10.46.225.10)
+                 │  HTTP :8090
+                 ▼
+            forgesyncd
+```
+
+`/etc/forgesync/forgesync.yaml`, with a proxy on `10.46.225.10`:
+
+```yaml
+controller:
+  name: fsync-mlm
+  url: https://fsync-mlm.example.net          # public, advertised
+  priority: 1
+
+http:
+  listen: 0.0.0.0:8090                        # local, still plain HTTP
+  admin_token_file: /etc/forgesync/secrets/admin.token
+  secure_cookies: true                        # the proxy terminates TLS
+  trusted_proxies:
+    - 10.46.225.10                            # the proxy, and nothing else
+
+webhooks:
+  url: https://fsync-mlm.example.net/api/v1/hooks/forgejo
+  secret_file: /etc/forgesync/secrets/webhook.secret
+```
+
+Then `systemctl restart forgesyncd`, because none of those are re-read on a reload; `SIGHUP`
+re-reads the certificate only.
+
+What the proxy needs to do: forward to `http://<controller>:8090`, pass `X-Forwarded-For`,
+and allow WebSocket-style streaming responses for `/api/v1/events`, which is Server-Sent
+Events and must not be buffered. In **Nginx Proxy Manager** that is a Proxy Host with the
+scheme `http`, the forward port `8090`, *Websockets Support* on, and in Advanced:
+
+```nginx
+proxy_buffering off;          # /api/v1/events is a live stream
+proxy_read_timeout 3600s;     # it stays open
+```
+
+NPM sets `X-Forwarded-For` itself. Whatever proxy you use, the address in
+`trusted_proxies` is the one ForgeSync sees the connection **come from**, which is the
+proxy's address on the network between them, not the address people type.
+
+### Why `trusted_proxies` is not optional behind a proxy
+
+Leave it out and every request appears to come from the proxy, which costs two things that
+are easy to miss until they bite.
+
+The **audit history** records the proxy's address against every sign-in, so the one question
+it exists to answer, who signed in from where, has the same answer for everybody.
+
+The **sign-in limiter** counts failures per client address, ten in five minutes. With one
+address for everyone, ten wrong passwords from anyone lock out the whole installation for
+five minutes, including you, and the obvious remedy of trying again makes it worse.
+
+The rule is to name the proxies and nothing else. What the setting decides is *whose claim
+about somebody else's address is believed*, so listing a range that users also sit in lets
+any of them write whatever address they like into the history and dodge the limiter with it.
+A bare address means itself (`10.46.225.10` becomes `10.46.225.10/32`); CIDRs are allowed for
+a range that holds only proxies:
+
+```yaml
+http:
+  trusted_proxies:
+    - 10.46.225.10            # the proxy
+    - 127.0.0.1               # or a proxy on this host
+```
+
+`X-Forwarded-For` is read from the right, because each proxy appends the address it saw: the
+right-most address that is not one of yours is the client. Anything further left was supplied
+by whoever connected and proves nothing. A header ForgeSync cannot parse makes it fall back
+to the connection's own address rather than trust part of it.
+
+### Checking it end to end
+
+```sh
+curl -fsS https://fsync-mlm.example.net/readyz                    # through the proxy
+curl -fsS http://localhost:8090/readyz                            # and directly
+```
+
+Sign in through the proxy, then look at the history: your own address should appear against
+the sign-in, not the proxy's. If it shows the proxy, `trusted_proxies` is wrong or missing,
+and the paragraph below says why that matters more than it looks.
+
+### ForgeSync holding the certificate itself
 
 Either something in front terminates it, in which case you leave the `tls_*` settings out
 and let the proxy talk HTTP to `listen`, or ForgeSync does it itself:
@@ -319,23 +555,8 @@ http:
   tls_key_file: /etc/forgesync/tls/privkey.pem
 ```
 
-With a proxy in front, two things need saying. Name the proxy in `http.trusted_proxies`,
-or every request looks as though it came from it: the history records the proxy for every
-sign-in, and the sign-in limiter counts everyone's failures together, so ten wrong
-passwords lock everybody out for five minutes.
-
-```yaml
-http:
-  trusted_proxies:
-    - 127.0.0.1               # the proxy on this host
-    - 10.0.0.0/8              # or a range that holds only proxies
-```
-
-Name only proxies. What the setting decides is whose claim about the client's address is
-believed, so a range users can reach from would let anyone write their own address into
-the history. The second thing is `Strict-Transport-Security`: ForgeSync sends it on
-requests that arrive over TLS, which behind a proxy means the proxy has to send it, since
-what reaches ForgeSync is plain HTTP.
+`Strict-Transport-Security` is sent on requests that arrive over TLS, so behind a proxy the
+proxy has to send it: what reaches ForgeSync is plain HTTP.
 
 Without `tls_listen`, the certificate takes `listen` over. The pair is checked at startup
 (both files, and they must make a keypair) and re-read on `systemctl reload`, so a renewal
@@ -348,6 +569,32 @@ forgesyncd`.
 Nodes live in ForgeSync's own database, so one is added from the admin UI (**Nodes**, then
 **Add a node**) and every controller has it. There is no list to edit on each machine and no
 service to restart by hand.
+
+### What has to reach what
+
+Worth settling before anything else, because a node that cannot be reached looks exactly
+like a node that is broken. Everything ForgeSync does to a node goes over **one port**: the
+one in that node's URL, normally 443. There is no SSH anywhere in the controller, and git
+replication uses the same HTTPS endpoint as the API, with the token in a header.
+
+| From | To | Port | Why |
+|---|---|---|---|
+| Administrator | proxy, or the controller | 443, or 8090 without a proxy | The UI and the API |
+| **Forgejo node** | proxy, or the controller | 443, or 8090 | Webhooks. This is the one people forget, and without it everything still works, just minutes late instead of seconds |
+| Controller | **Forgejo node** | 443 | The REST API, git replication and LFS, all on the node's own URL |
+| Controller | PostgreSQL | 5432 | Only when the database is not on this machine |
+| Controller | the other controllers | 5432 | They share one database, so really this is the row above |
+| Controller | 1.1.1.1, 9.9.9.9, 8.8.8.8 | 53/udp | Only to tell "every node is down" from "our network is down". `health.uplink_check: []` turns it off |
+| Controller | github.com | 443 | Installing and upgrading only, never at runtime |
+
+On three machines add etcd between the controllers, 2379 and 2380, and PostgreSQL's 5432
+between them for the replication (section 12).
+
+Two consequences worth stating plainly. Webhooks are what make a push appear on the other
+nodes in seconds rather than at the next scan, so a one-way firewall that lets ForgeSync
+reach the nodes but not the reverse leaves an installation that works and feels slow, with
+nothing obviously wrong. And the node must have this controller's hostname in its
+`[webhook] ALLOWED_HOST_LIST`, which is a Forgejo setting no API can reach: see below.
 
 ### What the node needs first
 

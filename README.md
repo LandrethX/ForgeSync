@@ -296,8 +296,21 @@ as pid 1: **24 seconds** from nothing to a controller answering `/readyz`, leavi
 binaries and no toolchain or source tree. A source build takes 48 seconds and keeps the
 toolchain.
 
-Then two things, which the script prints when it finishes: make the first account with the
-admin token, since there is nobody to make it otherwise, and add your Forgejo nodes.
+**Installing is not the end of it**, and the script says so: it leaves a controller running
+on plain HTTP with no accounts and no nodes. What follows is the part only you can decide,
+and [deploy/prod/README.md](deploy/prod/README.md) walks it in order under *After install.sh
+finishes*, with a checklist the installer also prints:
+
+1. Check `/readyz`.
+2. Make the first administrator, with the admin token. **The password must be at least 12
+   characters.**
+3. Put the production address in `controller.url` and `webhooks.url`.
+4. Put TLS in front of it, or on it. There is a worked reverse proxy example.
+5. Set `secure_cookies: true`, which the installer deliberately leaves false because on
+   install day there is no TLS yet.
+6. Set `trusted_proxies` if anything is in front, and only the proxies.
+7. Back the node key up somewhere other than the database dump.
+8. Prepare the first Forgejo node, add it in the UI, and watch a round.
 
 Leave `--binary` off and the same script clones and builds instead, which is what you want
 while working on ForgeSync or running something that was never tagged.

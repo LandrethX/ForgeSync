@@ -403,12 +403,6 @@ in Karlskrona, in co-operation with Hagar of TST, a scene group. The repository 
 <https://github.com/LandrethX/ForgeSync>, and
 [the releases are here](https://github.com/LandrethX/ForgeSync/releases).
 
-The current one is **v0.11.0**, and it is not a 1.0 on purpose: everything in it has been
-exercised against five Forgejo nodes, two and three controllers and a database that fails
-over, but only in a test environment. Running somewhere real is the one thing a 1.0 should
-be able to claim, and [docs/LIMITATIONS.md](docs/LIMITATIONS.md) says so in the same
-words.
-
 ## Licence
 
 Apache License 2.0; see [LICENSE](LICENSE).

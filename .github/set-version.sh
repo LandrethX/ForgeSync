@@ -53,9 +53,6 @@ rewrite README.md \
   '^bash install\.sh --first --binary --ref v[0-9]' \
   "bash install.sh --first --binary --ref $V"
 
-rewrite README.md \
-  '^The current one is \*\*v[0-9]' \
-  "The current one is **$V**, and it is not a 1.0 on purpose: everything in it has been"
 
 rewrite deploy/prod/README.md \
   '^V=v[0-9]' \
